@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from creditsurv.features import DERIVED_COLUMNS
 from creditsurv.models.aft import coefficient_table
 from creditsurv.models.lifetime_pd import (
     conditional_pd,
@@ -37,10 +38,6 @@ if TYPE_CHECKING:
 
     from creditsurv.models.aft import FitResult
 
-#: A one standard deviation move is the comparison a credit committee can read.
-#: Raw coefficients are not comparable across covariates measured in different units.
-_SHOCK_SIGMAS = 1.0
-
 
 def marginal_effects(
     fitted: FitResult,
@@ -54,36 +51,49 @@ def marginal_effects(
     """Change in PD from a one standard deviation move in each covariate.
 
     Coefficients are not comparable across covariates measured in different units,
-    and a time ratio is not what a credit decision is denominated in. This
+    and a time ratio is not the currency a credit decision is denominated in. This
     re-expresses each effect as the change in probability of default it produces,
     holding everything else where it is.
+
+    Where the shock is applied depends on how the covariate is built, and getting
+    this wrong is silent. Static characteristics are shocked on the loan record
+    before the path is projected. Macro-derived covariates cannot be: projecting
+    the panel *recomputes* them from the macro series, so a shock applied to the
+    loan record is overwritten and the covariate reports exactly zero effect --
+    which is what the first version of this table showed for all four of them,
+    flatly contradicting their own coefficients.
     """
+    derived = set(DERIVED_COLUMNS)
     extended = extend_macro(macro, horizon_months + 2)
     baseline_panel = project_panel(loans, extended, horizon_months=horizon_months)
-    baseline = conditional_pd(survival_along_path(fitted, baseline_panel, covariates)).mean()
+    baseline = float(conditional_pd(survival_along_path(fitted, baseline_panel, covariates)).mean())
 
     rows = []
     for name in continuous:
-        if name not in loans.columns and name not in baseline_panel.columns:
+        if name not in baseline_panel.columns:
             continue
-        shifted = loans.copy()
-        source = baseline_panel[name] if name in baseline_panel.columns else loans[name]
-        step = float(source.std()) * _SHOCK_SIGMAS
-        if name in shifted.columns:
-            shifted[name] = shifted[name] + step
-            panel = project_panel(shifted, extended, horizon_months=horizon_months)
-        else:
+        step = float(baseline_panel[name].std())
+        if step == 0.0:
+            continue
+
+        if name in derived:
+            # Recomputed during projection, so shock the projected panel.
             panel = baseline_panel.copy()
             panel[name] = panel[name] + step
+        else:
+            shifted = loans.copy()
+            shifted[name] = shifted[name] + step
+            panel = project_panel(shifted, extended, horizon_months=horizon_months)
 
-        shocked = conditional_pd(survival_along_path(fitted, panel, covariates)).mean()
+        shocked = float(conditional_pd(survival_along_path(fitted, panel, covariates)).mean())
         rows.append(
             {
                 "covariate": name,
+                "kind": "time-varying" if name in derived else "static",
                 "one_sd": step,
-                "baseline_pd": float(baseline),
-                "shocked_pd": float(shocked),
-                "change_pp": float(shocked - baseline) * 100.0,
+                "baseline_pd": baseline,
+                "shocked_pd": shocked,
+                "change_pp": (shocked - baseline) * 100.0,
             }
         )
 
