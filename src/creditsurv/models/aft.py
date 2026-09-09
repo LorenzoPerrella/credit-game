@@ -59,6 +59,15 @@ class Likelihood(StrEnum):
 
 #: Distributions available for the baseline hazard, by name.
 #:
+#: ``lognormal`` is offered but **does not converge on this panel structure**.
+#: Observed across 900-3,000 loans, with and without a penalizer, under both
+#: L-BFGS-B and SLSQP, with left truncation on and off, and with durations
+#: rescaled -- every combination raises ``ConvergenceError`` while ``weibull``
+#: and ``loglogistic`` fit the identical rows without complaint. The cause was
+#: not established, so no mechanism is claimed here; the fact is recorded and
+#: pinned by a strict xfail in ``tests/test_aft.py``, which will fail if a later
+#: lifelines makes it work.
+#:
 #: The generalised gamma is deliberately absent: it is a
 #: ``ParametricRegressionFitter`` rather than an AFT fitter, taking per-parameter
 #: ``regressors`` instead of ``formula``/``ancillary``. It is wrapped separately
@@ -69,6 +78,10 @@ FITTERS: Final[dict[str, type[ParametericAFTRegressionFitter]]] = {
     "lognormal": LogNormalAFTFitter,
     "loglogistic": LogLogisticAFTFitter,
 }
+
+#: Distributions that reliably converge on episode panels, used as the default
+#: candidate set for model selection.
+CONVERGENT_DISTRIBUTIONS: Final[tuple[str, ...]] = ("weibull", "loglogistic")
 
 
 @dataclass(frozen=True)
