@@ -169,3 +169,47 @@ def test_fit_without_a_panel_explains_how_to_build_one(
 
     assert result.exit_code != 0
     assert "build-data" in str(result.exception)
+
+
+def test_time_varying_covariates_have_a_marginal_effect(
+    macro_module: pd.DataFrame,
+) -> None:
+    """Regression test for a silent zero.
+
+    Projecting a panel recomputes the macro-derived covariates from the macro
+    series, so a shock applied to the loan record is overwritten. The first version
+    of this table reported exactly 0.0000 percentage points for all four
+    time-varying covariates -- flatly contradicting their own coefficients, and
+    entirely plausible to anyone not checking.
+    """
+    from dataclasses import replace
+
+    from creditsurv.config import STATIC_CONTINUOUS, TIME_VARYING_CONTINUOUS
+    from creditsurv.data.panel import at_origination, to_interval_censored
+    from creditsurv.data.synthetic import DEFAULT_PARAMS, build_synthetic_panel
+    from creditsurv.models.aft import fit_aft
+    from creditsurv.reporting.calibration import marginal_effects
+
+    covariates = ["fico_s", "cltv_drift", "unemp_gap"]
+    params = replace(
+        DEFAULT_PARAMS,
+        intercept=4.9,
+        continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+        categorical={},
+        prepayment_intercept=50.0,
+    )
+    panel, _ = build_synthetic_panel(macro_module, n_loans=600, seed=13, params=params)
+    fitted = fit_aft(to_interval_censored(panel), covariates, " + ".join(covariates))
+
+    book = at_origination(panel).head(150).copy()
+    book["age"] = 0
+    book["period"] = macro_module.index.max() + 1
+
+    effects = marginal_effects(
+        fitted, book, macro_module, covariates, [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS]
+    ).set_index("covariate")
+
+    changes = effects["change_pp"].astype(float)
+    for name in ("cltv_drift", "unemp_gap"):
+        assert abs(changes[name]) > 1e-6, f"{name} shows no effect"
+    assert effects.loc["cltv_drift", "kind"] == "time-varying"
