@@ -133,8 +133,14 @@ STATIC_CONTINUOUS: Final[tuple[str, ...]] = (
 )
 
 #: Recomputed every loan-month. Loan age is the time scale, not a covariate.
+#:
+#: ``cltv_drift`` rather than ``indexed_cltv``: the indexed ratio equals
+#: ``orig_ltv`` at origination and stays strongly correlated with it, so fitting
+#: both gives unstable coefficients. The pair is decomposed into a level
+#: (``orig_ltv``, underwriting at origination) and a movement (``cltv_drift``,
+#: how far house prices have carried the position since, zero at origination).
 TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
-    "indexed_cltv",
+    "cltv_drift",
     "unemp_gap",
     "refi_incentive",
     "nfci_lagged",
