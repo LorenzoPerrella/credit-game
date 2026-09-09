@@ -226,6 +226,31 @@ def fit_aft(
     )
 
 
+def episode_hazards(
+    result: FitResult,
+    frame: pd.DataFrame,
+    ages: np.ndarray,
+) -> np.ndarray:
+    """Monthly conditional failure probability for each row, at its own age.
+
+    ``1 - S(a+1 | x) / S(a | x)`` evaluated with the covariates the row actually
+    carries. This is the quantity the episode likelihood is built from, and the
+    building block for every survival curve in the project.
+
+    The cumulative hazard is predicted once over the whole age grid and then
+    indexed per row, because lifelines returns a full row-by-time grid and calling
+    it once per row would be thousands of separate fits' worth of work.
+    """
+    horizon = int(ages.max()) + 2
+    grid = np.arange(0.0, float(horizon))
+    cumulative = result.fitter.predict_cumulative_hazard(frame, times=grid).to_numpy()
+
+    columns = np.arange(cumulative.shape[1])
+    increment = cumulative[ages + 1, columns] - cumulative[ages, columns]
+    hazard: np.ndarray = 1.0 - np.exp(-increment)
+    return hazard
+
+
 def coefficient_table(result: FitResult) -> pd.DataFrame:
     """Coefficients with standard errors, confidence intervals and time ratios.
 
