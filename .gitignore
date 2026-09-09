@@ -26,11 +26,12 @@ htmlcov/
 
 # Data: cached downloads and generated panels are reproducible, never committed.
 # See docs/data_dictionary.md for how to regenerate them.
-data/
+# Anchored to the root: an unanchored `data/` also matches src/creditsurv/data/.
+/data/
 
 # Generated reports: figures and numeric tables are emitted by `creditsurv report`.
 # The narrative in docs/ is committed; the generated artefacts are not.
-reports/
+/reports/
 
 # OS
 .DS_Store
