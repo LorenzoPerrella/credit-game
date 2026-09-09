@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
+import numpy as np
 from lifelines import LogLogisticAFTFitter, LogNormalAFTFitter, WeibullAFTFitter
 
 from creditsurv.data.panel import (
@@ -112,6 +113,35 @@ class FitResult:
         return float(self.fitter.log_likelihood_)
 
 
+def _check_frequency_weights(weights: pd.Series, name: str) -> None:
+    """Reject anything that is not a count of observations.
+
+    Grouped estimation is only valid with frequency weights: integer counts of
+    identical rows. The tempting alternative -- weighting by the outstanding
+    amount of each position, as loss models do -- answers a different question. It
+    estimates a value-weighted default rate rather than a borrower probability of
+    default, and Basel and IFRS 9 both define PD per obligor. It also breaks
+    inference, because lifelines derives the standard errors by treating weights
+    as replication counts and warns that non-integer weights bias them.
+
+    If exposure should influence the model, ``log_orig_upb`` is already a
+    covariate, and loss severity belongs in a separate model.
+    """
+    values = weights.to_numpy(dtype=float)
+    if (values <= 0).any():
+        message = f"Weight column {name!r} contains non-positive values."
+        raise ValueError(message)
+    if not np.array_equal(values, np.round(values)):
+        message = (
+            f"Weight column {name!r} is not integer-valued. Grouped estimation "
+            "expects frequency weights: counts of identical loan-months. Weighting "
+            "by exposure estimates a value-weighted default rate rather than a "
+            "borrower PD, and biases the standard errors. Use log_orig_upb as a "
+            "covariate if exposure should matter."
+        )
+        raise ValueError(message)
+
+
 def fit_aft(
     encoded: pd.DataFrame,
     covariates: Sequence[str],
@@ -137,6 +167,9 @@ def fit_aft(
         message = f"Unknown distribution {distribution!r}; expected one of {sorted(FITTERS)}."
         raise ValueError(message)
 
+    if weights_col is not None:
+        _check_frequency_weights(encoded[weights_col], weights_col)
+
     fitter = FITTERS[distribution](penalizer=penalizer)
     started = time.perf_counter()
 
@@ -144,6 +177,7 @@ def fit_aft(
         frame = model_frame(encoded, covariates)
         if weights_col is not None:
             frame[weights_col] = encoded[weights_col].to_numpy()
+
         fitter.fit_interval_censoring(
             frame,
             lower_bound_col=LOWER_BOUND,
@@ -169,9 +203,18 @@ def fit_aft(
         )
 
     elapsed = time.perf_counter() - started
-    n_events = (
-        int(encoded[EVENT].sum()) if EVENT in encoded.columns else int(fitter.event_observed.sum())
-    )
+    if EVENT in encoded.columns:
+        n_events = int(encoded[EVENT].sum())
+    else:
+        # An aggregated panel has no event column; a cell is a default when its
+        # interval is bounded above.
+        bounded = np.isfinite(encoded[UPPER_BOUND].to_numpy(dtype=float))
+        counts = (
+            encoded[weights_col].to_numpy(dtype=float)
+            if weights_col is not None
+            else np.ones(len(encoded))
+        )
+        n_events = int(counts[bounded].sum())
     return FitResult(
         fitter=fitter,
         distribution=distribution,
