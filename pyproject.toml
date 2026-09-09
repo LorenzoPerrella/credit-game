@@ -22,6 +22,9 @@ dependencies = [
     "requests>=2.31",
 ]
 
+[project.scripts]
+creditsurv = "creditsurv.cli:app"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
