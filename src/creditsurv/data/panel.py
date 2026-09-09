@@ -210,6 +210,18 @@ def right_censored_frame(panel: pd.DataFrame, covariates: Sequence[str]) -> pd.D
     return frame
 
 
+def at_origination(panel: pd.DataFrame) -> pd.DataFrame:
+    """One row per loan, holding its covariates as at ``age = 0``.
+
+    This is the state a lifetime PD is quoted from: what was known when the loan
+    was written. :func:`to_loan_level` takes the *last* row instead, which is what
+    is needed to score a loan already on the books.
+    """
+    validate_episodes(panel)
+    ordered = panel.sort_values([LOAN_ID, AGE], kind="stable")
+    return ordered.groupby(LOAN_ID, observed=True).first().reset_index()
+
+
 def to_loan_level(panel: pd.DataFrame) -> pd.DataFrame:
     """Collapse to one row per loan: observed duration and terminal status.
 
