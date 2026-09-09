@@ -75,6 +75,8 @@ class BacktestResult:
     metrics: dict[str, float] = field(default_factory=dict)
     calibration: pd.DataFrame = field(default_factory=pd.DataFrame)
     stability: pd.DataFrame = field(default_factory=pd.DataFrame)
+    #: Why this fold produced nothing, when it produced nothing.
+    error: str = ""
 
     def summary(self) -> dict[str, object]:
         return {
@@ -84,6 +86,7 @@ class BacktestResult:
             "horizon_months": self.horizon_months,
             "loans": self.n_loans,
             "defaults": self.n_defaults,
+            **({"error": self.error} if self.error else {}),
             **{key: round(value, 5) for key, value in self.metrics.items()},
         }
 
@@ -95,16 +98,31 @@ def _state_at_reporting_date(test: pd.DataFrame) -> pd.DataFrame:
 
 
 def _observed_outcome(test: pd.DataFrame, horizon_months: int) -> pd.DataFrame:
-    """Did each loan default within the horizon, and how long did it last?"""
+    """Did each loan default within the horizon, and was it watched the whole time?
+
+    The ``complete`` flag matters more than it looks. A loan that prepays or runs
+    off the end of the panel after six months cannot default in months seven to
+    twenty-four, but it still sits in the denominator as a non-default. Comparing a
+    twenty-four month predicted PD against that understates the realised rate and
+    makes the model look like it over-predicts. Here it dragged actual-over-expected
+    down to 0.47 on folds where the model was not in fact badly calibrated.
+
+    Discrimination is unaffected -- the concordance index takes the censoring
+    indicator and handles it -- so only calibration is restricted to the closed
+    cohort: loans watched for the full horizon, plus those that defaulted inside it.
+    """
     ordered = test.sort_values([LOAN_ID, AGE], kind="stable")
     start_age = ordered.groupby(LOAN_ID, observed=True)[AGE].transform("min")
     within = ordered[ordered[AGE] < start_age + horizon_months]
 
     grouped = within.groupby(LOAN_ID, observed=True)
+    defaulted = grouped[EVENT].max().astype(bool)
+    observed_months = grouped[AGE].max() - grouped[AGE].min() + 1
     outcome = pd.DataFrame(
         {
-            "defaulted": grouped[EVENT].max().astype(bool),
-            "months_observed": grouped[AGE].max() - grouped[AGE].min() + 1,
+            "defaulted": defaulted,
+            "months_observed": observed_months,
+            "complete": defaulted | (observed_months >= horizon_months),
         }
     )
     return outcome.reset_index()
@@ -152,10 +170,19 @@ def run_split(
         message = f"Split {split.name!r} produced no scoreable loans."
         raise ValueError(message)
 
+    # Discrimination uses every loan, since the concordance index accounts for
+    # censoring. Calibration uses only the closed cohort, because a partially
+    # observed loan cannot have realised a full-horizon outcome.
+    closed = aligned[aligned["complete"]]
+    if closed.empty:
+        message = f"Split {split.name!r} has no loans observed for the full horizon."
+        raise ValueError(message)
+
     metrics = {
         **discrimination(aligned["months_observed"], aligned["defaulted"], aligned["predicted_pd"]),
-        "brier": brier_score(aligned["defaulted"], aligned["predicted_pd"]),
-        **calibration_slope_intercept(aligned["defaulted"], aligned["predicted_pd"]),
+        "brier": brier_score(closed["defaulted"], closed["predicted_pd"]),
+        **calibration_slope_intercept(closed["defaulted"], closed["predicted_pd"]),
+        "closed_cohort": float(len(closed)),
     }
 
     return BacktestResult(
@@ -166,7 +193,7 @@ def run_split(
         n_loans=len(aligned),
         n_defaults=int(aligned["defaulted"].sum()),
         metrics=metrics,
-        calibration=calibration_table(aligned["defaulted"], aligned["predicted_pd"]),
+        calibration=calibration_table(closed["defaulted"], closed["predicted_pd"]),
         stability=stability_report(
             split.train, split.test, covariates, time_varying=TIME_VARYING_CONTINUOUS
         ),
@@ -238,6 +265,13 @@ def macro_mode_gap(summary: pd.DataFrame, metric: str = "actual_over_expected") 
     conclude that macro forecasting does not matter, when what it actually shows is
     that the wrong tool was used to look for it.
     """
+    if metric not in summary.columns:
+        message = (
+            f"No {metric!r} column in the summary; every fold failed. "
+            "Check the error column for the reason."
+        )
+        raise ValueError(message)
+
     wide = summary.pivot_table(
         index=["split", "as_of"], columns="macro_mode", values=metric, aggfunc="first"
     )

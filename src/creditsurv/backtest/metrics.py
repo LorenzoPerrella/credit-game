@@ -110,24 +110,37 @@ def calibration_slope_intercept(observed: pd.Series, predicted_pd: pd.Series) ->
 def population_stability_index(
     reference: pd.Series, comparison: pd.Series, *, n_bins: int = 10
 ) -> float:
-    """How far a covariate's distribution has moved between two samples.
+    """How far a variable's distribution has moved between two samples.
+
+    Handles categorical and numeric variables differently, because they are
+    different problems. A categorical splits on its own levels -- that is the
+    original use of the index, comparing the mix of business written. A numeric
+    variable has no natural levels, so it is binned on quantiles of the reference
+    sample, which keeps each bin populated where the data actually is rather than
+    where an equal-width grid would put it.
 
     Standard credit monitoring, and the piece that explains *why* performance
     degrades rather than only reporting that it did. Convention: below 0.1 is
     stable, 0.1 to 0.25 warrants attention, above 0.25 is a material shift.
     """
-    quantiles = np.linspace(0, 1, n_bins + 1)
-    edges = np.unique(np.quantile(reference.to_numpy(dtype=float), quantiles))
-    if len(edges) < 3:
-        return 0.0
-    edges[0], edges[-1] = -np.inf, np.inf
+    if isinstance(reference.dtype, pd.CategoricalDtype) or reference.dtype == object:
+        levels = sorted(set(reference.dropna().unique()) | set(comparison.dropna().unique()))
+        reference_share = np.array([float((reference == level).mean()) for level in levels])
+        comparison_share = np.array([float((comparison == level).mean()) for level in levels])
+    else:
+        quantiles = np.linspace(0, 1, n_bins + 1)
+        edges = np.unique(np.quantile(reference.to_numpy(dtype=float), quantiles))
+        if len(edges) < 3:
+            return 0.0
+        edges[0], edges[-1] = -np.inf, np.inf
+        reference_share = np.histogram(reference.to_numpy(dtype=float), bins=edges)[0] / len(
+            reference
+        )
+        comparison_share = np.histogram(comparison.to_numpy(dtype=float), bins=edges)[0] / len(
+            comparison
+        )
 
-    reference_share = np.histogram(reference.to_numpy(dtype=float), bins=edges)[0] / len(reference)
-    comparison_share = np.histogram(comparison.to_numpy(dtype=float), bins=edges)[0] / len(
-        comparison
-    )
-
-    # A zero share makes the log infinite, so empty bins are floored.
+    # A zero share makes the logarithm infinite, so empty bins are floored.
     floor = 1e-6
     reference_share = np.clip(reference_share, floor, None)
     comparison_share = np.clip(comparison_share, floor, None)
