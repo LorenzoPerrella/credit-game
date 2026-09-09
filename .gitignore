@@ -29,9 +29,5 @@ htmlcov/
 # Anchored to the root: an unanchored `data/` also matches src/creditsurv/data/.
 /data/
 
-# Generated reports: figures and numeric tables are emitted by `creditsurv report`.
-# The narrative in docs/ is committed; the generated artefacts are not.
-/reports/
-
 # OS
 .DS_Store
