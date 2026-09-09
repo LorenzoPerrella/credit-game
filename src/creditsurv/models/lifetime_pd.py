@@ -59,13 +59,24 @@ def hazard_paths(
     panel: pd.DataFrame,
     covariates: Sequence[str],
 ) -> pd.DataFrame:
-    """Monthly hazard for every loan-month, as a loan-by-age table."""
+    """Monthly hazard for every loan-month, as a loan-by-step table.
+
+    Columns count **months since the start of each loan's own path**, not absolute
+    loan age. For new business the two coincide, so the distinction is invisible
+    there -- and it decides everything on a book of mixed seasoning. A portfolio
+    holding one loan at age 3 and another at age 47 spans fifty age columns of
+    which each loan fills twelve, so a table indexed by age is mostly empty and
+    every horizon read off its final column returns nothing.
+    """
     frame = panel.loc[:, list(covariates)]
     ages = panel[AGE].to_numpy(dtype=int)
     hazard = episode_hazards(result, frame, ages)
 
-    table = pd.DataFrame({LOAN_ID: panel[LOAN_ID].to_numpy(), AGE: ages, "hazard": hazard})
-    return table.pivot(index=LOAN_ID, columns=AGE, values="hazard")
+    table = pd.DataFrame(
+        {LOAN_ID: panel[LOAN_ID].to_numpy(), AGE: ages, "hazard": hazard}
+    ).sort_values([LOAN_ID, AGE], kind="stable")
+    table["step"] = table.groupby(LOAN_ID, observed=True).cumcount()
+    return table.pivot(index=LOAN_ID, columns="step", values="hazard")
 
 
 def survival_along_path(
@@ -75,47 +86,50 @@ def survival_along_path(
 ) -> pd.DataFrame:
     """Survival for each loan, chained along its own covariate path.
 
-    Returns loans as rows and loan ages as columns, where column ``a`` holds the
-    probability of surviving *through* age ``a``.
+    Loans are rows; columns count months from the start of the projection, so
+    column ``k`` is the probability of still performing ``k`` months on. For loans
+    projected from origination that is also their age, which is why the difference
+    only shows up on a seasoned book.
     """
     hazards = hazard_paths(result, panel, covariates)
     survival = (1.0 - hazards).cumprod(axis=1)
-    survival.columns = pd.Index([int(age) + 1 for age in hazards.columns], name=AGE)
+    survival.columns = pd.Index([int(step) + 1 for step in hazards.columns], name="month")
     return survival
 
 
 def conditional_pd(
     survival: pd.DataFrame,
     *,
-    as_of_age: int = 0,
+    as_of_month: int = 0,
     horizon_months: int | None = None,
 ) -> pd.Series:
-    """Default probability over ``horizon_months``, given performing at ``as_of_age``.
+    """Default probability over ``horizon_months``, given performing at ``as_of_month``.
 
-    ``1 - S(as_of + horizon) / S(as_of)``. With ``as_of_age = 0`` this is the PD
-    quoted at origination; with a later age it is the reporting-date measure IFRS 9
-    asks for, on a loan that has already survived that long.
+    ``1 - S(as_of + horizon) / S(as_of)``, where both are counted in months from
+    the start of the projection. With ``as_of_month = 0`` this is the PD quoted at
+    the reporting date; a later value conditions on the loan having survived that
+    much further, which is the measure IFRS 9 asks for on a seasoned loan.
     """
     columns = list(survival.columns)
-    if as_of_age not in {0, *columns}:
-        message = f"as_of_age {as_of_age} is outside the projected horizon."
+    if as_of_month not in {0, *columns}:
+        message = f"as_of_month {as_of_month} is outside the projected horizon."
         raise ValueError(message)
 
-    end_age = columns[-1] if horizon_months is None else as_of_age + horizon_months
-    if end_age not in columns:
-        message = f"Horizon reaches age {end_age}, beyond the projected {columns[-1]}."
+    end_month = columns[-1] if horizon_months is None else as_of_month + horizon_months
+    if end_month not in columns:
+        message = f"Horizon reaches month {end_month}, beyond the projected {columns[-1]}."
         raise ValueError(message)
 
-    survival_at_end = survival[end_age]
-    survival_at_start = 1.0 if as_of_age == 0 else survival[as_of_age]
+    survival_at_end = survival[end_month]
+    survival_at_start = 1.0 if as_of_month == 0 else survival[as_of_month]
     return (1.0 - survival_at_end / survival_at_start).rename("pd")
 
 
 def pd_term_structure(survival: pd.DataFrame) -> pd.DataFrame:
     """Marginal and cumulative default probability by loan age.
 
-    The marginal column answers "of the loans written today, what share default in
-    month ``a``" -- unconditional on surviving to ``a``, which is what a loss
+    The marginal column answers "of the loans on the books today, what share default
+    in month ``k``" -- unconditional on surviving to ``a``, which is what a loss
     forecast needs. The hazard column is the conditional rate instead.
 
     The survival table must be **balanced**: every loan present at every age. A
@@ -228,27 +242,34 @@ def project_panel(
     loans: pd.DataFrame,
     macro: pd.DataFrame,
     *,
-    as_of: pd.Period,
     horizon_months: int,
 ) -> pd.DataFrame:
-    """Build the forward loan-month panel a book would experience from ``as_of``.
+    """Build the forward loan-month panel a book would experience.
 
-    ``loans`` is one row per loan carrying its origination attributes and its
-    current ``age`` at the reporting date. Calendar time advances from ``as_of``
-    while loan age advances from wherever each loan already is, which is what makes
-    the panel forward-looking.
+    ``loans`` is one row per loan carrying its origination attributes, its current
+    ``age``, and the ``period`` its projection starts from. Calendar time advances
+    from that period while loan age advances from wherever the loan already is,
+    which is what makes the panel forward-looking.
 
-    Getting this wrong is easy and quiet. Advancing calendar time from each loan's
-    *origination* instead replays its actual history, so a projected macro path
+    The start period is per loan rather than shared, because the reporting date is
+    not the same for every question. Scoring the book on the shelf projects every
+    loan from one reporting date; scoring cohorts written later projects each from
+    its own origination. A single shared date silently misplaces the second case in
+    calendar time, and the covariates then describe an economy those loans never saw.
+
+    Getting the direction wrong is quieter still. Advancing calendar time from each
+    loan's origination replays its actual history, so a projected macro path
     appended after the reporting date is never reached and every scenario returns
-    the same answer -- a model that looks stable when it is simply not being asked
-    the question.
+    the same answer -- a model that looks stable when it is not being asked the
+    question.
     """
-    if AGE not in loans.columns:
-        message = f"loans must carry a {AGE!r} column giving each loan's age at as_of."
-        raise ValueError(message)
+    for column in (AGE, "period"):
+        if column not in loans.columns:
+            message = f"loans must carry a {column!r} column."
+            raise ValueError(message)
 
-    last_period = as_of + (horizon_months - 1)
+    start_periods = pd.PeriodIndex(loans["period"])
+    last_period = start_periods.max() + (horizon_months - 1)
     if last_period > macro.index.max():
         message = (
             f"Macro panel ends {macro.index.max()} but the horizon reaches {last_period}. "
@@ -257,12 +278,10 @@ def project_panel(
         raise ValueError(message)
 
     steps = np.arange(horizon_months, dtype=np.int64)
+    tiled = np.tile(steps, len(loans))
     projected = loans.loc[loans.index.repeat(horizon_months)].reset_index(drop=True)
-    current_age = projected[AGE].to_numpy(dtype=np.int64)
-    projected[AGE] = current_age + np.tile(steps, len(loans))
-    projected["period"] = pd.PeriodIndex(
-        [as_of + int(step) for step in np.tile(steps, len(loans))], freq="M"
-    )
+    projected[AGE] = projected[AGE].to_numpy(dtype=np.int64) + tiled
+    projected["period"] = start_periods.repeat(horizon_months) + tiled
     return add_macro_covariates(projected, macro)
 
 
@@ -281,11 +300,12 @@ def scenario_lifetime_pd(
     is the whole point: a model whose covariates are frozen produces the same
     number under every scenario and looks stable when it is merely blind.
     """
-    as_of = macro.index.max() + 1
+    starting = loans.copy()
+    starting["period"] = macro.index.max() + 1
     results = {}
     for scenario in scenarios:
         extended = extend_macro(macro, horizon_months + 1, scenario)
-        panel = project_panel(loans, extended, as_of=as_of, horizon_months=horizon_months)
+        panel = project_panel(starting, extended, horizon_months=horizon_months)
         survival = survival_along_path(result, panel, covariates)
         results[scenario.name] = conditional_pd(survival)
 
