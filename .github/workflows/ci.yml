@@ -76,3 +76,45 @@ jobs:
       # This connector is the one component that can break with no local change.
       - name: Live data check
         run: uv run pytest -m network -v
+
+  pipeline-smoke:
+    name: end-to-end pipeline
+    # Nightly and on demand. The full pipeline fetches live data, fits a model and
+    # writes reports, which is minutes rather than seconds -- too slow for the
+    # pull-request path, and it is integration breakage it catches, not logic.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # Deliberately small: this asks whether the commands still compose, not
+      # whether the estimates are good. The test suite answers the second.
+      - name: Run the pipeline
+        run: |
+          uv run creditsurv fetch-macro
+          uv run creditsurv build-data --n-loans 600 --seed 7
+          uv run creditsurv fit
+          uv run creditsurv report --loans 100 --folds 2 --horizon 24
+
+      - name: Check the reports were written
+        run: |
+          for name in methodology calibration backtesting; do
+            test -s "reports/$name.md" || { echo "missing reports/$name.md"; exit 1; }
+          done
+          test -d reports/figures && test "$(ls -1 reports/figures | wc -l)" -ge 4
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports
+          path: reports/
