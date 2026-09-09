@@ -24,14 +24,16 @@ the two carry almost independent information.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, cast
+
+import numpy as np
+import pandas as pd
 
 from creditsurv.config import MACRO_LAG_MONTHS
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-    import pandas as pd
 
 #: Published in arrears and revised, so lagged before entering any covariate.
 LAGGED_SERIES: tuple[str, ...] = ("unemployment_rate", "hpi", "nfci")
@@ -130,3 +132,93 @@ def assert_no_lookahead(
                 f"which is less than the required lag of {lag_months}."
             )
             raise ValueError(message)
+
+
+# --------------------------------------------------------------------------------------
+# Coarse classing
+# --------------------------------------------------------------------------------------
+
+#: Cut points for each continuous covariate, in the covariate's own units.
+#:
+#: Chosen from credit conventions rather than from the data: the loan-to-value
+#: breaks sit at 80, 85, 90 and 95 because that is where mortgage insurance and
+#: pricing tiers actually change, and the debt-to-income breaks sit at 36 and 43
+#: because those are long-standing underwriting thresholds. Data-driven cuts
+#: would fit this sample better and would have to be refitted, and re-justified,
+#: for every new one.
+#:
+#: Bands are closed on the right, matching ``pd.cut`` defaults. Values outside the
+#: outer edges are clipped into the end bands rather than dropped.
+BIN_EDGES: dict[str, tuple[float, ...]] = {
+    # (score - 700) / 50, so -2.4 is a score of 580 and +2.0 is 800.
+    "fico_s": (-2.4, -1.6, -0.8, -0.4, 0.0, 0.4, 0.8, 1.2, 2.4),
+    "orig_ltv": (30.0, 60.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0, 100.0),
+    "dti": (10.0, 20.0, 28.0, 36.0, 43.0, 50.0, 55.0),
+    "log_orig_upb": (10.0, 11.3, 11.8, 12.1, 12.4, 12.7, 13.2, 14.5),
+    "orig_spread": (-2.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 4.0),
+    # Percentage points of loan-to-value gained or lost since origination.
+    "cltv_drift": (-60.0, -20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0, 80.0),
+    "unemp_gap": (-10.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 12.0),
+    "refi_incentive": (-6.0, -1.0, 0.0, 0.5, 1.0, 2.0, 6.0),
+    "nfci_lagged": (-2.0, -0.6, -0.4, -0.2, 0.0, 0.5, 1.0, 5.0),
+}
+
+#: Suffix for the representative value of a covariate's band.
+BINNED_SUFFIX: str = "_binned"
+
+#: Suffix for the band label, kept for reporting rather than modelling.
+BAND_SUFFIX: str = "_band"
+
+
+def bin_covariates(
+    panel: pd.DataFrame,
+    edges: dict[str, tuple[float, ...]] | None = None,
+) -> pd.DataFrame:
+    """Replace continuous covariates by the midpoint of their band.
+
+    Coarse classing is a modelling decision, not a performance trick, and it is
+    worth being explicit about the trade. It buys robustness to outliers,
+    non-linearity without splines, and an explainable model of the kind credit
+    committees and regulators expect. It costs within-bin information and turns a
+    smooth covariate effect into a step function.
+
+    It also makes grouped estimation worthwhile. Continuous, loan-specific
+    covariates leave almost every episode unique, so aggregating identical rows
+    saves nothing until the values are coarsened.
+
+    The representative value is the band midpoint, so the binned covariate stays
+    on the original scale and its coefficient remains directly comparable with the
+    unbinned fit. Values beyond the outer edges are clipped into the end bands.
+    """
+    cut_points = BIN_EDGES if edges is None else edges
+    binned = panel.copy()
+
+    for column, breaks in cut_points.items():
+        if column not in binned.columns:
+            continue
+        values = binned[column].clip(lower=breaks[0], upper=breaks[-1])
+        bands = pd.cut(values, bins=list(breaks), include_lowest=True)
+        midpoints = np.array([(breaks[i] + breaks[i + 1]) / 2.0 for i in range(len(breaks) - 1)])
+        codes = bands.cat.codes.to_numpy()
+        binned[column + BINNED_SUFFIX] = midpoints[codes]
+        binned[column + BAND_SUFFIX] = bands.astype(str)
+
+    return binned
+
+
+def binned_formula(formula: str, edges: dict[str, tuple[float, ...]] | None = None) -> str:
+    """Rewrite a formula to use the binned form of every coarse-classed covariate.
+
+    Keeps a single source of truth for the model specification: the binned and
+    unbinned fits differ only in which column each term reads.
+    """
+    cut_points = BIN_EDGES if edges is None else edges
+    rewritten = formula
+    # Longest names first so a shorter name cannot match inside a longer one.
+    for column in sorted(cut_points, key=len, reverse=True):
+        rewritten = re.sub(
+            rf"(?<![\w.]){re.escape(column)}(?![\w.])",
+            column + BINNED_SUFFIX,
+            rewritten,
+        )
+    return rewritten
