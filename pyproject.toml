@@ -53,7 +53,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "TC", "RUF"]
 
 [tool.mypy]
 files = ["src", "tests"]
-python_version = "3.11"
+# Analyse as 3.12 even on the 3.11 CI job: numpy ships stubs written with 3.12
+# `type` statements, which mypy refuses to parse under an older target. Syntax
+# compatibility with 3.11 is enforced by ruff's target-version instead, and the
+# 3.11 matrix job still runs the test suite for real.
+python_version = "3.12"
 strict = true
 warn_unused_ignores = true
 warn_unreachable = true
