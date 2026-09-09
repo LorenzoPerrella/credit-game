@@ -53,6 +53,7 @@ def new_business(panel: pd.DataFrame, macro_module: pd.DataFrame) -> pd.DataFram
     loans = at_origination(panel).head(300).copy()
     loans["age"] = 0
     loans["orig_period"] = macro_module.index.max() + 1
+    loans["period"] = macro_module.index.max() + 1
     return loans
 
 
@@ -60,9 +61,8 @@ def new_business(panel: pd.DataFrame, macro_module: pd.DataFrame) -> pd.DataFram
 def forward_survival(
     fitted: FitResult, new_business: pd.DataFrame, macro_module: pd.DataFrame
 ) -> pd.DataFrame:
-    as_of = macro_module.index.max() + 1
     extended = extend_macro(macro_module, HORIZON + 2, BASELINE)
-    projected = project_panel(new_business, extended, as_of=as_of, horizon_months=HORIZON)
+    projected = project_panel(new_business, extended, horizon_months=HORIZON)
     return survival_along_path(fitted, projected, COVARIATES)
 
 
@@ -89,7 +89,7 @@ def test_pd_is_bounded_and_grows_with_horizon(forward_survival: pd.DataFrame) ->
 
 def test_conditional_pd_matches_the_survival_ratio(forward_survival: pd.DataFrame) -> None:
     """1 - S(t+h)/S(t) is the definition; this guards the indexing around it."""
-    computed = conditional_pd(forward_survival, as_of_age=12, horizon_months=12)
+    computed = conditional_pd(forward_survival, as_of_month=12, horizon_months=12)
     expected = 1.0 - forward_survival[24] / forward_survival[12]
 
     pd.testing.assert_series_equal(computed, expected.rename("pd"))
@@ -99,8 +99,8 @@ def test_conditioning_on_survival_raises_the_pd(forward_survival: pd.DataFrame) 
     """A seasoned loan faces a higher hazard here, because the baseline hazard
     rises with age over this horizon. The point is that the two differ at all:
     quoting a lifetime PD without saying what it is conditioned on is ambiguous."""
-    from_origination = conditional_pd(forward_survival, as_of_age=0, horizon_months=12)
-    from_month_twelve = conditional_pd(forward_survival, as_of_age=12, horizon_months=12)
+    from_origination = conditional_pd(forward_survival, as_of_month=0, horizon_months=12)
+    from_month_twelve = conditional_pd(forward_survival, as_of_month=12, horizon_months=12)
 
     assert from_month_twelve.mean() > from_origination.mean()
 
@@ -162,24 +162,14 @@ def test_projection_requires_an_age_column(
     extended = extend_macro(macro_module, 12, BASELINE)
 
     with pytest.raises(ValueError, match="age"):
-        project_panel(
-            new_business.drop(columns=["age"]),
-            extended,
-            as_of=macro_module.index.max() + 1,
-            horizon_months=6,
-        )
+        project_panel(new_business.drop(columns=["age"]), extended, horizon_months=6)
 
 
 def test_projection_requires_macro_to_reach_the_horizon(
     new_business: pd.DataFrame, macro_module: pd.DataFrame
 ) -> None:
     with pytest.raises(ValueError, match="Extend it with extend_macro"):
-        project_panel(
-            new_business,
-            macro_module,
-            as_of=macro_module.index.max(),
-            horizon_months=24,
-        )
+        project_panel(new_business, macro_module, horizon_months=24)
 
 
 def test_adverse_scenario_raises_lifetime_pd(
