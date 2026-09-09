@@ -46,6 +46,7 @@ AGE_STOP: Final = "age_stop"
 LOWER_BOUND: Final = "lower_bound"
 UPPER_BOUND: Final = "upper_bound"
 EXACT_OBSERVATION: Final = "exact_observation"
+WEIGHT: Final = "n"
 
 #: Columns every canonical loan-month panel must carry.
 REQUIRED_COLUMNS: Final[tuple[str, ...]] = (LOAN_ID, AGE, EVENT)
@@ -145,6 +146,49 @@ def model_frame(panel: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFrame:
         message = f"Encoded panel is missing column(s): {missing}"
         raise PanelValidationError(message)
     return panel.loc[:, columns].copy()
+
+
+def aggregate_episodes(
+    panel: pd.DataFrame,
+    covariates: Sequence[str],
+    *,
+    weight_col: str = WEIGHT,
+) -> pd.DataFrame:
+    """Collapse identical episodes into weighted cells.
+
+    Episodes agreeing on every covariate *and* on their interval bounds are
+    exchangeable, so they can be replaced by one row carrying a count. The
+    likelihood treats that count as a frequency weight and is unchanged, which
+    :mod:`tests.test_aggregation` asserts rather than assumes.
+
+    The bounds must be part of the key. They are functions of loan age, so
+    grouping on covariates alone would merge different points of the hazard curve
+    into one cell and destroy the time structure entirely.
+
+    The weight is a **count of loan-months, never an exposure amount**. Weighting
+    by outstanding balance estimates a value-weighted default rate rather than a
+    borrower probability of default, which is not what Basel or IFRS 9 define. It
+    also breaks inference: lifelines warns that non-integer weights bias the
+    variance estimates, and integer counts keep the standard errors valid.
+
+    Note this compresses very little at realistic covariate counts -- see
+    ``docs/methodology.md``. It is implemented because being able to show the
+    aggregation is lossless is worth more than the speed-up it rarely delivers.
+    """
+    key = [*covariates, AGE_START, LOWER_BOUND, UPPER_BOUND, EXACT_OBSERVATION]
+    missing = [column for column in key if column not in panel.columns]
+    if missing:
+        message = f"Encoded panel is missing column(s): {missing}"
+        raise PanelValidationError(message)
+
+    grouped = (
+        panel.loc[:, key]
+        .groupby(key, observed=True, dropna=False, sort=False)
+        .size()
+        .reset_index(name=weight_col)
+    )
+    grouped[weight_col] = grouped[weight_col].astype("int64")
+    return grouped
 
 
 def right_censored_frame(panel: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFrame:
