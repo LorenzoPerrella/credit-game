@@ -28,6 +28,7 @@ from lifelines import KaplanMeierFitter
 from lifelines.statistics import logrank_test
 
 from creditsurv.data.panel import EVENT, to_loan_level
+from creditsurv.models.aft import episode_hazards
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -138,14 +139,7 @@ def predicted_survival_curve(
     """
     frame = encoded.loc[:, list(covariates)]
     ages = encoded[age_col].to_numpy(dtype=int)
-    horizon = int(ages.max()) + 2
-    grid = np.arange(0.0, float(horizon))
-
-    # One row per grid time, one column per episode.
-    cumulative = result.fitter.predict_cumulative_hazard(frame, times=grid).to_numpy()
-    columns = np.arange(cumulative.shape[1])
-    increment = cumulative[ages + 1, columns] - cumulative[ages, columns]
-    hazard = 1.0 - np.exp(-increment)
+    hazard = episode_hazards(result, frame, ages)
 
     mean_hazard = pd.Series(hazard, index=encoded.index).groupby(ages).mean()
     survival = np.cumprod(1.0 - mean_hazard.to_numpy())
