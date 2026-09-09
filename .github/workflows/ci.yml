@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # 05:20 UTC daily. Only the live-data job runs on this trigger.
+    - cron: "20 5 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -49,3 +52,27 @@ jobs:
 
       - name: Build distribution
         run: uv build
+
+  network:
+    name: live FRED check
+    # Only on the nightly schedule or an explicit run. Never on a pull request:
+    # an upstream outage must not fail an unrelated change.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # Asserts the endpoint, the CSV layout and the column naming are unchanged.
+      # This connector is the one component that can break with no local change.
+      - name: Live data check
+        run: uv run pytest -m network -v
