@@ -147,6 +147,25 @@ def model_frame(panel: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFrame:
     return panel.loc[:, columns].copy()
 
 
+def right_censored_frame(panel: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFrame:
+    """Reduce an encoded panel to the columns for a right-censored fit.
+
+    The same episodes, read the other way: the duration is the episode end and
+    the event flag is taken at face value, so a default is treated as having
+    happened exactly at month end. That is the approximation the interval form
+    exists to avoid, and fitting both on identical episodes is what makes the
+    cost of the approximation measurable.
+    """
+    columns = [*covariates, AGE_START, AGE_STOP, EVENT]
+    missing = [column for column in columns if column not in panel.columns]
+    if missing:
+        message = f"Encoded panel is missing column(s): {missing}"
+        raise PanelValidationError(message)
+    frame = panel.loc[:, columns].copy()
+    frame[EVENT] = frame[EVENT].astype(bool)
+    return frame
+
+
 def to_loan_level(panel: pd.DataFrame) -> pd.DataFrame:
     """Collapse to one row per loan: observed duration and terminal status.
 

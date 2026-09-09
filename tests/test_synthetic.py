@@ -9,26 +9,9 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from creditsurv.data.panel import to_interval_censored, validate_episodes
 from creditsurv.data.synthetic import build_synthetic_panel
-
-
-@pytest.fixture
-def macro() -> pd.DataFrame:
-    """A stub macro panel with a house-price cycle and an unemployment spike."""
-    index = pd.period_range("1999-01", "2012-12", freq="M")
-    months = np.arange(len(index), dtype=float)
-    return pd.DataFrame(
-        {
-            "unemployment_rate": 5.0 + 3.0 * np.sin(months / 24.0),
-            "hpi": 100.0 * np.exp(0.0035 * months - 0.000012 * months**2),
-            "mortgage_rate_30y": 6.0 + 0.8 * np.cos(months / 30.0),
-            "nfci": 0.2 * np.sin(months / 18.0),
-        },
-        index=index,
-    )
 
 
 def test_generated_panel_satisfies_every_invariant(macro: pd.DataFrame) -> None:
