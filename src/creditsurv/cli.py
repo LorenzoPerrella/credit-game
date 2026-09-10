@@ -11,6 +11,9 @@ Commands that need a model fit one.
 
 from __future__ import annotations
 
+# typer resolves annotations at runtime, so Path cannot move into the
+# type-checking block the way ruff would prefer -- the CLI stops working.
+from pathlib import Path  # noqa: TC003
 from typing import TYPE_CHECKING, Annotated
 
 import typer
@@ -60,22 +63,49 @@ def fetch_macro(
 @app.command("build-data")
 def build_data(
     source: Annotated[str, typer.Option(help="synthetic or freddiemac.")] = "synthetic",
-    n_loans: Annotated[int, typer.Option(help="Number of loans to simulate.")] = 5000,
-    seed: Annotated[int, typer.Option(help="Random seed.")] = 42,
+    n_loans: Annotated[int, typer.Option(help="Loans to simulate (synthetic only).")] = 5000,
+    seed: Annotated[int, typer.Option(help="Random seed (synthetic only).")] = 42,
+    orig: Annotated[
+        Path | None, typer.Option(help="sample_orig_YYYY.txt (freddiemac only).")
+    ] = None,
+    svcg: Annotated[
+        Path | None, typer.Option(help="sample_svcg_YYYY.txt (freddiemac only).")
+    ] = None,
 ) -> None:
-    """Build the loan-month panel and save it."""
+    """Build the loan-month panel and save it.
+
+    The synthetic source needs nothing but the macro cache. The Freddie Mac source
+    needs two files downloaded by hand: the dataset sits behind a free registration
+    and cannot be fetched as part of a pipeline.
+    """
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.store import save_panel
-    from creditsurv.data.synthetic import build_synthetic_panel
+    from creditsurv.features import add_macro_covariates
 
-    if source != "synthetic":
-        message = f"Source {source!r} is not available yet."
+    if source == "synthetic":
+        from creditsurv.data.synthetic import build_synthetic_panel
+
+        macro = load_macro_panel()
+        panel, _ = build_synthetic_panel(macro, n_loans=n_loans, seed=seed)
+    elif source == "freddiemac":
+        from creditsurv.data.freddiemac import CLARITY_URL, load_sample
+
+        if orig is None or svcg is None:
+            message = (
+                "--orig and --svcg are required for the freddiemac source. "
+                f"The dataset is not downloadable programmatically; register at {CLARITY_URL}."
+            )
+            raise typer.BadParameter(message)
+        macro = load_macro_panel()
+        # The loader produces loan attributes and calendar periods; the macro
+        # covariates are derived by exactly the code the synthetic path uses, so
+        # both sources reach the model through one definition.
+        panel = add_macro_covariates(load_sample(orig, svcg), macro)
+    else:
+        message = f"Unknown source {source!r}; expected 'synthetic' or 'freddiemac'."
         raise typer.BadParameter(message)
 
-    macro = load_macro_panel()
-    panel, _ = build_synthetic_panel(macro, n_loans=n_loans, seed=seed)
     path = save_panel(panel)
-
     loans = panel["loan_id"].nunique()
     defaults = int(panel["event"].sum())
     typer.echo(f"Panel: {len(panel):,} loan-months, {loans:,} loans -> {path}")

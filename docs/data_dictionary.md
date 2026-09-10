@@ -298,6 +298,85 @@ None of these raise on their own. All of them bias the fit.
 
 ---
 
+## Optional: the Freddie Mac Single-Family Loan-Level Dataset
+
+The right data for this project, and the reason the loan book here is otherwise
+simulated. `creditsurv.data.freddiemac` reads it and maps it onto the **same
+canonical loan-month panel** described above, so nothing downstream changes.
+
+### Getting it
+
+The dataset is **not downloadable programmatically**. Registration is free but
+manual, at <https://claritydownload.fmapps.freddiemac.com/CRT/>. Download a sample
+vintage — 50,000 loans per year — then:
+
+```bash
+uv run creditsurv build-data --source freddiemac \
+  --orig path/to/sample_orig_2015.txt \
+  --svcg path/to/sample_svcg_2015.txt
+```
+
+Nothing in this repository touches the network for it. Scraping an authenticated
+download would breach the terms the data is offered under.
+
+### The record layout
+
+Two pipe-delimited files per vintage, **with no header row** — so a misplaced field
+name shifts every column after it while still parsing cleanly. The field lists in
+`freddiemac.py` were extracted from the published layout spreadsheet
+(`file_layout_july_2026.xlsx`, which *is* public) rather than transcribed: 66
+fields across two files is too many to copy reliably.
+
+| File | Grain | Fields |
+|---|---|---|
+| `sample_orig_YYYY.txt` | one row per loan, as underwritten | 31 |
+| `sample_svcg_YYYY.txt` | one row per loan-month | 35 |
+
+### Mapping to the canonical panel
+
+| Canonical | Source | Note |
+|---|---|---|
+| `loan_id` | `loan_identifier` | |
+| `age` | `loan_age` | Taken directly; negative ages are dropped |
+| `period` | `period` (YYYYMM) | |
+| `orig_period` | `period − age` | See below |
+| `credit_score` | `classic_fico` | 9999 means missing |
+| `orig_ltv` | `original_ltv` | 999 means missing |
+| `dti` | `original_dti` | 999 means missing |
+| `purpose` | `loan_purpose` | P/N/C → purchase / rate-term / cash-out |
+| `occupancy` | `occupancy_status` | P/S/I → owner / second home / investor |
+| `channel` | `channel` | R/B/C/T → retail / broker / correspondent |
+| `region` | `property_state` | Mapped to four census regions |
+
+**The origination month is recovered as `period − age`, not from a date field.**
+The dataset has no origination date — only a first payment date, which falls one or
+two months later depending on the servicer. Deriving seasoning from it would put a
+portfolio out by a month in a way that varies loan by loan.
+
+**Missing-value sentinels are real numbers.** A credit score of 9999 and a DTI of
+999 parse perfectly happily; left in place they produce a portfolio whose average
+credit score is several thousand. They are blanked on read.
+
+### Event definition
+
+| Outcome | Condition |
+|---|---|
+| **Default** | `current_loan_delinquency_status` ≥ 3 (90+ days), **or** `zero_balance_code` in {02 third-party sale, 03 short sale, 09 REO, 15 note sale} |
+| **Prepayment** | `zero_balance_code` = 01 — treated as censoring |
+
+`current_loan_delinquency_status` is *alphanumeric*: `RA` marks an REO acquisition
+and `XX` an unknown status. Coercing it to a number turns both into NaN, which
+compares false and so reads as performing — right for `XX`, wrong for `RA`. The
+zero-balance code is therefore checked alongside it, not instead of it.
+
+**Servicing files keep reporting after a default**, through foreclosure,
+disposition and loss settlement, so a defaulted loan carries several flagged rows.
+Each loan is cut at its first terminating month; left alone this breaks the
+one-event-per-loan invariant and counts a single default many times in the
+likelihood.
+
+---
+
 ## Known limitations
 
 **FRED serves the latest revision, not the vintage.** Values are as *currently*
