@@ -95,6 +95,48 @@ def _parse_years(spec: str) -> list[int]:
 
 
 @app.command()
+def profile(
+    covariate: Annotated[str | None, typer.Option(help="Profile one covariate in detail.")] = None,
+) -> None:
+    """Screen the covariates before aggregating.
+
+    This runs first, and the order is the point. Screening before the group-by means
+    the cut points, the merges and the exclusions are decided from what the data
+    looks like; screening after it means they were assumed, and a mis-binned
+    covariate can only be found later by noticing its coefficient came out backwards.
+    """
+    import logging
+
+    from creditsurv.data.aggregate import _CATEGORICAL, _SOURCE
+    from creditsurv.profiling import (
+        is_monotonic,
+        profile_categorical,
+        profile_continuous,
+        propose_cut_points,
+        screen_categoricals,
+    )
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if covariate in _CATEGORICAL:
+        _echo_table(profile_categorical(covariate).round(5))
+        return
+    if covariate in _SOURCE:
+        edges = propose_cut_points(covariate)
+        typer.echo(f"Quantile cut points: {edges}")
+        table = profile_continuous(covariate, edges)
+        _echo_table(table.round(5))
+        typer.echo(f"Monotonic in default rate: {is_monotonic(table)}")
+        return
+    if covariate is not None:
+        message = f"Unknown covariate {covariate!r}."
+        raise typer.BadParameter(message)
+
+    typer.echo("Categorical covariates, whole history:")
+    _echo_table(screen_categoricals().round(5))
+
+
+@app.command()
 def aggregate(
     report_cardinality: Annotated[
         bool, typer.Option(help="Report the collapse without saving.")

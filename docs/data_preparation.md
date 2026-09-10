@@ -25,9 +25,25 @@ intolerable. The pipeline is therefore three stages, and **the full panel is nev
 materialised at any of them**.
 
 ```
-zip annidati  ──[1 ingest]──>  parquet  ──[2 aggregate]──>  celle pesate  ──>  fit
-   245 GB                      ~10 GB                       ~10⁶ righe
+zip  ──[1 ingest]──>  parquet  ──[2 profile]──>  decisioni  ──[3 aggregate]──>  celle  ──>  fit
+245 GB                 17 GB                      spec                          ~2·10⁶
 ```
+
+**The screening comes before the group-by, and the order is the point.** This
+pipeline had it backwards at first: binning and grouping were done together from a
+specification chosen in advance, and the screening ran afterwards — by which time the
+bands were baked into two million cells, and a mis-binned covariate could only be
+found by noticing its coefficient had come out with the wrong sign. Which is exactly
+how the ELTV sentinel was eventually found.
+
+`nmds` runs the other way round:
+
+```
+load → frequency screening → class merging → GROUP BY
+```
+
+and its screening covers the whole history, filtered by population rather than by
+date. This pipeline now does the same.
 
 ## Stage 1 — Ingest (`creditsurv ingest`)
 
@@ -128,6 +144,33 @@ recovered as `period − age`. The dataset has **no origination date** — only 
 payment date, which falls one or two months later depending on the servicer — so
 deriving seasoning from it would put a portfolio out by a month in a way that varies
 loan by loan. Negative ages, which the dataset does emit, are dropped.
+
+## Stage 2b — Screening (`creditsurv profile`)
+
+`src/creditsurv/profiling.py`. Runs on the ingested parquet, quarter by quarter,
+across the **whole history** — 2.9 billion loan-months is too much to hold but not
+too much to count.
+
+| What it reports | Rule |
+|---|---|
+| Exposure share per categorical level | below **5%** → merge, following `nmds` |
+| Largest level's share | ≥ **99%** → degenerate, drop |
+| Default rate per level and per band | read for **monotonicity** |
+| Quantiles of a continuous covariate | candidate cut points |
+
+**Monotonicity is the check that earns its place.** A covariate whose default rate
+rises and falls across its own bands is either mis-binned or is measuring something
+other than what its name says. On this data `fico_s` runs cleanly from 469 to 16
+basis points across its bands, a factor of 29, and `orig_ltv` likewise — and
+`cltv_drift` did not, which is what exposed the untreated sentinel.
+
+**Quantiles are a starting point, not an answer.** Data-driven cuts fit the sample
+they were taken from, so the ones actually used come from credit conventions. What
+the quantiles are for is showing where the mass sits: on `orig_ltv` the 60th and 80th
+percentiles both come back as **80**, because that is the threshold above which
+mortgage insurance is required and originations pile up against it. A band boundary
+placed there would split an enormous mass at exactly the wrong point, and it is worth
+knowing that before choosing rather than after.
 
 ## Stage 3 — Coarse classing and aggregation
 
