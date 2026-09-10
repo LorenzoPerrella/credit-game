@@ -49,6 +49,27 @@ DEFAULT_DELINQUENCY: Final = 3
 DEFAULT_ZERO_BALANCE: Final = ("02", "03", "09", "15")
 PREPAYMENT_ZERO_BALANCE: Final = "01"
 
+#: Modification flags. ``Y`` is the month the loan was modified, ``P`` every month
+#: after it -- a prior modification.
+#:
+#: Modification ends observation of the contract, the way prepayment does. It is not
+#: a nicety: **the dataset restarts ``loan_age`` at the modification**, because the
+#: field counts scheduled payments since the loan was originated *or modified*. One
+#: loan in the 2006 vintage runs to age 192 at twenty months delinquent, is modified,
+#: and reappears at age 3 with a clean delinquency status, then climbs again.
+#:
+#: Left alone that does three things, none of them visible in a coefficient:
+#:
+#: * the same loan contributes two episodes at the same age, double-counting its
+#:   likelihood contribution and breaking one-event-per-loan;
+#: * seasoned, previously-distressed months are re-attributed to young ages, where
+#:   they arrive *performing* -- so they dilute exactly the part of the hazard curve
+#:   the model is most sensitive to;
+#: * the affected population is not random. It is 0.4% of the 1999 vintage's loans,
+#:   5.2% of 2006's and 1.9% of 2021's, and every one of them is a loan that got
+#:   into trouble -- which is where nearly all the events are.
+MODIFICATION_FLAGS: Final = ("Y", "P")
+
 #: Months per episode. Loan age is collapsed to multiples of this, so an episode
 #: spans ``(k*step, (k+1)*step]``.
 #:
@@ -139,6 +160,7 @@ def _region_case() -> str:
 def _state_of_the_book_sql() -> str:
     """The loan-month panel, cleaned and truncated, before any aggregation."""
     default_codes = ", ".join(f"'{code}'" for code in DEFAULT_ZERO_BALANCE)
+    modification_flags = ", ".join(f"'{flag}'" for flag in MODIFICATION_FLAGS)
     return f"""
     WITH perf AS (
         SELECT
@@ -161,21 +183,35 @@ def _state_of_the_book_sql() -> str:
                 OR COALESCE(zero_balance_code IN ({default_codes}), FALSE),
                 FALSE
             )                                                           AS defaulted,
-            COALESCE(zero_balance_code = '{PREPAYMENT_ZERO_BALANCE}', FALSE) AS prepaid
+            COALESCE(zero_balance_code = '{PREPAYMENT_ZERO_BALANCE}', FALSE) AS prepaid,
+            COALESCE(modification_flag IN ({modification_flags}), FALSE)  AS modified
         FROM read_parquet(?)
         WHERE TRY_CAST(loan_age AS INTEGER) >= 0
     ),
     -- Servicing files keep reporting through foreclosure and loss settlement, so a
     -- defaulted loan carries several flagged rows. Cutting at the first terminating
     -- month is what keeps one event per loan.
+    --
+    -- Ordered by **calendar period**, not by age. Age is not monotone within a loan:
+    -- a modification restarts it, so MIN(age) over the terminating rows can land on a
+    -- post-modification row and the cut then keeps an arbitrary mixture of months
+    -- from before and after. Calendar time is monotone by construction.
     terminal AS (
-        SELECT loan_identifier, MIN(age) AS terminal_age
-        FROM perf WHERE defaulted OR prepaid GROUP BY loan_identifier
+        SELECT
+            loan_identifier,
+            MIN(CASE WHEN defaulted OR prepaid THEN period_key END) AS terminal_period,
+            MIN(CASE WHEN modified THEN period_key END)             AS modified_period
+        FROM perf GROUP BY loan_identifier
     ),
+    -- Default and prepayment happen *during* their month, so that month is kept and
+    -- carries the flag. A modification is different: the flagged row already reports
+    -- the restarted age, so keeping it would file a distressed month at age zero.
+    -- Observation ends the month before.
     truncated AS (
-        SELECT p.*, t.terminal_age
+        SELECT p.*, t.terminal_period
         FROM perf p LEFT JOIN terminal t USING (loan_identifier)
-        WHERE t.terminal_age IS NULL OR p.age <= t.terminal_age
+        WHERE (t.terminal_period IS NULL OR p.period_key <= t.terminal_period)
+          AND (t.modified_period IS NULL OR p.period_key < t.modified_period)
     ),
     orig AS (
         SELECT
@@ -209,8 +245,8 @@ def _state_of_the_book_sql() -> str:
         t.age,
         t.period_key,
         t.eltv,
-        COALESCE(t.defaulted AND t.age = t.terminal_age, FALSE)         AS event,
-        COALESCE(t.prepaid AND t.age = t.terminal_age, FALSE)           AS prepaid,
+        COALESCE(t.defaulted AND t.period_key = t.terminal_period, FALSE) AS event,
+        COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE)  AS prepaid,
         o.*
     FROM truncated t JOIN orig o USING (loan_identifier)
     WHERE o.credit_score IS NOT NULL AND o.orig_ltv IS NOT NULL AND o.dti IS NOT NULL

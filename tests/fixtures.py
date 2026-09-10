@@ -136,6 +136,7 @@ def performance_row(
     delinquency: str = "0",
     zero_balance: str = "",
     upb: str = "200000",
+    modification: str = "",
 ) -> str:
     """One line of ``perf_YYYYQn.txt``.
 
@@ -152,6 +153,7 @@ def performance_row(
         loan_age=age,
         zero_balance_code=zero_balance,
         current_actual_upb=upb,
+        modification_flag=modification,
     )
     return "|".join(values[name] for name in PERFORMANCE_COLUMNS)
 

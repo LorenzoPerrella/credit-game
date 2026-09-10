@@ -369,3 +369,69 @@ def test_the_default_formula_only_names_covariates_the_cells_carry() -> None:
 
     missing = modelled - in_key - derived
     assert not missing, f"the formula names {sorted(missing)}, which no cell carries"
+
+
+def test_a_modified_loan_is_cut_at_the_modification(tmp_path: Path) -> None:
+    """The dataset restarts ``loan_age`` at a modification, and it must not be believed.
+
+    A real loan from the 2006 vintage runs to age 192 at twenty months delinquent,
+    is modified, and reappears the next month at age 3 with a clean delinquency
+    status. Believing that gives the same loan two episodes at the same age, and
+    re-files a previously-distressed month as a performing one at a young age --
+    where it dilutes the part of the hazard curve the model is most sensitive to.
+
+    Observation ends at the modification, as it does at a prepayment: the modified
+    contract is a different loan.
+    """
+    import duckdb
+
+    from creditsurv.data.aggregate import _state_of_the_book_sql
+
+    performance = [
+        performance_row("F15Q1000001", "201503", "0"),
+        performance_row("F15Q1000001", "201504", "1"),
+        performance_row("F15Q1000001", "201505", "2"),
+        # Modified: age restarts, and every later row carries the prior-modification
+        # flag. Ages 0 and 1 now appear twice for this loan.
+        performance_row("F15Q1000001", "201506", "0", modification="Y"),
+        performance_row("F15Q1000001", "201507", "1", modification="P"),
+    ]
+    _ingested(tmp_path, [origination_row("F15Q1000001")], performance)
+
+    perf, orig = _sources(tmp_path)
+    book = duckdb.connect().execute(_state_of_the_book_sql(), [perf, orig]).df()
+    book = book.sort_values("period_key")
+
+    assert book["age"].tolist() == [0, 1, 2], "history should stop before the modification"
+    assert not book["event"].any(), "a modification is censoring, never a default"
+
+
+def test_truncation_follows_calendar_time_not_age(tmp_path: Path) -> None:
+    """Cutting on ``MIN(age)`` picks the wrong row once age is not monotone.
+
+    The loan below defaults at age 4, is modified, and the post-modification rows
+    carry lower ages than the default did. Truncating on the smallest terminating
+    *age* would cut at age 1 and lose the default entirely; truncating on the
+    earliest terminating *period* keeps it.
+    """
+    import duckdb
+
+    from creditsurv.data.aggregate import _state_of_the_book_sql
+
+    performance = [
+        performance_row("F15Q1000001", "201503", "0"),
+        performance_row("F15Q1000001", "201504", "1"),
+        performance_row("F15Q1000001", "201505", "2"),
+        performance_row("F15Q1000001", "201506", "3"),
+        performance_row("F15Q1000001", "201507", "4", delinquency="3"),
+        performance_row("F15Q1000001", "201508", "1", modification="Y"),
+        performance_row("F15Q1000001", "201509", "2", modification="P"),
+    ]
+    _ingested(tmp_path, [origination_row("F15Q1000001")], performance)
+
+    perf, orig = _sources(tmp_path)
+    book = duckdb.connect().execute(_state_of_the_book_sql(), [perf, orig]).df()
+    book = book.sort_values("period_key")
+
+    assert book["age"].tolist() == [0, 1, 2, 3, 4]
+    assert book["event"].tolist() == [False, False, False, False, True]
