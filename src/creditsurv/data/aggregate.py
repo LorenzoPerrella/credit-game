@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import tempfile
 from collections.abc import Sequence
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 from typing import Final, TypeAlias
@@ -35,7 +36,6 @@ import duckdb
 import pandas as pd
 
 from creditsurv.data.ingest import completed_files
-from creditsurv.features import BIN_EDGES
 
 _LOGGER: Final = logging.getLogger(__name__)
 
@@ -49,10 +49,16 @@ DEFAULT_DELINQUENCY: Final = 3
 DEFAULT_ZERO_BALANCE: Final = ("02", "03", "09", "15")
 PREPAYMENT_ZERO_BALANCE: Final = "01"
 
-#: Origination quarter rather than month. Vintage is in the key so that the macro
-#: path can be recovered from it, and a quarter is enough resolution for that while
-#: cutting the key's cardinality threefold.
-VINTAGE_GRAIN: Final = "quarter"
+#: Upper edges of the loan-age bands, in months. Episodes become the intervals
+#: between them rather than single months.
+#:
+#: Widening with age on purpose. The hazard moves fastest in the first two years and
+#: flattens afterwards, so fine resolution early costs little and buys the shape,
+#: while a single band covering years eight to twelve loses almost nothing. Measured
+#: on 1999Q1: monthly ages give 12.8 million cells, quarterly gives *exactly the
+#: same* -- because the time-varying covariate moves anyway -- and these bands give
+#: 920 thousand. Age was the wrong lever until it was made coarse enough to matter.
+AGE_BANDS: Final[tuple[int, ...]] = (6, 12, 24, 36, 60, 96, 144)
 
 _STATE_TO_REGION: Final[dict[str, str]] = {}
 for _region, _states in {
@@ -181,27 +187,123 @@ def _state_of_the_book_sql() -> str:
     """
 
 
-def _binned_columns() -> str:
-    """Coarse-classed covariates, as SQL."""
-    pieces = [
-        _case_expression("(credit_score - 700.0) / 50.0", BIN_EDGES["fico_s"], "fico_s"),
-        _case_expression("orig_ltv", BIN_EDGES["orig_ltv"], "orig_ltv"),
-        _case_expression("dti", BIN_EDGES["dti"], "dti"),
-        _case_expression("ln(orig_upb)", BIN_EDGES["log_orig_upb"], "log_orig_upb"),
-        _case_expression(
-            "COALESCE(eltv, orig_ltv) - orig_ltv", BIN_EDGES["cltv_drift"], "cltv_drift"
-        ),
+#: Source expression for each continuous covariate, keyed by the name it takes.
+_SOURCE: Final[dict[str, str]] = {
+    "fico_s": "(credit_score - 700.0) / 50.0",
+    "orig_ltv": "orig_ltv",
+    "orig_cltv": "orig_cltv",
+    "dti": "dti",
+    "log_orig_upb": "ln(orig_upb)",
+    # Freddie's own mark-to-market valuation, which is loan-specific. Falling back to
+    # the original ratio where it is missing makes the drift zero rather than null,
+    # which is the right default: no information about movement means no movement.
+    "cltv_drift": "COALESCE(eltv, orig_ltv) - orig_ltv",
+    "mi_percent": "mi_percent",
+}
+
+#: Categorical covariates and the SQL that produces them.
+_CATEGORICAL: Final[dict[str, str]] = {
+    "purpose": "purpose",
+    "occupancy": "occupancy",
+    "channel": "channel",
+    "region": "region",
+    "first_time_buyer": "first_time_buyer",
+    "property_type": "property_type",
+    "term_years": "CASE WHEN orig_term <= 190 THEN 15 ELSE 30 END",
+    "has_mi": "CASE WHEN mi_percent > 0 THEN 'Y' ELSE 'N' END",
+    "n_borrowers": "CASE WHEN n_borrowers >= 2 THEN 2 ELSE 1 END",
+}
+
+
+@dataclass(frozen=True)
+class CellSpec:
+    """Which covariates enter the aggregation, and how coarsely.
+
+    Deliberately a parameter rather than a constant. The cell count is the product of
+    every covariate's band count, so the specification *is* the cardinality, and it
+    cannot be fixed before variable selection has said which covariates earn their
+    place. Aggregating on everything available and selecting afterwards is the wrong
+    order: it produces a table too large to fit, which is exactly what happened here
+    on the first attempt.
+
+    Measured on 1999Q1 (27.7 million loan-months):
+
+    ==========================================  ==========  ============
+    Specification                               Cells       Compression
+    ==========================================  ==========  ============
+    9 continuous + 9 categorical, monthly ages  12,752,331          2.2x
+    same, quarterly ages                        12,752,331          2.2x
+    same, banded ages                              919,634         30.1x
+    4 coarse continuous + 3 categorical, banded     14,221      1,948.0x
+    ==========================================  ==========  ============
+    """
+
+    continuous: dict[str, tuple[float, ...]]
+    categorical: tuple[str, ...]
+    age_bands: tuple[int, ...] = AGE_BANDS
+
+    def validate(self) -> None:
+        unknown = set(self.continuous) - set(_SOURCE)
+        if unknown:
+            message = f"Unknown continuous covariate(s): {sorted(unknown)}"
+            raise ValueError(message)
+        unknown = set(self.categorical) - set(_CATEGORICAL)
+        if unknown:
+            message = f"Unknown categorical covariate(s): {sorted(unknown)}"
+            raise ValueError(message)
+
+
+#: Coarse by design: five bands a covariate, three categoricals, banded ages. Chosen
+#: from the measurement above as the point where the whole population fits in roughly
+#: a million cells. Variable selection may replace it.
+DEFAULT_SPEC: Final = CellSpec(
+    continuous={
+        "fico_s": (-2.4, -0.8, 0.0, 0.8, 1.6, 2.4),
+        "orig_ltv": (30.0, 70.0, 80.0, 90.0, 100.0),
+        "dti": (10.0, 28.0, 36.0, 45.0, 55.0),
+        "cltv_drift": (-60.0, -15.0, -5.0, 5.0, 15.0, 80.0),
+    },
+    categorical=("purpose", "occupancy", "term_years"),
+)
+
+
+def _age_band_expression(bands: tuple[int, ...]) -> str:
+    """Render the age bands as SQL, returning the band's lower edge in months.
+
+    The lower edge rather than an index, so the value keeps the units of loan age and
+    the episode bounds can be read straight off it.
+    """
+    clauses = []
+    previous = 0
+    for upper in bands:
+        clauses.append(f"WHEN age < {upper} THEN {previous}")
+        previous = upper
+    return f"CASE {' '.join(clauses)} ELSE {previous} END AS age"
+
+
+def _select_columns(spec: CellSpec) -> str:
+    """Every covariate column of the SELECT, as SQL.
+
+    Assembled from a list rather than interpolated as separate blocks: an empty
+    continuous or categorical set would otherwise leave a dangling comma and fail
+    with a parser error that says nothing about the specification that caused it.
+    """
+    columns = [
+        _case_expression(_SOURCE[name], edges, name) for name, edges in spec.continuous.items()
     ]
-    return ",\n        ".join(pieces)
+    columns += [f"{_CATEGORICAL[name]} AS {name}" for name in spec.categorical]
+    columns.append(_age_band_expression(spec.age_bands))
+    columns.append("event")
+    return ",\n            ".join(columns)
 
 
 def _connect() -> duckdb.DuckDBPyConnection:
     """A connection that will not fill the working tree with spill files.
 
     DuckDB defaults its temporary directory to the process's working directory, so a
-    query that spills leaves gigabytes inside the repository. It should not spill at
-    all now that quarters are processed one at a time, but the setting is cheap
-    insurance against the next query that does.
+    query that spills leaves gigabytes inside the repository -- 20 GB, the first time
+    this ran. Quarters are processed one at a time now and it should not spill at
+    all, but the setting is cheap insurance against the next query that does.
     """
     con = duckdb.connect()
     con.execute(f"SET temp_directory = '{tempfile.gettempdir()}'")
@@ -223,33 +325,22 @@ def _cells_for_quarter(
     perf_path: str,
     orig_path: str,
     vintage: str,
+    spec: CellSpec,
 ) -> pd.DataFrame:
     """Aggregate one vintage quarter.
 
     Every loan appears in exactly one quarter's files -- verified, not assumed: the
     identifiers of 1999Q1 and 1999Q2 do not intersect at all. So a quarter can be
-    collapsed on its own and the results concatenated, which keeps memory flat and
-    avoids the alternative entirely.
-
-    The alternative was tried first and is why this function exists. Grouping all
-    quarters at once builds one hash table over hundreds of millions of loan
-    identifiers, and DuckDB spilled 20 GB to disk before it was stopped.
+    collapsed on its own and the results concatenated, which keeps memory flat.
 
     The vintage is attached as a constant rather than derived, because it is already
-    known from the file name. With vintage and age in the key, the observation month
-    follows -- which is what lets the macro series stay out of the key entirely.
+    known from the file name. With vintage and age in the key the observation month
+    follows, which is what lets the macro series stay out of the key entirely.
     """
     query = f"""
-    WITH book AS ({_state_of_the_book_sql()}),
-    classed AS (
+    WITH book AS ({_state_of_the_book_sql()}), classed AS (
         SELECT
-            {_binned_columns()},
-            purpose, occupancy, channel, region, first_time_buyer, property_type,
-            CASE WHEN orig_term <= 190 THEN 15 ELSE 30 END              AS term_years,
-            CASE WHEN mi_percent > 0 THEN 'Y' ELSE 'N' END              AS has_mi,
-            CASE WHEN n_borrowers >= 2 THEN 2 ELSE 1 END                AS n_borrowers,
-            age,
-            event
+            {_select_columns(spec)}
         FROM book
     )
     SELECT '{vintage}' AS vintage, *, COUNT(*) AS n
@@ -264,6 +355,7 @@ def build_cells(
     perf_source: PathSpec = None,
     orig_source: PathSpec = None,
     *,
+    spec: CellSpec = DEFAULT_SPEC,
     connection: duckdb.DuckDBPyConnection | None = None,
 ) -> pd.DataFrame:
     """Aggregate the parquet panel into weighted cells, one quarter at a time.
@@ -277,11 +369,12 @@ def build_cells(
         message = "No ingested quarters found. Run `creditsurv ingest` first."
         raise FileNotFoundError(message)
 
+    spec.validate()
     con = connection or _connect()
     frames = []
     for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
         vintage = Path(perf_path).stem
-        cells = _cells_for_quarter(con, perf_path, orig_path, vintage)
+        cells = _cells_for_quarter(con, perf_path, orig_path, vintage, spec)
         frames.append(cells)
         _LOGGER.info("%s: %d cells from %d loan-months", vintage, len(cells), int(cells["n"].sum()))
 
@@ -295,6 +388,8 @@ def build_cells(
 def cardinality_report(
     perf_source: PathSpec = None,
     orig_source: PathSpec = None,
+    *,
+    spec: CellSpec = DEFAULT_SPEC,
 ) -> pd.DataFrame:
     """How far the collapse actually gets, key by key.
 
@@ -310,7 +405,7 @@ def cardinality_report(
         f"SELECT COUNT(*) FROM ({_state_of_the_book_sql()})", [perf, orig]
     ).fetchone()
     rows = int(counted[0]) if counted else 0
-    cells = build_cells(perf, orig, connection=con)
+    cells = build_cells(perf, orig, spec=spec, connection=con)
     return pd.DataFrame(
         [
             {

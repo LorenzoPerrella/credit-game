@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 PANEL_FILE = "loan_month_panel.parquet"
+CELLS_FILE = "cells.parquet"
 
 
 def panel_path() -> Path:
@@ -36,6 +37,31 @@ def load_panel() -> pd.DataFrame:
         message = (
             f"No panel at {path}. Build one first:\n"
             "  uv run creditsurv build-data --orig orig_YYYYQn.txt --svcg perf_YYYYQn.txt"
+        )
+        raise FileNotFoundError(message)
+    return pd.read_parquet(path)
+
+
+def cells_path() -> Path:
+    return processed_dir() / CELLS_FILE
+
+
+def save_cells(cells: pd.DataFrame) -> Path:
+    """Persist the aggregated cells."""
+    path = cells_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cells.to_parquet(path)
+    return path
+
+
+def load_cells() -> pd.DataFrame:
+    """Read the aggregated cells, or say how to build them."""
+    path = cells_path()
+    if not path.exists():
+        message = (
+            f"No aggregated cells at {path}. Build them first:\n"
+            "  uv run creditsurv ingest\n"
+            "  uv run creditsurv aggregate"
         )
         raise FileNotFoundError(message)
     return pd.read_parquet(path)

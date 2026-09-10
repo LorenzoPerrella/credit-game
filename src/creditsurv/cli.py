@@ -110,7 +110,7 @@ def aggregate(
     import logging
 
     from creditsurv.data.aggregate import build_cells, cardinality_report
-    from creditsurv.data.store import save_panel
+    from creditsurv.data.store import save_cells
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -119,7 +119,7 @@ def aggregate(
         return
 
     cells = build_cells()
-    path = save_panel(cells)
+    path = save_cells(cells)
     typer.echo(f"{len(cells):,} cells covering {int(cells['n'].sum()):,} loan-months")
     typer.echo(f"Saved to {path}")
 

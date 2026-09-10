@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from creditsurv.data.aggregate import build_cells, cardinality_report
+from creditsurv.data.aggregate import CellSpec, build_cells, cardinality_report
 from creditsurv.data.ingest import Quarter, ingest_quarter
 from fixtures import origination_row, performance_row, write_archives
 
@@ -46,10 +46,11 @@ def test_identical_loans_collapse_into_one_cell(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    # Twenty identical loans over three ages: one cell per age, weight twenty.
-    assert len(cells) == 3
-    assert set(cells["n"]) == {20}
-    assert int(cells["n"].sum()) == 60
+    # Twenty identical loans over three months, all inside the first age band:
+    # one cell, weight sixty. The age banding is doing most of the work here, and
+    # that is the point -- monthly ages compressed 2.2x on real data, bands 30x.
+    assert len(cells) == 1
+    assert int(cells["n"].iloc[0]) == 60
 
 
 def test_weights_account_for_every_loan_month(tmp_path: Path) -> None:
@@ -80,7 +81,8 @@ def test_default_is_flagged_once_and_the_loan_is_cut(tmp_path: Path) -> None:
 
     assert int(cells["n"].sum()) == 3, "the loan should stop at its first defaulted month"
     assert int(cells.loc[cells["event"], "n"].sum()) == 1
-    assert int(cells.loc[cells["event"], "age"].iloc[0]) == 2
+    # Ages 0-5 share a band, whose lower edge is 0.
+    assert int(cells.loc[cells["event"], "age"].iloc[0]) == 0
 
 
 def test_an_reo_code_counts_even_when_delinquency_is_alphanumeric(tmp_path: Path) -> None:
@@ -191,9 +193,59 @@ def test_cardinality_report_measures_the_collapse(tmp_path: Path) -> None:
 
     assert int(report["loan_months"].iloc[0]) == 50
     assert int(report["weight_total"].iloc[0]) == 50
-    assert float(report["compression"].iloc[0]) == pytest.approx(10.0)
+    # Ten identical loans over five months, all in one age band: a single cell.
+    assert int(report["cells"].iloc[0]) == 1
+    assert float(report["compression"].iloc[0]) == pytest.approx(50.0)
 
 
 def test_no_ingested_data_says_what_to_run() -> None:
     with pytest.raises(FileNotFoundError, match="creditsurv ingest"):
         build_cells()
+
+
+def test_spec_rejects_an_unknown_continuous_covariate() -> None:
+    spec = CellSpec(continuous={"not_a_covariate": (0.0, 1.0)}, categorical=())
+
+    with pytest.raises(ValueError, match="Unknown continuous"):
+        spec.validate()
+
+
+def test_spec_rejects_an_unknown_categorical_covariate() -> None:
+    spec = CellSpec(continuous={}, categorical=("not_a_covariate",))
+
+    with pytest.raises(ValueError, match="Unknown categorical"):
+        spec.validate()
+
+
+def test_age_bands_carry_their_lower_edge(tmp_path: Path) -> None:
+    """The band's value is its lower edge in months, not an index, so the episode
+    bounds can be read straight off it."""
+    origination = [origination_row("F000000001")]
+    performance = [performance_row("F000000001", "201503", str(age)) for age in (0, 7, 30, 100)]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path))
+
+    assert sorted(cells["age"]) == [0, 6, 24, 96]
+
+
+def test_a_narrower_spec_collapses_harder(tmp_path: Path) -> None:
+    """The specification is the cardinality: it is the product of the band counts.
+
+    This is why it has to be chosen after variable selection rather than before --
+    aggregating on everything available produced a table too large to fit.
+    """
+    origination = [origination_row(f"F{i:09d}", fico=str(600 + i * 30)) for i in range(8)]
+    performance = [
+        performance_row(f"F{i:09d}", "201503", str(age)) for i in range(8) for age in range(3)
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    wide = build_cells(*_sources(tmp_path))
+    narrow = build_cells(
+        *_sources(tmp_path),
+        spec=CellSpec(continuous={"fico_s": (-3.0, 3.0)}, categorical=()),
+    )
+
+    assert len(narrow) < len(wide)
+    assert int(narrow["n"].sum()) == int(wide["n"].sum()) == 24
