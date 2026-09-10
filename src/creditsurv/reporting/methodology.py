@@ -122,7 +122,7 @@ information criterion. **It is not usable here.**
 remedy tried: penalties from 0.001 to 0.1, durations rescaled, and both L-BFGS-B
 and SLSQP. `GeneralizedGammaFitter` on loan-level data nominally converges but
 returns a singular Hessian -- standard errors are NaN, lifelines warns against
-trusting the parameters, and on synthetic data generated from a Weibull process it
+trusting the parameters, and on data generated from a Weibull process it
 estimates the shape parameter at 4.04 where the truth is 1.
 
 An unusable test is worse than no test, so selection rests on four weaker but sound
@@ -214,7 +214,7 @@ along each loan's realised covariate path instead.
             [
                 "`uv run creditsurv report`",
                 f"Formula: `{formula}`",
-                "Macroeconomic series are real, from FRED. The loan book is simulated; "
+                "Loan data: Freddie Mac Single-Family Loan-Level Dataset. Macro: FRED; "
                 "see `docs/data_dictionary.md`.",
             ]
         )

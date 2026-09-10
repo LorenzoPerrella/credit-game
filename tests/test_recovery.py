@@ -18,11 +18,17 @@ coefficients are genuinely weakly identified. That is a property of the sample
 size, not of the encoding, and a test that fails for it would be testing the
 wrong thing.
 
-*Pinned seed.* Everything is seeded, so the test is deterministic rather than
-flaky. It is worth being explicit that with five parameters at 95% coverage,
-roughly one seed in four would show a miss by chance. The seed is pinned rather
-than the assertion loosened, because a weaker assertion would stop catching the
-bugs this test exists for.
+*Pinned seed, and enough of them.* With five parameters at 95% coverage, roughly
+one seed in four shows a miss by chance, so the seed is pinned rather than the
+assertion loosened -- a weaker assertion would stop catching the bugs this test
+exists for. The sample was also raised to 5,000 loans (about 1,500 defaults):
+checked across five seeds the estimates scatter around the truth with no
+systematic bias, so a miss is sampling noise, and the cure for sampling noise is
+information rather than a friendlier threshold.
+
+*Through the loader.* The book is written as Freddie Mac files and read back with
+the real loader, so this test also covers the parsing, the missing-value
+sentinels and the truncation at the first terminating month.
 """
 
 from __future__ import annotations
@@ -33,10 +39,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from creditsurv.data.panel import to_interval_censored
-from creditsurv.data.synthetic import DEFAULT_PARAMS, build_synthetic_panel
 from creditsurv.models.aft import FitResult, Likelihood, fit_aft
+from fixtures import DEFAULT_PARAMS, build_panel
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pandas as pd
 
 RECOVERY_SEED = 17
@@ -58,9 +66,9 @@ RECOVERY_PARAMS = replace(
 
 
 @pytest.fixture(scope="module")
-def fitted(macro_module: pd.DataFrame) -> FitResult:
-    panel, _ = build_synthetic_panel(
-        macro_module, n_loans=3000, seed=RECOVERY_SEED, params=RECOVERY_PARAMS
+def fitted(book_dir: Path, macro_module: pd.DataFrame) -> FitResult:
+    panel, _ = build_panel(
+        book_dir, macro_module, n_loans=5000, seed=RECOVERY_SEED, params=RECOVERY_PARAMS
     )
     encoded = to_interval_censored(panel)
     return fit_aft(encoded, COVARIATES, FORMULA, likelihood=Likelihood.INTERVAL_CENSORED)

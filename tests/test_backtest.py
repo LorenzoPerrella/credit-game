@@ -7,6 +7,7 @@ error, so the absence of look-ahead is asserted structurally rather than trusted
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -28,7 +29,10 @@ from creditsurv.backtest.splits import (
     out_of_time,
     walk_forward,
 )
-from creditsurv.data.synthetic import DEFAULT_PARAMS, build_synthetic_panel
+from fixtures import DEFAULT_PARAMS, build_panel
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
 FORMULA = " + ".join(COVARIATES)
@@ -44,8 +48,8 @@ PARAMS = replace(
 
 
 @pytest.fixture(scope="module")
-def panel(macro_module: pd.DataFrame) -> pd.DataFrame:
-    built, _ = build_synthetic_panel(macro_module, n_loans=1500, seed=91, params=PARAMS)
+def panel(book_dir: Path, macro_module: pd.DataFrame) -> pd.DataFrame:
+    built, _ = build_panel(book_dir, macro_module, n_loans=1500, seed=91, params=PARAMS)
     return built
 
 
