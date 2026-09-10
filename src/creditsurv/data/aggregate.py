@@ -172,18 +172,17 @@ def _state_of_the_book_sql() -> str:
             TRY_CAST(original_interest_rate AS DOUBLE)                  AS note_rate,
             TRY_CAST(original_loan_term AS INTEGER)                     AS orig_term,
             TRY_CAST(mortgage_insurance_percentage AS DOUBLE)           AS mi_percent,
-            TRY_CAST(number_of_borrowers AS INTEGER)                    AS n_borrowers,
-            CASE loan_purpose WHEN 'P' THEN 'purchase'
-                              WHEN 'C' THEN 'refinance_cashout'
-                              ELSE 'refinance_rate_term' END            AS purpose,
-            CASE occupancy_status WHEN 'P' THEN 'owner_occupied'
-                                  WHEN 'S' THEN 'second_home'
-                                  ELSE 'investor' END                   AS occupancy,
-            CASE channel WHEN 'R' THEN 'retail' WHEN 'B' THEN 'broker'
-                         ELSE 'correspondent' END                       AS channel,
-            CASE WHEN first_time_homebuyer_indicator = 'Y' THEN 'Y' ELSE 'N' END
-                                                                        AS first_time_buyer,
+            -- Raw codes, deliberately. The mapping lives in _CATEGORICAL, where the
+            -- choices are documented next to the frequencies that justify them, and
+            -- an ELSE branch here would silently fold a "not available" code into a
+            -- real level before anyone could see it.
+            loan_purpose,
+            occupancy_status,
+            channel,
+            first_time_homebuyer_indicator,
             property_type,
+            number_of_units,
+            number_of_borrowers,
             {_region_case()}
         FROM read_parquet(?)
     )
@@ -216,17 +215,67 @@ _SOURCE: Final[dict[str, str]] = {
 }
 
 #: Categorical covariates and the SQL that produces them.
+#:
+#: Every mapping here was decided from a distinct-and-count over the raw values across
+#: seven vintages spanning 1999 to 2024, not from the file layout. Four mistakes came
+#: out of doing it that way round rather than assuming:
+#:
+#: * ``9`` and ``99`` are "not available" codes, not categories. Folding them into a
+#:   real level -- which an ``ELSE`` branch does silently -- invents data.
+#: * ``channel`` has five values, and ``T`` (third-party origination, not otherwise
+#:   specified) is **24.8% of the book**, larger than ``C`` at 14.4%. Merging the two,
+#:   which the codes invite, would have buried a quarter of the portfolio inside a
+#:   smaller category.
+#: * ``amortization_type`` and ``interest_only_indicator`` each take exactly **one**
+#:   value across the whole dataset. Dropped rather than modelled.
+#: * ``property_type`` and ``number_of_units`` have long tails below 5%, merged into an
+#:   explicit "other" rather than left as levels with nothing to estimate from.
+#:
+#: Every branch is explicit and there is no ``ELSE``: an unmapped code becomes NULL and
+#: the loan is dropped, which is the honest outcome for a value nobody has looked at.
+#: See docs/variable_selection.md for the frequencies these rest on.
 _CATEGORICAL: Final[dict[str, str]] = {
-    "purpose": "purpose",
-    "occupancy": "occupancy",
-    "channel": "channel",
+    "purpose": (
+        "CASE loan_purpose WHEN 'P' THEN 'purchase' WHEN 'C' THEN 'refinance_cashout' "
+        "WHEN 'N' THEN 'refinance_rate_term' WHEN 'R' THEN 'refinance_rate_term' END"
+    ),
+    "occupancy": (
+        "CASE occupancy_status WHEN 'P' THEN 'owner_occupied' "
+        "WHEN 'S' THEN 'second_home' WHEN 'I' THEN 'investor' END"
+    ),
+    # T stays apart from C: it is a quarter of the book, not a footnote to it.
+    "channel": (
+        "CASE channel WHEN 'R' THEN 'retail' WHEN 'B' THEN 'broker' "
+        "WHEN 'C' THEN 'correspondent' WHEN 'T' THEN 'third_party' END"
+    ),
     "region": "region",
-    "first_time_buyer": "first_time_buyer",
-    "property_type": "property_type",
+    "first_time_buyer": (
+        "CASE first_time_homebuyer_indicator WHEN 'Y' THEN 'Y' WHEN 'N' THEN 'N' END"
+    ),
+    # SF, PU and CO carry 99.3% between them; the rest is a tail of half-percents.
+    "property_type": (
+        "CASE property_type WHEN 'SF' THEN 'single_family' WHEN 'PU' THEN 'planned_unit' "
+        "WHEN 'CO' THEN 'condo' WHEN 'MH' THEN 'other' WHEN 'CP' THEN 'other' END"
+    ),
+    # 98.1% are single-unit; two, three and four are one category together.
+    "units": (
+        "CASE WHEN TRY_CAST(number_of_units AS INTEGER) = 1 THEN '1' "
+        "WHEN TRY_CAST(number_of_units AS INTEGER) BETWEEN 2 AND 4 THEN '2-4' END"
+    ),
     "term_years": "CASE WHEN orig_term <= 190 THEN 15 ELSE 30 END",
     "has_mi": "CASE WHEN mi_percent > 0 THEN 'Y' ELSE 'N' END",
-    "n_borrowers": "CASE WHEN n_borrowers >= 2 THEN 2 ELSE 1 END",
+    "n_borrowers": (
+        "CASE WHEN TRY_CAST(number_of_borrowers AS INTEGER) = 1 THEN '1' "
+        "WHEN TRY_CAST(number_of_borrowers AS INTEGER) BETWEEN 2 AND 5 THEN '2+' END"
+    ),
 }
+
+#: Fields taking exactly one value across the whole dataset. Recorded rather than
+#: quietly omitted, so the next reader does not spend an afternoon adding them back.
+DEGENERATE_FIELDS: Final[tuple[str, ...]] = (
+    "amortization_type",  # FRM, 100%
+    "interest_only_indicator",  # N, 100%
+)
 
 
 @dataclass(frozen=True)

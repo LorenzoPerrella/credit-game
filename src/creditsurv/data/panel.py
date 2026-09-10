@@ -245,6 +245,16 @@ def to_loan_level(panel: pd.DataFrame) -> pd.DataFrame:
 MAX_AGE_MONTHS: Final = 360
 
 
+def _months_to_periods(months: pd.Series) -> pd.PeriodIndex:
+    """Month ordinals since year zero, back to a monthly PeriodIndex.
+
+    Built from labels rather than through ``PeriodIndex(year=..., month=...)``, whose
+    keyword form is deprecated in pandas and absent from its type stubs.
+    """
+    labels = (months // 12).astype(str) + "-" + (months % 12 + 1).astype(str).str.zfill(2)
+    return pd.PeriodIndex(labels, freq="M")
+
+
 def cells_to_episodes(
     cells: pd.DataFrame,
     macro: pd.DataFrame,
@@ -299,6 +309,28 @@ def cells_to_episodes(
         observation.map(unemployment).to_numpy() - orig_month.map(unemployment).to_numpy()
     )
     episodes["nfci_lagged"] = observation.map(conditions).to_numpy()
+
+    # Mark-to-market leverage, from the national house price index. Derived here
+    # rather than carried in the grouping key because it is a function of orig_ltv
+    # and the macro path, both of which the key already holds -- carrying it was
+    # doubling the cell count for information already there.
+    #
+    # The index rather than Freddie's own per-loan ELTV, which would be better if it
+    # were usable: its coverage runs from 0.8% of the 1999 vintage to 94% of 2021, so
+    # a model built on it would estimate a different quantity in every decade.
+    if "orig_ltv" in episodes.columns:
+        prices = pd.Series(macro["hpi"].to_numpy(), index=macro_month)
+        at_origination = orig_month.map(prices).to_numpy()
+        now = observation.map(prices).to_numpy()
+        original = episodes["orig_ltv"].to_numpy(dtype=float)
+        episodes["cltv_drift"] = original * at_origination / now - original
+
+    # Calendar columns, so a split can be taken on time without recomputing them.
+    # The episode is dated at its start: a band spans several months and has to be
+    # attributed to one of them, and the start is the only choice that cannot place
+    # an episode after a reporting date its loan was still performing at.
+    episodes["orig_period"] = _months_to_periods(orig_month)
+    episodes["period"] = _months_to_periods(observation)
 
     defaulted = episodes[EVENT].to_numpy(dtype=bool)
     start = episodes[AGE_START].to_numpy(dtype=float)

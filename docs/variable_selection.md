@@ -52,6 +52,46 @@ from*, not merely *lopsided*.
 Rare levels are merged rather than dropped, following `nmds`, which folds categories
 below 5% into an "other" class.
 
+### 2b. Distinct values — what is actually in the field?
+
+`creditsurv profile`, and the step that has to come before any remapping.
+
+Reading the codes from the file layout and writing a `CASE` is not the same as
+counting them. Doing it the other way round — distinct and count first, across seven
+vintages from 1999 to 2024 — produced four corrections to mappings that had already
+been written:
+
+| Field | Observed | What the assumption got wrong |
+|---|---|---|
+| `loan_purpose` | P 28.9%, N 44.8%, C 26.3%, **`9` 0.0%** | `9` is "not available". An `ELSE` branch folded it into `refinance_rate_term`. |
+| `channel` | R 55.0%, **T 24.8%**, C 14.4%, B 5.8%, `9` 0.0% | `T` is a quarter of the book. It had been merged into `correspondent`, which is smaller. |
+| `amortization_type` | **FRM 100%** | Modelled as a covariate. It has one value. |
+| `interest_only_indicator` | **N 100%** | Same. |
+| `property_type` | SF 75.7%, PU 17.2%, CO 6.4%, MH 0.5%, CP 0.2%, `99` | Tail below 5% left as its own levels. |
+| `number_of_units` | 1 98.1%, 2 1.4%, 3 0.3%, 4 0.2%, `99` | Same. |
+| `occupancy_status` | P 92.0%, I 4.8%, S 3.3% | Below the 5% rule, but kept — see below. |
+
+Decisions taken, and why:
+
+- **`9` and `99` become NULL, and the loan is dropped.** They are missing-value codes,
+  not categories. Every `CASE` in `_CATEGORICAL` now lists its branches explicitly and
+  has **no `ELSE`**, so an unmapped code becomes NULL rather than being absorbed into
+  whichever level the author happened to put last.
+- **`channel`: `T` kept separate.** Third-party origination, not otherwise specified,
+  is 24.8% of exposure. Merging it into `correspondent` at 14.4% would have hidden a
+  quarter of the portfolio inside a smaller category.
+- **`amortization_type` and `interest_only_indicator` dropped.** One value each. They
+  are listed in `DEGENERATE_FIELDS` rather than silently omitted, so the next reader
+  does not spend an afternoon adding them back.
+- **`property_type`: MH and CP merged into `other`**; `number_of_units`: 2, 3 and 4
+  merged into `2-4`. Both tails are below 5%, which is the `nmds` rule.
+- **`occupancy_status`: all three levels kept**, although investor (4.8%) and second
+  home (3.3%) sit below the 5% rule. With 48.8 million loans that is 2.3 million and
+  1.6 million loans respectively — the rule exists to stop a level having nothing to
+  estimate from, and neither of these is anywhere near that. They are also
+  economically distinct in a way that merging would destroy. **This is a departure
+  from `nmds`, made deliberately and on the size of the book.**
+
 ### 3. Default rate by band — does the covariate order the risk?
 
 `explore.default_rate_by_band`. No threshold; this one is read, not applied.

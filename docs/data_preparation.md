@@ -116,6 +116,15 @@ and `orig_ltv` were cleanly monotonic and this one was not.
 A loan missing a covariate is **dropped, not imputed**: imputing an underwriting
 characteristic invents the very thing being measured.
 
+### Categorical codes are mapped from what is in the field, not from the layout
+
+Every `CASE` in `_CATEGORICAL` lists its branches explicitly and has **no `ELSE`**, so
+a code nobody has looked at becomes NULL and the loan is dropped rather than being
+absorbed into whichever level happens to be last. The mappings were decided from a
+distinct-and-count across seven vintages; see
+[variable_selection.md](variable_selection.md) for the frequencies and the four
+corrections that came out of it.
+
 ### Event definition
 
 | Outcome | Condition |
