@@ -237,6 +237,20 @@ def quarters_for(years: list[int]) -> Iterator[Quarter]:
             yield Quarter(year, quarter)
 
 
+def completed_files(kind: str) -> list[str]:
+    """Parquet paths for the quarters the manifest records as finished.
+
+    Globbing the directory instead would pick up a file still being written -- an
+    ingest running in one terminal and an aggregation in another is not a hypothetical
+    -- and a half-written parquet fails with a message about magic bytes that says
+    nothing about the cause. The manifest is written only after a quarter closes, so
+    it is the only honest answer to "what is complete".
+    """
+    manifest = load_manifest()
+    paths = [interim_dir() / kind / f"{tag}.parquet" for tag in sorted(manifest)]
+    return [str(path) for path in paths if path.exists()]
+
+
 def load_manifest() -> dict[str, dict[str, int]]:
     path = manifest_path()
     if not path.exists():

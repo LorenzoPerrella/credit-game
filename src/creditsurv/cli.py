@@ -94,6 +94,36 @@ def _parse_years(spec: str) -> list[int]:
     return [int(spec)]
 
 
+@app.command()
+def aggregate(
+    report_cardinality: Annotated[
+        bool, typer.Option(help="Report the collapse without saving.")
+    ] = False,
+) -> None:
+    """Collapse the ingested panel into weighted cells.
+
+    Episodes agreeing on every covariate and on their position in time are
+    exchangeable, so they become one row carrying a count. At this scale that is not
+    an optimisation: a fit over billions of rows is out of reach, a fit over weighted
+    cells is a minute.
+    """
+    import logging
+
+    from creditsurv.data.aggregate import build_cells, cardinality_report
+    from creditsurv.data.store import save_panel
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if report_cardinality:
+        _echo_table(cardinality_report().round(2))
+        return
+
+    cells = build_cells()
+    path = save_panel(cells)
+    typer.echo(f"{len(cells):,} cells covering {int(cells['n'].sum()):,} loan-months")
+    typer.echo(f"Saved to {path}")
+
+
 @app.command("build-data")
 def build_data(
     orig: Annotated[Path, typer.Option(help="orig_YYYYQn.txt from the dataset.")],
