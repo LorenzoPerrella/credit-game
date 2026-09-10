@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from creditsurv.data.panel import LOAN_ID, validate_episodes
+from creditsurv.data.panel import LOAN_ID, WEIGHT, validate_episodes
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -44,22 +44,38 @@ class Split:
     train: pd.DataFrame
     test: pd.DataFrame
 
+    @staticmethod
+    def _exposure(frame: pd.DataFrame) -> int:
+        """Loan-months on either side, however the panel is shaped.
+
+        An aggregated panel has a weight and no loan identifier; a loan-level one has
+        the identifier and no weight. Exposure is the quantity both can report, and
+        the one a backtest is actually sized by.
+        """
+        if WEIGHT in frame.columns:
+            return int(frame[WEIGHT].sum())
+        return len(frame)
+
     @property
     def n_train_loans(self) -> int:
+        if LOAN_ID not in self.train.columns:
+            return 0
         return int(self.train[LOAN_ID].nunique())
 
     @property
     def n_test_loans(self) -> int:
+        if LOAN_ID not in self.test.columns:
+            return 0
         return int(self.test[LOAN_ID].nunique())
 
     def describe(self) -> dict[str, object]:
         return {
             "split": self.name,
             "as_of": str(self.as_of),
-            "train_loans": self.n_train_loans,
-            "train_episodes": len(self.train),
-            "test_loans": self.n_test_loans,
-            "test_episodes": len(self.test),
+            "train_loan_months": self._exposure(self.train),
+            "train_rows": len(self.train),
+            "test_loan_months": self._exposure(self.test),
+            "test_rows": len(self.test),
         }
 
 
@@ -162,3 +178,23 @@ def assert_no_lookahead(split: Split) -> None:
         if split.name != "out_of_sample" and earliest <= split.as_of:
             message = f"Test data starts {earliest}, at or before the reporting date."
             raise ValueError(message)
+
+
+def cell_split(cells: pd.DataFrame, as_of: pd.Period, *, name: str = "as_of") -> Split:
+    """Split an aggregated panel on calendar time.
+
+    Aggregated cells have no loan identifier -- that is what aggregating means -- so
+    the loan-level split above does not apply. Splitting on the observation period
+    instead is the same question asked of the same data: everything the model may
+    have seen by the reporting date trains it, everything after tests it.
+
+    What is lost is the ability to follow a named loan across the boundary, and with
+    it any metric defined per loan. What is kept is the one that matters for a
+    backtest: exposure before and after a date, which is what the model is judged on.
+    """
+    train = cells[cells[PERIOD] <= as_of].reset_index(drop=True)
+    test = cells[cells[PERIOD] > as_of].reset_index(drop=True)
+    if train.empty:
+        message = f"No exposure at or before {as_of}."
+        raise ValueError(message)
+    return Split(name=name, as_of=as_of, train=train, test=test)
