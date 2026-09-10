@@ -1,7 +1,7 @@
 """Canonical panel schema, episode splitting and the interval-censoring encoding.
 
-Both data sources -- the synthetic generator and the Freddie Mac loader -- produce
-the same canonical loan-month panel, so everything downstream is written once.
+The Freddie Mac loader and the aggregated cells both resolve to the same canonical
+episode schema, so everything downstream is written once.
 
 The encoding in :func:`to_interval_censored` is the heart of the project. lifelines
 documents interval censoring as a one-row-per-subject method and steers
@@ -237,6 +237,77 @@ def to_loan_level(panel: pd.DataFrame) -> pd.DataFrame:
     loans["duration"] = grouped[AGE].max().to_numpy(dtype=float) + 1.0
     loans[EVENT] = grouped[EVENT].max().to_numpy(dtype=bool)
     return loans.reset_index()
+
+
+def to_loan_level_weighted(
+    episodes: pd.DataFrame, *, weight: str = WEIGHT, age: str = AGE, event: str = EVENT
+) -> pd.DataFrame:
+    """Recover the loan-level duration distribution from a weighted episode panel.
+
+    Aggregation destroys the loan id -- a cell is a count of loan-months, not a
+    subject -- so :func:`to_loan_level` cannot run. The duration distribution is
+    still recoverable, and exactly rather than approximately, from the counts at
+    risk at each age.
+
+    Write ``R(a)`` for the loan-months observed at age ``a`` and ``d(a)`` for those
+    ending in default. A loan at risk at ``a`` either defaults, leaves the window
+    (prepayment or the end of the observation period, both censoring), or is at risk
+    again at ``a + 1``. So::
+
+        censored(a) = R(a) - d(a) - R(a + 1)
+
+    which is the identity Kaplan-Meier is built on, read backwards. The result is
+    one row per (age, outcome) carrying a count, and feeding it to a fitter with
+    ``weights`` gives the same curve the loan-level panel would have, on the whole
+    population rather than a sample of it.
+
+    Durations follow :func:`to_loan_level`: a loan last observed at age ``a`` has
+    duration ``a + 1``.
+    """
+    exposure = episodes[weight].to_numpy(dtype=float)
+    working = pd.DataFrame(
+        {
+            age: episodes[age].to_numpy(dtype=int),
+            "at_risk": exposure,
+            "defaults": exposure * episodes[event].to_numpy(dtype=bool),
+        }
+    )
+    counts = working.groupby(age, observed=True)[["at_risk", "defaults"]].sum()
+    counts = counts.reindex(range(int(counts.index.max()) + 1), fill_value=0.0)
+
+    at_risk = counts["at_risk"].to_numpy(dtype=float)
+    defaults = counts["defaults"].to_numpy(dtype=float)
+    # The last age has no successor: everything still at risk there is censored.
+    survivors = np.append(at_risk[1:], 0.0)
+    # A panel with gaps -- a loan absent for a month and back the next -- would make
+    # this negative. Freddie Mac reports contiguously, so clipping is a guard rather
+    # than a correction, but a silent negative weight would poison the fit.
+    censored = np.maximum(at_risk - defaults - survivors, 0.0)
+
+    duration = counts.index.to_numpy(dtype=float) + 1.0
+    frame = pd.DataFrame(
+        {
+            "duration": np.concatenate([duration, duration]),
+            event: np.concatenate([np.ones(len(duration), bool), np.zeros(len(duration), bool)]),
+            weight: np.concatenate([defaults, censored]),
+        }
+    )
+    return frame[frame[weight] > 0].sort_values("duration").reset_index(drop=True)
+
+
+def duration_view(panel: pd.DataFrame, *, weights_col: str | None = None) -> pd.DataFrame:
+    """One row per subject, or per (duration, outcome) when subjects are weighted.
+
+    The single entry point for every estimator whose unit is the loan rather than
+    the loan-month. Passing ``weights_col`` says the panel is aggregated, and the
+    returned frame carries that column for the fitter's ``weights`` argument;
+    omitting it takes the loan-level path. Callers then differ by one keyword
+    instead of by a branch each.
+    """
+    if weights_col is None:
+        loans = to_loan_level(panel)
+        return loans.loc[:, ["duration", EVENT]]
+    return to_loan_level_weighted(panel, weight=weights_col)
 
 
 #: Longest loan age an episode can run to, in months. A thirty-year mortgage is 360,

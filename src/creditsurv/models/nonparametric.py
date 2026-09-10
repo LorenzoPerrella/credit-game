@@ -27,7 +27,7 @@ import pandas as pd
 from lifelines import KaplanMeierFitter
 from lifelines.statistics import logrank_test
 
-from creditsurv.data.panel import EVENT, to_loan_level
+from creditsurv.data.panel import EVENT, duration_view, to_loan_level
 from creditsurv.models.aft import episode_hazards
 
 if TYPE_CHECKING:
@@ -41,11 +41,22 @@ if TYPE_CHECKING:
 OVERALL: str = "overall"
 
 
-def kaplan_meier(panel: pd.DataFrame, *, label: str = OVERALL) -> KaplanMeierFitter:
-    """Fit a Kaplan-Meier curve to the loan-level view of an episode panel."""
-    loans = to_loan_level(panel)
+def kaplan_meier(
+    panel: pd.DataFrame, *, label: str = OVERALL, weights_col: str | None = None
+) -> KaplanMeierFitter:
+    """Fit a Kaplan-Meier curve to the loan-level view of an episode panel.
+
+    ``weights_col`` names the count on an aggregated panel, where a row is a number
+    of loan-months rather than a loan. The curve is then estimated on the whole
+    population instead of a sample of it, which is the point of aggregating.
+    """
+    loans = duration_view(panel, weights_col=weights_col)
     fitter = KaplanMeierFitter(label=label)
-    fitter.fit(loans["duration"], event_observed=loans[EVENT].astype(bool))
+    fitter.fit(
+        loans["duration"],
+        event_observed=loans[EVENT].astype(bool),
+        weights=None if weights_col is None else loans[weights_col],
+    )
     return fitter
 
 
@@ -85,7 +96,7 @@ def logrank_by_stratum(panel: pd.DataFrame, stratum: str) -> StatisticalResult:
     )
 
 
-def turnbull(panel: pd.DataFrame) -> KaplanMeierFitter:
+def turnbull(panel: pd.DataFrame, *, weights_col: str | None = None) -> KaplanMeierFitter:
     """Non-parametric estimator honouring the monthly observation interval.
 
     The Kaplan-Meier counterpart of the parametric interval-censored fit: it makes
@@ -95,7 +106,7 @@ def turnbull(panel: pd.DataFrame) -> KaplanMeierFitter:
     ``NotImplementedError`` if ``entry`` is passed alongside interval bounds --
     which is harmless here only because loans are observed from origination.
     """
-    loans = to_loan_level(panel)
+    loans = duration_view(panel, weights_col=weights_col)
     defaulted = loans[EVENT].astype(bool).to_numpy()
     duration = loans["duration"].to_numpy(dtype=float)
 
@@ -104,6 +115,7 @@ def turnbull(panel: pd.DataFrame) -> KaplanMeierFitter:
     fitter.fit_interval_censoring(
         lower_bound=np.where(defaulted, duration - 1.0, duration),
         upper_bound=np.where(defaulted, duration, np.inf),
+        weights=None if weights_col is None else loans[weights_col],
         # Without an explicit timeline lifelines derives one from the bounds, which
         # then contains the infinity used for right censoring. The curve is still
         # correct, but its last row sits at t = inf where survival is zero, and
@@ -119,6 +131,7 @@ def predicted_survival_curve(
     covariates: Sequence[str],
     *,
     age_col: str = "age",
+    weights_col: str | None = None,
 ) -> pd.Series:
     """Portfolio survival implied by the model along the realised covariate paths.
 
@@ -141,7 +154,15 @@ def predicted_survival_curve(
     ages = encoded[age_col].to_numpy(dtype=int)
     hazard = episode_hazards(result, frame, ages)
 
-    mean_hazard = pd.Series(hazard, index=encoded.index).groupby(ages).mean()
+    if weights_col is None:
+        mean_hazard = pd.Series(hazard, index=encoded.index).groupby(ages).mean()
+    else:
+        # On aggregated cells the average has to be over loans at risk, not over
+        # distinct covariate combinations: a rare combination would otherwise weigh
+        # as much as one carrying a million loan-months.
+        weight = encoded[weights_col].to_numpy(dtype=float)
+        totals = pd.DataFrame({"w": weight, "wh": weight * hazard}).groupby(ages).sum()
+        mean_hazard = totals["wh"] / totals["w"]
     survival = np.cumprod(1.0 - mean_hazard.to_numpy())
     return pd.Series(survival, index=mean_hazard.index.to_numpy() + 1.0, name="predicted")
 

@@ -42,7 +42,7 @@ from lifelines import (
 )
 from scipy import stats
 
-from creditsurv.data.panel import EVENT, to_loan_level
+from creditsurv.data.panel import EVENT, duration_view
 from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS, FitResult, Likelihood, fit_aft
 
 if TYPE_CHECKING:
@@ -61,21 +61,22 @@ UNIVARIATE_FITTERS: Final[dict[str, type[ParametricUnivariateFitter]]] = {
 }
 
 
-def marginal_comparison(panel: pd.DataFrame) -> pd.DataFrame:
+def marginal_comparison(panel: pd.DataFrame, *, weights_col: str | None = None) -> pd.DataFrame:
     """Rank univariate families on the loan-level marginal distribution.
 
     A covariate-free check on the shape of the baseline hazard. It cannot decide
     the final model -- covariates change which family fits best -- but it is cheap
     and it catches a badly wrong choice before any regression is attempted.
     """
-    loans = to_loan_level(panel)
+    loans = duration_view(panel, weights_col=weights_col)
     duration = loans["duration"]
     observed = loans[EVENT].astype(bool)
+    weights = None if weights_col is None else loans[weights_col]
 
     rows = []
     for name, factory in UNIVARIATE_FITTERS.items():
         fitter = factory()
-        fitter.fit(duration, event_observed=observed)
+        fitter.fit(duration, event_observed=observed, weights=weights)
         rows.append(
             {
                 "distribution": name,
@@ -154,6 +155,7 @@ def shape_depends_on_covariates(
     *,
     distribution: str = "weibull",
     likelihood: Likelihood = Likelihood.INTERVAL_CENSORED,
+    weights_col: str | None = None,
 ) -> pd.DataFrame:
     """Test whether the hazard's shape varies with covariates.
 
@@ -168,7 +170,12 @@ def shape_depends_on_covariates(
     single shape misstates the timing of losses even when it gets the total right.
     """
     restricted = fit_aft(
-        encoded, covariates, formula, distribution=distribution, likelihood=likelihood
+        encoded,
+        covariates,
+        formula,
+        distribution=distribution,
+        likelihood=likelihood,
+        weights_col=weights_col,
     )
     full = fit_aft(
         encoded,
@@ -176,6 +183,7 @@ def shape_depends_on_covariates(
         formula,
         distribution=distribution,
         likelihood=likelihood,
+        weights_col=weights_col,
         ancillary=ancillary_formula,
     )
 
