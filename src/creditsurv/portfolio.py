@@ -42,11 +42,16 @@ def _run(
     """
     con = connection or _connect()
     perf_paths, orig_paths = _resolve(perf, "perf"), _resolve(orig, "orig")
+    # Some descriptive queries read only the performance side. Passing both would
+    # fail on the parameter count, so the query says how many it wants.
+    wants_both = query.count("?") == 2
+
     if not per_quarter:
-        return con.execute(query, [perf_paths, orig_paths]).df()
+        arguments = [perf_paths, orig_paths] if wants_both else [perf_paths]
+        return con.execute(query, arguments).df()
 
     frames = [
-        con.execute(query, [[p], [o]]).df()
+        con.execute(query, [[p], [o]] if wants_both else [[p]]).df()
         for p, o in zip(sorted(perf_paths), sorted(orig_paths), strict=True)
     ]
     return pd.concat(frames, ignore_index=True)

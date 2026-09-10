@@ -95,6 +95,65 @@ def _parse_years(spec: str) -> list[int]:
 
 
 @app.command()
+def portfolio() -> None:
+    """Describe the book: outstanding, new lending, mix, drift, and the macro path.
+
+    Written before any model is fitted. It is the description that makes the
+    modelling legible -- and it is where several problems were found that staring at
+    coefficients would not have surfaced.
+    """
+    import logging
+
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.portfolio import (
+        covariate_evolution,
+        default_rate_by_period,
+        origination_mix,
+        originations_by_period,
+        outstanding_by_period,
+    )
+    from creditsurv.reporting import charts
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    figures = reports_dir() / "figures"
+    figures.mkdir(parents=True, exist_ok=True)
+    macro = load_macro_panel()
+
+    typer.echo("New lending...")
+    lending = originations_by_period()
+    charts.new_lending(lending, figures / "new_lending.png")
+
+    typer.echo("Book outstanding...")
+    outstanding = outstanding_by_period()
+    charts.outstanding_book(outstanding, figures / "outstanding_book.png")
+
+    typer.echo("Origination mix...")
+    charts.origination_mix_over_time(
+        origination_mix("purpose"),
+        figures / "mix_purpose.png",
+        title="New lending by purpose",
+    )
+
+    typer.echo("Underwriting drift...")
+    charts.underwriting_over_time(covariate_evolution(), figures / "underwriting_over_time.png")
+
+    typer.echo("Macro series...")
+    charts.macro_panel(macro, figures / "macro_panel.png")
+
+    typer.echo("Realised default rate...")
+    charts.default_rate_and_unemployment(
+        default_rate_by_period(), macro, figures / "default_vs_unemployment.png"
+    )
+
+    typer.echo(
+        f"\n{int(lending['loans'].sum()):,} loans, "
+        f"${lending['amount'].sum() / 1e12:.2f}tn originated; "
+        f"peak {int(outstanding['contracts'].max()):,} contracts outstanding"
+    )
+    typer.echo(f"Figures written to {figures}")
+
+
+@app.command()
 def profile(
     covariate: Annotated[str | None, typer.Option(help="Profile one covariate in detail.")] = None,
 ) -> None:
