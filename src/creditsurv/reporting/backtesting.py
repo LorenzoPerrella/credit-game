@@ -79,12 +79,18 @@ would have said at the time, and it is recorded as one.
 
     report.heading("Results").table(summary, decimals=4)
 
-    if not summary.empty and "concordance" in summary.columns:
+    # Which discrimination measure exists depends on the panel. A loan-level
+    # backtest reports Harrell's concordance; an aggregated one cannot -- a
+    # concordance index needs pairs of subjects and a cell is not a subject -- and
+    # reports the exposure-weighted Gini instead. Naming one unconditionally made the
+    # whole report unavailable on the panel the project actually fits.
+    ranking = next(
+        (name for name in ("concordance", "gini") if name in summary.columns),
+        None,
+    )
+    if ranking == "concordance":
         figure = charts.backtest_discrimination(summary, figures / "backtest_discrimination.png")
         report.figure(figure, "Concordance by reporting date and macro mode")
-
-    concordance_gap = macro_mode_gap(summary, "concordance")
-    calibration_gap = macro_mode_gap(summary, "actual_over_expected")
 
     report.heading("Where knowing the economy actually matters").text(
         """
@@ -96,8 +102,19 @@ It is worth stating because the natural instinct is to check discrimination firs
 and doing so here would conclude that macro forecasting does not matter -- a
 statement about the tool rather than about the model.
 """
-    ).table(concordance_gap, caption="Discrimination gap (concordance)", decimals=4)
-    report.table(calibration_gap, caption="Calibration gap (actual over expected)", decimals=4)
+    )
+    if ranking is not None:
+        report.table(
+            macro_mode_gap(summary, ranking),
+            caption=f"Discrimination gap ({ranking})",
+            decimals=4,
+        )
+    if "actual_over_expected" in summary.columns:
+        report.table(
+            macro_mode_gap(summary, "actual_over_expected"),
+            caption="Calibration gap (actual over expected)",
+            decimals=4,
+        )
 
     scored = [result for result in results if not result.calibration.empty]
     if scored:

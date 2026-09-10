@@ -77,10 +77,16 @@ def add_macro_covariates(
 ) -> pd.DataFrame:
     """Attach macro-derived covariates to a loan-month panel.
 
-    ``panel`` must carry ``period``, ``orig_period``, ``orig_ltv`` and
-    ``note_rate``. Rows whose covariates cannot be built -- typically the
-    earliest vintages, where the lagged macro history does not reach back far
-    enough -- are dropped rather than imputed.
+    ``panel`` must carry ``period`` and ``orig_period``; each derived covariate is
+    built only if the columns it reads are there. That matters because a book
+    reconstructed from aggregated cells carries the covariates in the cell key and
+    nothing else -- ``note_rate`` is per loan, so it is not among them, and demanding
+    it would make the whole projection unavailable for the sake of one covariate the
+    model is not fitting.
+
+    Rows whose covariates cannot be built -- typically the earliest vintages, where
+    the lagged macro history does not reach back far enough -- are dropped rather
+    than imputed.
     """
     lagged = lag_macro(macro, lag_months=lag_months)
 
@@ -90,17 +96,20 @@ def add_macro_covariates(
     unemployment_now = _lookup(panel["period"], lagged["unemployment_rate"])
 
     enriched = panel.copy()
-    # Mark-to-market loan-to-value: the original ratio re-expressed at today's
-    # house prices. Prices up, the ratio falls and the borrower has more equity.
-    enriched["indexed_cltv"] = panel["orig_ltv"] * hpi_at_origination / hpi_now
-    enriched["cltv_drift"] = enriched["indexed_cltv"] - panel["orig_ltv"]
+    if "orig_ltv" in panel.columns:
+        # Mark-to-market loan-to-value: the original ratio re-expressed at today's
+        # house prices. Prices up, the ratio falls and the borrower has more equity.
+        enriched["indexed_cltv"] = panel["orig_ltv"] * hpi_at_origination / hpi_now
+        enriched["cltv_drift"] = enriched["indexed_cltv"] - panel["orig_ltv"]
     enriched["unemp_gap"] = unemployment_now - unemployment_at_origination
-    enriched["refi_incentive"] = panel["note_rate"] - _lookup(
-        panel["period"], macro["mortgage_rate_30y"]
-    )
+    if "note_rate" in panel.columns:
+        enriched["refi_incentive"] = panel["note_rate"] - _lookup(
+            panel["period"], macro["mortgage_rate_30y"]
+        )
     enriched["nfci_lagged"] = _lookup(panel["period"], lagged["nfci"])
 
-    return enriched.dropna(subset=list(DERIVED_COLUMNS)).reset_index(drop=True)
+    built = [name for name in DERIVED_COLUMNS if name in enriched.columns]
+    return enriched.dropna(subset=built).reset_index(drop=True)
 
 
 def assert_no_lookahead(

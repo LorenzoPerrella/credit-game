@@ -35,10 +35,12 @@ from creditsurv.backtest.metrics import (
     calibration_table,
     discrimination,
     stability_report,
+    weighted_calibration,
+    weighted_gini,
 )
 from creditsurv.config import TIME_VARYING_CONTINUOUS
-from creditsurv.data.panel import AGE, EVENT, LOAN_ID, to_interval_censored
-from creditsurv.models.aft import Likelihood, fit_aft
+from creditsurv.data.panel import AGE, EVENT, LOAN_ID, WEIGHT, to_interval_censored
+from creditsurv.models.aft import Likelihood, episode_hazards, fit_aft
 from creditsurv.models.lifetime_pd import (
     BASELINE,
     conditional_pd,
@@ -139,7 +141,27 @@ def run_split(
     distribution: str = "weibull",
     likelihood: Likelihood = Likelihood.INTERVAL_CENSORED,
 ) -> BacktestResult:
-    """Fit on one split's training half and score its test half."""
+    """Fit on one split's training half and score its test half.
+
+    Dispatches on what the panel is. A loan-level panel is scored loan by loan,
+    which is the richer test; an aggregated one has no loans to follow across the
+    boundary, and is scored on exposure instead. Which one arrives is decided by the
+    split, not by an argument, because passing the wrong flag would score an
+    aggregated panel as though its cells were subjects -- and that produces numbers
+    rather than an error.
+    """
+    if LOAN_ID not in split.train.columns:
+        return _run_cell_split(
+            split,
+            macro,
+            covariates,
+            formula,
+            horizon_months=horizon_months,
+            macro_mode=macro_mode,
+            distribution=distribution,
+            likelihood=likelihood,
+        )
+
     fitted = fit_aft(
         to_interval_censored(split.train),
         covariates,
@@ -198,6 +220,119 @@ def run_split(
             split.train, split.test, covariates, time_varying=TIME_VARYING_CONTINUOUS
         ),
     )
+
+
+def _run_cell_split(
+    split: Split,
+    macro: pd.DataFrame,
+    covariates: Sequence[str],
+    formula: str,
+    *,
+    horizon_months: int,
+    macro_mode: MacroMode,
+    distribution: str,
+    likelihood: Likelihood,
+) -> BacktestResult:
+    """Score an aggregated panel: fit on the cells before the date, test on those after.
+
+    What changes is the unit. There is no loan to project forward, because a cell is
+    a count of loan-months sharing a covariate combination -- so instead of building
+    a forward path per loan, the fitted monthly hazard is evaluated on the test cells
+    at the covariates they actually carry, and compared with the defaults they
+    actually recorded.
+
+    That is a weaker test than the loan-level one in a specific way: it cannot ask
+    whether the model ranks *loans*, only whether it ranks *exposure*, and it cannot
+    chain a multi-month horizon per subject. It is a stronger test in another: it
+    covers the whole population rather than a sample of it.
+
+    Under the unconditional mode the macro path is cut at the reporting date. On
+    cells that shows up as a covariate rebuild rather than a projection: the two
+    macro-derived covariates are recomputed from what was knowable, and the
+    difference between the modes is again the cost of not knowing the economy.
+    """
+    fitted = fit_aft(
+        split.train,
+        covariates,
+        formula,
+        distribution=distribution,
+        likelihood=likelihood,
+        weights_col=WEIGHT,
+    )
+
+    test = split.test
+    if test.empty:
+        message = f"Split {split.name!r} has no exposure after {split.as_of}."
+        raise ValueError(message)
+
+    # Only the first horizon of the test window, so the number means the same thing
+    # as the loan-level one: how the model did over a stated period, not over
+    # however much data happened to be left.
+    within = test[test[PERIOD] <= split.as_of + horizon_months]
+    if within.empty:
+        message = f"Split {split.name!r} has no exposure within {horizon_months} months."
+        raise ValueError(message)
+
+    if macro_mode is MacroMode.UNCONDITIONAL:
+        within = _rebuild_macro_covariates(within, macro, split.as_of, horizon_months)
+        if within.empty:
+            message = f"Split {split.name!r} has no exposure left after rebuilding covariates."
+            raise ValueError(message)
+
+    hazard = pd.Series(
+        episode_hazards(fitted, within.loc[:, list(covariates)], within[AGE].to_numpy(dtype=int)),
+        index=within.index,
+    )
+    exposure = within[WEIGHT].astype(float)
+    events = exposure * within[EVENT].astype(bool)
+
+    expected = float((hazard * exposure).sum())
+    actual = float(events.sum())
+    metrics = {
+        "gini": weighted_gini(hazard, events, exposure),
+        "expected_defaults": expected,
+        "actual_defaults": actual,
+        "actual_over_expected": actual / expected if expected > 0 else float("nan"),
+        "loan_months": float(exposure.sum()),
+    }
+
+    return BacktestResult(
+        split=split.name,
+        as_of=split.as_of,
+        macro_mode=macro_mode,
+        horizon_months=horizon_months,
+        n_loans=int(exposure.sum()),
+        n_defaults=int(actual),
+        metrics=metrics,
+        calibration=weighted_calibration(hazard, events, exposure),
+        stability=stability_report(
+            split.train,
+            within,
+            covariates,
+            time_varying=TIME_VARYING_CONTINUOUS,
+            weights_col=WEIGHT,
+        ),
+    )
+
+
+def _rebuild_macro_covariates(
+    cells: pd.DataFrame, macro: pd.DataFrame, as_of: pd.Period, horizon_months: int
+) -> pd.DataFrame:
+    """Recompute the macro-derived covariates from what was knowable at ``as_of``.
+
+    The unconditional mode's claim is that the model is scored without hindsight, so
+    the covariates that read the macro path must be rebuilt rather than reused. That
+    the rebuild is possible at all is a property of the cell key: it carries the
+    origination quarter and the loan age, which is everything the derivation needs.
+
+    ``cells_to_episodes`` is called rather than the arithmetic repeated, so the
+    covariate is built by the same code in the backtest as in the fit. Two
+    implementations of one definition is how a backtest ends up flattering a model.
+    """
+    from creditsurv.data.panel import cells_to_episodes
+
+    known = extend_macro(macro[macro.index <= as_of], horizon_months + 2, BASELINE)
+    return cells_to_episodes(cells, known)
 
 
 def run_backtest(

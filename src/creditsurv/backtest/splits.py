@@ -160,7 +160,20 @@ def walk_forward(
     dates says whether it holds up across several, which is the difference between
     a result and a fluke.
     """
-    return [as_of_split(panel, as_of, name=f"walk_forward_{as_of}") for as_of in as_of_dates]
+    return [split_at(panel, as_of, name=f"walk_forward_{as_of}") for as_of in as_of_dates]
+
+
+def split_at(panel: pd.DataFrame, as_of: pd.Period, *, name: str = "as_of") -> Split:
+    """Split at a reporting date, by loan or by cell as the panel allows.
+
+    The choice is read off the panel rather than passed in. Handing an aggregated
+    panel to the loan-level split raises, which is loud and fine; handing a
+    loan-level panel to the cell split does not -- it silently treats each row as a
+    unit of exposure and returns numbers that look reasonable.
+    """
+    if LOAN_ID in panel.columns:
+        return as_of_split(panel, as_of, name=name)
+    return cell_split(panel, as_of, name=name)
 
 
 def assert_no_lookahead(split: Split) -> None:

@@ -277,6 +277,14 @@ def project_panel(
         )
         raise ValueError(message)
 
+    if LOAN_ID not in loans.columns:
+        # A book rebuilt from aggregated cells has no loan id: a row is a covariate
+        # combination standing for many loans. The row position is the identity the
+        # projection needs, zero-padded so the lexical order the pivot imposes is
+        # also the book's order -- otherwise every statistic weighted by the book
+        # would silently pair the wrong weight with the wrong row.
+        loans = loans.assign(**{LOAN_ID: [f"row_{index:09d}" for index in range(len(loans))]})
+
     steps = np.arange(horizon_months, dtype=np.int64)
     tiled = np.tile(steps, len(loans))
     projected = loans.loc[loans.index.repeat(horizon_months)].reset_index(drop=True)

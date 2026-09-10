@@ -384,7 +384,7 @@ def test_weighted_calibration_buckets_by_exposure() -> None:
     table = weighted_calibration(predicted, events, exposure, n_buckets=5)
 
     assert len(table) == 5
-    assert table["expected_rate"].is_monotonic_increasing
+    assert table["expected"].is_monotonic_increasing
     assert int(table["loan_months"].sum()) == 100_000
     assert np.allclose(table["ratio"], 1.0, atol=0.05)
 

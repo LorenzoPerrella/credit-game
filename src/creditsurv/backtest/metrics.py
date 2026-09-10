@@ -108,7 +108,12 @@ def calibration_slope_intercept(observed: pd.Series, predicted_pd: pd.Series) ->
 
 
 def population_stability_index(
-    reference: pd.Series, comparison: pd.Series, *, n_bins: int = 10
+    reference: pd.Series,
+    comparison: pd.Series,
+    *,
+    n_bins: int = 10,
+    reference_weights: pd.Series | None = None,
+    comparison_weights: pd.Series | None = None,
 ) -> float:
     """How far a variable's distribution has moved between two samples.
 
@@ -122,22 +127,36 @@ def population_stability_index(
     Standard credit monitoring, and the piece that explains *why* performance
     degrades rather than only reporting that it did. Convention: below 0.1 is
     stable, 0.1 to 0.25 warrants attention, above 0.25 is a material shift.
+
+    The weights are how this survives aggregation. Shares taken over rows of a cell
+    table describe the mix of *covariate combinations*, which nobody has a view on;
+    weighting by the loan-months each cell stands for gives back the mix of
+    business, which is the quantity the thresholds above were calibrated on.
     """
+    reference_weight = _weights(reference, reference_weights)
+    comparison_weight = _weights(comparison, comparison_weights)
+
     if isinstance(reference.dtype, pd.CategoricalDtype) or reference.dtype == object:
         levels = sorted(set(reference.dropna().unique()) | set(comparison.dropna().unique()))
-        reference_share = np.array([float((reference == level).mean()) for level in levels])
-        comparison_share = np.array([float((comparison == level).mean()) for level in levels])
+        reference_share = np.array(
+            [_share(reference == level, reference_weight) for level in levels]
+        )
+        comparison_share = np.array(
+            [_share(comparison == level, comparison_weight) for level in levels]
+        )
     else:
         quantiles = np.linspace(0, 1, n_bins + 1)
         edges = np.unique(np.quantile(reference.to_numpy(dtype=float), quantiles))
         if len(edges) < 3:
             return 0.0
         edges[0], edges[-1] = -np.inf, np.inf
-        reference_share = np.histogram(reference.to_numpy(dtype=float), bins=edges)[0] / len(
-            reference
+        reference_share = (
+            np.histogram(reference.to_numpy(dtype=float), bins=edges, weights=reference_weight)[0]
+            / reference_weight.sum()
         )
-        comparison_share = np.histogram(comparison.to_numpy(dtype=float), bins=edges)[0] / len(
-            comparison
+        comparison_share = (
+            np.histogram(comparison.to_numpy(dtype=float), bins=edges, weights=comparison_weight)[0]
+            / comparison_weight.sum()
         )
 
     # A zero share makes the logarithm infinite, so empty bins are floored.
@@ -150,12 +169,26 @@ def population_stability_index(
     )
 
 
+def _weights(values: pd.Series, weights: pd.Series | None) -> np.ndarray:
+    """Weights as a plain array, defaulting to one per row."""
+    if weights is None:
+        return np.ones(len(values), dtype=float)
+    return weights.to_numpy(dtype=float)
+
+
+def _share(mask: pd.Series, weights: np.ndarray) -> float:
+    """Weighted share of the rows a mask selects."""
+    total = weights.sum()
+    return float(weights[mask.to_numpy(dtype=bool)].sum() / total) if total > 0 else 0.0
+
+
 def stability_report(
     train: pd.DataFrame,
     test: pd.DataFrame,
     covariates: Sequence[str],
     *,
     time_varying: Sequence[str] = (),
+    weights_col: str | None = None,
 ) -> pd.DataFrame:
     """Population stability index per covariate, worst first.
 
@@ -177,10 +210,17 @@ def stability_report(
     model review.
     """
     varying = set(time_varying)
+    train_weights = None if weights_col is None else train[weights_col]
+    test_weights = None if weights_col is None else test[weights_col]
     rows = [
         {
             "covariate": name,
-            "psi": population_stability_index(train[name], test[name]),
+            "psi": population_stability_index(
+                train[name],
+                test[name],
+                reference_weights=train_weights,
+                comparison_weights=test_weights,
+            ),
             "kind": "time-varying" if name in varying else "static",
         }
         for name in covariates
@@ -217,6 +257,11 @@ def weighted_calibration(
     hazards over exposure rather than shares of loans, and buckets are weighted by
     exposure so a bucket is a comparable slice of the book rather than of the cell
     table.
+
+    The columns are named as that function's are, deliberately: the two tables say
+    the same thing about different units, and everything that reads one -- the chart,
+    the report -- should not have to know which it was handed. They diverged once and
+    the report simply stopped rendering.
     """
     frame = pd.DataFrame(
         {
@@ -234,11 +279,12 @@ def weighted_calibration(
     grouped = frame.groupby("bucket", observed=True).agg(
         loan_months=("exposure", "sum"),
         events=("events", "sum"),
-        expected_rate=("predicted", "mean"),
+        expected=("predicted", "mean"),
     )
-    grouped["actual_rate"] = grouped["events"] / grouped["loan_months"]
+    grouped["actual"] = grouped["events"] / grouped["loan_months"]
+    grouped["difference"] = grouped["actual"] - grouped["expected"]
     grouped["ratio"] = np.where(
-        grouped["expected_rate"] > 0, grouped["actual_rate"] / grouped["expected_rate"], np.nan
+        grouped["expected"] > 0, grouped["actual"] / grouped["expected"], np.nan
     )
     return grouped.reset_index()
 

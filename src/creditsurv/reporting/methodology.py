@@ -40,8 +40,14 @@ def generate(
     formula: str,
     *,
     reports_dir: Path,
+    weights_col: str | None = None,
 ) -> Path:
-    """Write ``methodology.md`` and its figures."""
+    """Write ``methodology.md`` and its figures.
+
+    ``weights_col`` names the loan-month count carried by an aggregated panel. Every
+    statistic below then describes the population rather than the set of distinct
+    covariate combinations, which are very different books.
+    """
     figures = reports_dir / "figures"
 
     report = Report(
@@ -130,14 +136,14 @@ layers instead.
 """
     )
 
-    marginal = marginal_comparison(panel)
+    marginal = marginal_comparison(panel, weights_col=weights_col)
     report.heading("1. Marginal shape, covariate-free", level=3).text(
         "A cheap check that catches a badly wrong family before any regression is "
         "attempted. It cannot decide the final model, because covariates change "
         "which family fits best."
     ).table(marginal, decimals=2)
 
-    regression = distribution_comparison(encoded, covariates, formula)
+    regression = distribution_comparison(encoded, covariates, formula, weights_col=weights_col)
     report.heading("2. Regression fits on identical episodes", level=3).text(
         """
 The log-normal is absent because it does not converge on this panel structure --
@@ -153,7 +159,9 @@ loan-level right-censored one by AIC is not a comparison at all.
 """
     ).table(regression, decimals=2)
 
-    shape = shape_depends_on_covariates(encoded, covariates, formula, covariates[0])
+    shape = shape_depends_on_covariates(
+        encoded, covariates, formula, covariates[0], weights_col=weights_col
+    )
     report.heading("3. Does the hazard's shape vary with covariates?", level=3).text(
         f"""
 The default model lets a covariate move *when* default happens while leaving the
@@ -168,8 +176,8 @@ Tested on `{covariates[0]}`:
 """
     ).table(shape, decimals=4)
 
-    curve = kaplan_meier(panel)
-    predicted = predicted_survival_curve(fitted, encoded, covariates)
+    curve = kaplan_meier(panel, weights_col=weights_col)
+    predicted = predicted_survival_curve(fitted, encoded, covariates, weights_col=weights_col)
     band = km_band_contains(curve, predicted)
     inside = int(band["inside"].sum())
 

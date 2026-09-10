@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from creditsurv.features import DERIVED_COLUMNS
@@ -39,6 +40,25 @@ if TYPE_CHECKING:
     from creditsurv.models.aft import FitResult
 
 
+def _average(values: pd.Series, weights: pd.Series | None) -> float:
+    """Mean over the book, weighting rows that stand for more than one loan.
+
+    A row of an aggregated book is a *number of loans* sharing a covariate
+    combination, not a loan. Averaging such rows unweighted answers a question
+    nobody asked -- the mean over distinct combinations -- and systematically
+    overstates rare ones, which in a credit book are the risky ones.
+    """
+    if weights is None:
+        return float(values.mean())
+    # Aligned on the index, never on position: ``values`` comes back from a pivot and
+    # is ordered by loan id, which is not the order the book was handed over in.
+    aligned = weights.reindex(values.index)
+    if aligned.isna().any():
+        message = "Weights do not cover every scored row; they must be indexed by loan id."
+        raise ValueError(message)
+    return float(np.average(values.to_numpy(dtype=float), weights=aligned.to_numpy(dtype=float)))
+
+
 def marginal_effects(
     fitted: FitResult,
     loans: pd.DataFrame,
@@ -47,6 +67,7 @@ def marginal_effects(
     continuous: Sequence[str],
     *,
     horizon_months: int = 12,
+    weights: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Change in PD from a one standard deviation move in each covariate.
 
@@ -66,7 +87,9 @@ def marginal_effects(
     derived = set(DERIVED_COLUMNS)
     extended = extend_macro(macro, horizon_months + 2)
     baseline_panel = project_panel(loans, extended, horizon_months=horizon_months)
-    baseline = float(conditional_pd(survival_along_path(fitted, baseline_panel, covariates)).mean())
+    baseline = _average(
+        conditional_pd(survival_along_path(fitted, baseline_panel, covariates)), weights
+    )
 
     rows = []
     for name in continuous:
@@ -85,7 +108,7 @@ def marginal_effects(
             shifted[name] = shifted[name] + step
             panel = project_panel(shifted, extended, horizon_months=horizon_months)
 
-        shocked = float(conditional_pd(survival_along_path(fitted, panel, covariates)).mean())
+        shocked = _average(conditional_pd(survival_along_path(fitted, panel, covariates)), weights)
         rows.append(
             {
                 "covariate": name,
@@ -110,8 +133,13 @@ def generate(
     *,
     reports_dir: Path,
     horizon_months: int = 60,
+    weights: pd.Series | None = None,
 ) -> Path:
-    """Write ``calibration.md`` and its figures."""
+    """Write ``calibration.md`` and its figures.
+
+    ``weights`` names how many loans each row of ``loans`` stands for, which is what
+    an aggregated book carries instead of one row per loan.
+    """
     figures = reports_dir / "figures"
     report = Report(
         "Calibration: what the regressors are worth",
@@ -147,7 +175,7 @@ seasoning pattern mortgages are expected to show.
 """
     )
 
-    effects = marginal_effects(fitted, loans, macro, covariates, continuous)
+    effects = marginal_effects(fitted, loans, macro, covariates, continuous, weights=weights)
     report.heading("Marginal effects on probability of default").text(
         """
 Coefficients are not comparable across covariates measured in different units, and
@@ -179,8 +207,8 @@ the two appear.
 
     report.key_values(
         {
-            "12-month PD": float(conditional_pd(survival, horizon_months=12).mean()),
-            f"lifetime PD ({horizon_months}m)": float(conditional_pd(survival).mean()),
+            "12-month PD": _average(conditional_pd(survival, horizon_months=12), weights),
+            f"lifetime PD ({horizon_months}m)": _average(conditional_pd(survival), weights),
         }
     )
 
@@ -188,7 +216,7 @@ the two appear.
         fitted, loans, macro, covariates, horizon_months=min(horizon_months, 36)
     )
     scenario_figure = charts.scenario_comparison(scenarios, figures / "scenarios.png")
-    uplift = float(scenarios["adverse"].mean() / scenarios["baseline"].mean())
+    uplift = _average(scenarios["adverse"], weights) / _average(scenarios["baseline"], weights)
 
     report.heading("Macroeconomic scenarios").text(
         f"""
@@ -219,7 +247,9 @@ the question.
             [
                 "`uv run creditsurv report`",
                 f"Distribution: {fitted.distribution}; likelihood: {fitted.likelihood.value}",
-                f"Loans scored: {len(loans)}; horizon: {horizon_months} months",
+                f"Book scored: {len(loans):,} rows"
+                + ("" if weights is None else f" standing for {weights.sum():,.0f} loans")
+                + f"; horizon: {horizon_months} months",
             ]
         )
     )
