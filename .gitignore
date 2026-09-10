@@ -35,3 +35,6 @@ data/
 
 # OS
 .DS_Store
+
+# DuckDB spill files, if a query ever needs them.
+.tmp/
