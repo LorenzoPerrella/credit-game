@@ -272,3 +272,25 @@ def test_unconditional_mode_cannot_see_the_future_macro(
     )
 
     assert conditional.metrics["expected"] != unconditional.metrics["expected"]
+
+
+def test_a_fold_with_no_defaults_is_reported_not_raised(
+    panel: pd.DataFrame, macro_module: pd.DataFrame
+) -> None:
+    """lifelines raises ZeroDivisionError from concordance_index when a fold holds
+    no admissible pairs, and it descends from ArithmeticError rather than
+    ValueError -- so catching ValueError alone lets it through.
+
+    That is exactly how a small nightly run died while every test stayed green: the
+    suite always used panels large enough to have defaults in every fold.
+    """
+    late = pd.Period("2014-11", freq="M")
+    splits = walk_forward(panel.head(4000), [late])
+
+    summary, results = run_backtest(splits, macro_module, COVARIATES, FORMULA, horizon_months=1)
+
+    assert len(summary) == 2
+    assert all(result.n_loans == 0 or result.metrics for result in results)
+    for result in results:
+        if not result.metrics:
+            assert result.error, "a fold that produced nothing must say why"

@@ -230,8 +230,19 @@ def run_backtest(
                         distribution=distribution,
                     )
                 )
-            except ValueError as error:
-                # A thin fold is a fact about the data, not a reason to stop.
+            except (ValueError, ZeroDivisionError) as error:
+                # A thin fold -- too few loans, or none that defaulted -- is a fact
+                # about the data rather than a reason to abandon the other folds.
+                #
+                # ZeroDivisionError belongs here explicitly: lifelines raises it
+                # from concordance_index when a fold contains no admissible pairs,
+                # and it descends from ArithmeticError rather than ValueError, so
+                # catching ValueError alone lets it through. That is exactly how a
+                # small nightly run died while every test stayed green.
+                #
+                # The reason is carried on the result. A silently empty row is a
+                # much worse outcome than a loud one: it surfaces later as a
+                # KeyError three functions away, with nothing pointing back here.
                 results.append(
                     BacktestResult(
                         split=split.name,
@@ -240,10 +251,9 @@ def run_backtest(
                         horizon_months=horizon_months,
                         n_loans=0,
                         n_defaults=0,
-                        metrics={"error": float("nan")},
+                        error=f"{type(error).__name__}: {error}",
                     )
                 )
-                _ = error
 
     summary = pd.DataFrame([result.summary() for result in results])
     return summary, results
