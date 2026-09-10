@@ -249,3 +249,27 @@ def test_a_narrower_spec_collapses_harder(tmp_path: Path) -> None:
 
     assert len(narrow) < len(wide)
     assert int(narrow["n"].sum()) == int(wide["n"].sum()) == 24
+
+
+def test_the_event_flag_is_never_null(tmp_path: Path) -> None:
+    """Most rows carry no zero-balance code at all.
+
+    `FALSE OR NULL` is NULL in SQL, so a membership test against an absent code
+    turns the event flag nullable, and that propagates all the way to the fitter --
+    which rejects it with a message about numpy dtypes, a long way from the cause.
+    Found on real data, where the field is absent; fixtures write it empty, which
+    pyarrow reads as null in exactly the same way.
+    """
+    origination = [origination_row("F000000001"), origination_row("F000000002")]
+    performance = [
+        performance_row("F000000001", "201503", "0"),
+        performance_row("F000000001", "201504", "1"),
+        performance_row("F000000002", "201503", "0", delinquency="3", zero_balance="09"),
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path))
+
+    assert cells["event"].dtype == bool
+    assert not cells["event"].isna().any()
+    assert int(cells.loc[cells["event"], "n"].sum()) == 1
