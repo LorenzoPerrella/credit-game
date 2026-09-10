@@ -24,10 +24,14 @@ from creditsurv.models.nonparametric import (
     turnbull,
 )
 from creditsurv.models.selection import (
+    backward_elimination,
     distribution_comparison,
     likelihood_ratio_test,
     marginal_comparison,
     shape_depends_on_covariates,
+    stepwise_vif,
+    univariate_screening,
+    variance_inflation,
 )
 from fixtures import DEFAULT_PARAMS, build_panel
 
@@ -157,3 +161,125 @@ def test_at_origination_returns_the_first_month(panel: pd.DataFrame) -> None:
 
     assert (origination["age"] == 0).all()
     assert len(origination) == panel["loan_id"].nunique()
+
+
+# --------------------------------------------------------------------------------------
+# Variable selection
+# --------------------------------------------------------------------------------------
+
+
+def test_vif_is_one_when_covariates_are_independent() -> None:
+    rng = np.random.default_rng(0)
+    frame = pd.DataFrame(
+        {"a": rng.normal(size=500), "b": rng.normal(size=500), "c": rng.normal(size=500)}
+    )
+
+    table = variance_inflation(frame, ["a", "b", "c"]).set_index("covariate")
+
+    assert float(table.loc[table.index == "a", "vif"].iloc[0]) < 1.1
+
+
+def test_vif_detects_a_near_duplicate() -> None:
+    rng = np.random.default_rng(1)
+    base = rng.normal(size=500)
+    frame = pd.DataFrame(
+        {"a": base, "b": base + rng.normal(scale=0.01, size=500), "c": rng.normal(size=500)}
+    )
+
+    table = variance_inflation(frame, ["a", "b", "c"])
+
+    assert float(table.iloc[0]["vif"]) > 100.0
+    assert str(table.iloc[0]["covariate"]) in {"a", "b"}
+
+
+def test_vif_is_weighted_by_exposure() -> None:
+    """Unweighted on an aggregated panel would measure collinearity among cells,
+    which is a property of the binning rather than of the data."""
+    rng = np.random.default_rng(2)
+    base = rng.normal(size=400)
+    frame = pd.DataFrame(
+        {
+            "a": base,
+            "b": base * 0.5 + rng.normal(scale=0.02, size=400),
+            "n": rng.integers(1, 1000, 400),
+        }
+    )
+
+    weighted = variance_inflation(frame, ["a", "b"], weight="n")
+    unweighted = variance_inflation(frame, ["a", "b"])
+
+    assert float(weighted.iloc[0]["vif"]) != float(unweighted.iloc[0]["vif"])
+
+
+def test_stepwise_vif_drops_until_under_the_threshold() -> None:
+    rng = np.random.default_rng(3)
+    base = rng.normal(size=600)
+    frame = pd.DataFrame(
+        {"keep": rng.normal(size=600), "a": base, "b": base + rng.normal(scale=0.01, size=600)}
+    )
+
+    log, surviving = stepwise_vif(frame, ["keep", "a", "b"], threshold=10.0)
+
+    assert len(log) == 1
+    assert len(surviving) == 2
+    assert "keep" in surviving
+
+
+def test_priority_decides_which_collinear_covariate_survives() -> None:
+    """The procedure has no view on which of two collinear covariates the model is
+    for. Left alone it drops whichever has the larger factor, which is arbitrary and
+    unstable across samples."""
+    rng = np.random.default_rng(4)
+    base = rng.normal(size=600)
+    frame = pd.DataFrame({"a": base, "b": base + rng.normal(scale=0.01, size=600)})
+
+    _, keeps_b = stepwise_vif(frame, ["a", "b"], priority=["a", "b"])
+    _, keeps_a = stepwise_vif(frame, ["a", "b"], priority=["b", "a"])
+
+    assert keeps_b == ["b"]
+    assert keeps_a == ["a"]
+
+
+def test_stepwise_vif_leaves_independent_covariates_alone() -> None:
+    rng = np.random.default_rng(5)
+    frame = pd.DataFrame({"a": rng.normal(size=300), "b": rng.normal(size=300)})
+
+    log, surviving = stepwise_vif(frame, ["a", "b"])
+
+    assert log.empty
+    assert surviving == ["a", "b"]
+
+
+def test_a_backwards_sign_is_eliminated_even_when_significant(
+    encoded: pd.DataFrame,
+) -> None:
+    """A wrong sign is a symptom, usually of collinearity, not a weak result.
+
+    A model asserting that higher credit scores default sooner fits its sample and
+    no other, so significance does not save it.
+    """
+    flipped = encoded.copy()
+    flipped["fico_s"] = -flipped["fico_s"]
+
+    log, surviving, _ = backward_elimination(flipped, ["fico_s", "cltv_drift"])
+
+    assert "fico_s" not in surviving
+    assert str(log.iloc[0]["reason"]) == "wrong sign"
+
+
+def test_backward_elimination_keeps_covariates_that_earn_their_place(
+    encoded: pd.DataFrame,
+) -> None:
+    log, surviving, result = backward_elimination(encoded, ["fico_s", "cltv_drift"])
+
+    assert set(surviving) == {"fico_s", "cltv_drift"}
+    assert log.empty
+    assert result.n_events > 0
+
+
+def test_univariate_screening_ranks_by_significance(encoded: pd.DataFrame) -> None:
+    table = univariate_screening(encoded, ["fico_s", "cltv_drift"])
+
+    assert list(table.columns) >= ["covariate", "coef", "p", "aic", "keep"]
+    assert table["p"].is_monotonic_increasing
+    assert table["keep"].any()
