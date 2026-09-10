@@ -132,7 +132,8 @@ quietly triggering a model review.
             [
                 "`uv run creditsurv backtest` / `creditsurv report`",
                 f"{len(results)} split-mode combinations evaluated",
-                "Macroeconomic series are real, from FRED. The loan book is simulated.",
+                "Loan data: Freddie Mac Single-Family Loan-Level Dataset. "
+                "Macroeconomic series: FRED.",
             ]
         )
     )

@@ -1,8 +1,7 @@
 """Covariates derived from loan attributes and the macro panel.
 
-Shared by the synthetic generator and the Freddie Mac loader so both produce
-identical model inputs, and so the data-generating process cannot accidentally
-use a covariate the model never sees.
+Applied identically wherever a panel comes from, so a difference in results can
+never come from a difference in feature construction.
 
 Two decisions are encoded here and are worth stating explicitly.
 

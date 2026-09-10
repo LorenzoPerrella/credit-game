@@ -35,7 +35,7 @@ def load_panel() -> pd.DataFrame:
     if not path.exists():
         message = (
             f"No panel at {path}. Build one first:\n"
-            "  uv run creditsurv build-data --source synthetic"
+            "  uv run creditsurv build-data --orig orig_YYYYQn.txt --svcg perf_YYYYQn.txt"
         )
         raise FileNotFoundError(message)
     return pd.read_parquet(path)

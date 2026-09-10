@@ -9,7 +9,6 @@ import pytest
 from lifelines.exceptions import ConvergenceError
 
 from creditsurv.data.panel import to_interval_censored
-from creditsurv.data.synthetic import DEFAULT_PARAMS, build_synthetic_panel
 from creditsurv.models.aft import (
     CONVERGENT_DISTRIBUTIONS,
     FITTERS,
@@ -17,8 +16,11 @@ from creditsurv.models.aft import (
     coefficient_table,
     fit_aft,
 )
+from fixtures import DEFAULT_PARAMS, build_panel
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pandas as pd
 
 COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
@@ -34,8 +36,8 @@ SMALL_PARAMS = replace(
 
 
 @pytest.fixture(scope="module")
-def encoded(macro_module: pd.DataFrame) -> pd.DataFrame:
-    panel, _ = build_synthetic_panel(macro_module, n_loans=900, seed=23, params=SMALL_PARAMS)
+def encoded(book_dir: Path, macro_module: pd.DataFrame) -> pd.DataFrame:
+    panel, _ = build_panel(book_dir, macro_module, n_loans=900, seed=23, params=SMALL_PARAMS)
     return to_interval_censored(panel)
 
 

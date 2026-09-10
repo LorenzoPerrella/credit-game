@@ -19,11 +19,13 @@ from creditsurv.data.panel import (
     aggregate_episodes,
     to_interval_censored,
 )
-from creditsurv.data.synthetic import DEFAULT_PARAMS, build_synthetic_panel
 from creditsurv.features import BINNED_SUFFIX, bin_covariates
 from creditsurv.models.aft import fit_aft
+from fixtures import DEFAULT_PARAMS, build_panel
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from creditsurv.models.aft import FitResult
 
 RAW_COVARIATES = ("fico_s", "cltv_drift", "unemp_gap")
@@ -40,8 +42,8 @@ PARAMS = replace(
 
 
 @pytest.fixture(scope="module")
-def encoded(macro_module: pd.DataFrame) -> pd.DataFrame:
-    panel, _ = build_synthetic_panel(macro_module, n_loans=1200, seed=41, params=PARAMS)
+def encoded(book_dir: Path, macro_module: pd.DataFrame) -> pd.DataFrame:
+    panel, _ = build_panel(book_dir, macro_module, n_loans=1200, seed=41, params=PARAMS)
     return bin_covariates(to_interval_censored(panel))
 
 

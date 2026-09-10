@@ -15,65 +15,16 @@ import pytest
 
 from creditsurv.data.freddiemac import (
     ORIGINATION_COLUMNS,
-    PERFORMANCE_COLUMNS,
     FreddieMacDataMissingError,
     load_sample,
     read_origination,
     to_canonical_panel,
 )
 from creditsurv.data.panel import validate_episodes
+from fixtures import origination_row, performance_row
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def origination_row(
-    loan_id: str,
-    *,
-    fico: str = "740",
-    dti: str = "32",
-    ltv: str = "78",
-    upb: str = "210000",
-    rate: str = "4.25",
-    purpose: str = "P",
-    occupancy: str = "P",
-    channel: str = "R",
-    state: str = "CA",
-    first_time: str = "N",
-) -> str:
-    values = dict.fromkeys(ORIGINATION_COLUMNS, "")
-    values.update(
-        classic_fico=fico,
-        first_payment_date="201503",
-        first_time_homebuyer_indicator=first_time,
-        occupancy_status=occupancy,
-        original_dti=dti,
-        original_upb=upb,
-        original_ltv=ltv,
-        original_cltv=ltv,
-        original_interest_rate=rate,
-        channel=channel,
-        property_state=state,
-        loan_identifier=loan_id,
-        loan_purpose=purpose,
-        original_loan_term="360",
-    )
-    return "|".join(values[name] for name in ORIGINATION_COLUMNS)
-
-
-def performance_row(
-    loan_id: str, period: str, age: str, *, delinquency: str = "0", zero_balance: str = ""
-) -> str:
-    values = dict.fromkeys(PERFORMANCE_COLUMNS, "")
-    values.update(
-        loan_identifier=loan_id,
-        period=period,
-        current_loan_delinquency_status=delinquency,
-        loan_age=age,
-        zero_balance_code=zero_balance,
-        current_actual_upb="200000",
-    )
-    return "|".join(values[name] for name in PERFORMANCE_COLUMNS)
 
 
 def write(path: Path, rows: list[str]) -> Path:
@@ -127,13 +78,17 @@ def files(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def test_missing_files_point_at_the_registration(tmp_path: Path) -> None:
-    """The data cannot be fetched, so the error has to say what to do instead."""
+    """The data cannot be fetched, so the error has to say where to get it.
+
+    There is no fallback source to suggest any more: this dataset is the project's
+    data, so the message has to be enough to act on.
+    """
     with pytest.raises(FreddieMacDataMissingError) as caught:
         read_origination(tmp_path / "absent.txt")
 
     message = str(caught.value)
     assert "claritydownload" in message
-    assert "--source synthetic" in message
+    assert "sample_orig" in message
 
 
 def test_columns_are_read_positionally(files: tuple[Path, Path]) -> None:

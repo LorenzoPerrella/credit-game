@@ -1,6 +1,6 @@
 """Central configuration: filesystem layout, macro series and the model formula.
 
-Keeping these in one place means the data dictionary, the synthetic generator and
+Keeping these in one place means the data dictionary, the data preparation and
 the model all describe the same variables, rather than drifting apart.
 """
 
@@ -126,7 +126,7 @@ MACRO_SERIES: Final[tuple[SeriesSpec, ...]] = (
     ),
 )
 
-#: Series used only to sanity-check simulated default rates against reality.
+#: Series used only to sanity-check observed default rates against a published aggregate.
 #: Never a model covariate: it is an outcome, not a driver.
 REFERENCE_SERIES: Final[tuple[SeriesSpec, ...]] = (
     SeriesSpec(

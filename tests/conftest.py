@@ -6,9 +6,14 @@ and deterministically.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -53,3 +58,9 @@ def macro_module() -> pd.DataFrame:
         },
         index=index,
     )
+
+
+@pytest.fixture(scope="module")
+def book_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A directory for one module's simulated Freddie Mac files."""
+    return tmp_path_factory.mktemp("book")

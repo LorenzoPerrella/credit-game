@@ -1,10 +1,9 @@
 """Loader for the Freddie Mac Single-Family Loan-Level Dataset.
 
-The right data for this project, and the reason the loan book here is otherwise
-simulated: it sits behind a free registration on Clarity, so it cannot be fetched
-as part of a reproducible pipeline. This module reads files the user has already
-downloaded and maps them onto the same canonical panel the synthetic generator
-produces, so everything downstream is unchanged.
+The project's data source. It sits behind a free but manual registration on
+Clarity, so it cannot be fetched as part of a reproducible pipeline: this module
+reads files already downloaded and maps them onto the canonical loan-month panel
+everything downstream expects.
 
 **Nothing here touches the network.** The dataset is behind an authenticated
 download and scraping it would breach the terms it is offered under. The column
@@ -176,8 +175,8 @@ def _require(path: Path, kind: str) -> None:
             f"registration at {CLARITY_URL}.\n"
             "Download a sample vintage, then point --orig and --svcg at "
             "sample_orig_YYYY.txt and sample_svcg_YYYY.txt.\n"
-            "To run without it, use the synthetic source instead:\n"
-            "  uv run creditsurv build-data --source synthetic"
+            "The layout spec is public even though the data is not:\n"
+            "  https://www.freddiemac.com/research/datasets/sf-loanlevel-dataset"
         )
         raise FreddieMacDataMissingError(message)
 

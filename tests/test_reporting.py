@@ -172,7 +172,7 @@ def test_fit_without_a_panel_explains_how_to_build_one(
 
 
 def test_time_varying_covariates_have_a_marginal_effect(
-    macro_module: pd.DataFrame,
+    book_dir: Path, macro_module: pd.DataFrame
 ) -> None:
     """Regression test for a silent zero.
 
@@ -186,9 +186,9 @@ def test_time_varying_covariates_have_a_marginal_effect(
 
     from creditsurv.config import STATIC_CONTINUOUS, TIME_VARYING_CONTINUOUS
     from creditsurv.data.panel import at_origination, to_interval_censored
-    from creditsurv.data.synthetic import DEFAULT_PARAMS, build_synthetic_panel
     from creditsurv.models.aft import fit_aft
     from creditsurv.reporting.calibration import marginal_effects
+    from fixtures import DEFAULT_PARAMS, build_panel
 
     covariates = ["fico_s", "cltv_drift", "unemp_gap"]
     params = replace(
@@ -198,7 +198,7 @@ def test_time_varying_covariates_have_a_marginal_effect(
         categorical={},
         prepayment_intercept=50.0,
     )
-    panel, _ = build_synthetic_panel(macro_module, n_loans=600, seed=13, params=params)
+    panel, _ = build_panel(book_dir, macro_module, n_loans=600, seed=13, params=params)
     fitted = fit_aft(to_interval_censored(panel), covariates, " + ".join(covariates))
 
     book = at_origination(panel).head(150).copy()
