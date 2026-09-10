@@ -126,7 +126,10 @@ def _state_of_the_book_sql() -> str:
             loan_identifier,
             CAST(loan_age AS INTEGER)                                   AS age,
             CAST(period AS INTEGER)                                     AS period_key,
-            TRY_CAST(estimated_loan_to_value AS DOUBLE)                 AS eltv,
+            -- 999 marks "not available" here exactly as it does for LTV and DTI in
+            -- the origination file. Untreated it is an ordinary number: the median
+            -- ELTV of the 2006 vintage is literally 999.
+            NULLIF(TRY_CAST(estimated_loan_to_value AS DOUBLE), 999)     AS eltv,
             -- COALESCE wraps the whole expression, not just the cast. Most rows
             -- have no zero-balance code, so `IN (...)` is NULL there, and
             -- `FALSE OR NULL` is NULL rather than FALSE -- which propagates a
@@ -203,10 +206,12 @@ _SOURCE: Final[dict[str, str]] = {
     "orig_cltv": "orig_cltv",
     "dti": "dti",
     "log_orig_upb": "ln(orig_upb)",
-    # Freddie's own mark-to-market valuation, which is loan-specific. Falling back to
-    # the original ratio where it is missing makes the drift zero rather than null,
-    # which is the right default: no information about movement means no movement.
-    "cltv_drift": "COALESCE(eltv, orig_ltv) - orig_ltv",
+    # Freddie's own mark-to-market valuation. Available as a covariate, but not in
+    # the default specification: coverage runs from 0.8% of the 1999 vintage to 94%
+    # of 2021, so a model using it would be estimating a different quantity in every
+    # decade. The house-price-indexed drift computed in cells_to_episodes covers
+    # every vintage evenly instead.
+    "eltv_drift": "COALESCE(eltv, orig_ltv) - orig_ltv",
     "mi_percent": "mi_percent",
 }
 
@@ -270,8 +275,10 @@ DEFAULT_SPEC: Final = CellSpec(
         "fico_s": (-2.4, -0.8, 0.0, 0.8, 1.6, 2.4),
         "orig_ltv": (30.0, 70.0, 80.0, 90.0, 100.0),
         "dti": (10.0, 28.0, 36.0, 45.0, 55.0),
-        "cltv_drift": (-60.0, -15.0, -5.0, 5.0, 15.0, 80.0),
     },
+    # cltv_drift is absent on purpose: it is a function of orig_ltv and the macro
+    # path, both recoverable from the key, so carrying it would multiply the
+    # cardinality for information already there.
     categorical=("purpose", "occupancy", "term_years"),
 )
 

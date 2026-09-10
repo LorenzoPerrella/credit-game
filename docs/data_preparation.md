@@ -87,6 +87,15 @@ thousand.
 | `classic_fico` | 9999 |
 | `original_dti` | 999 |
 | `original_ltv`, `original_cltv` | 999 |
+| `estimated_loan_to_value` | 999 |
+
+The last one was missed on the first pass, and the consequence is worth recording.
+`estimated_loan_to_value` is in the *performance* file, and only the origination
+file's sentinels had been handled. The median ELTV of the 2006 vintage is literally
+999, so mark-to-market leverage came out as `999 − 75 = 924` for most of the panel;
+sixty percent of exposure landed in one band and the coefficient came out with the
+wrong sign. The exploratory default-rate-by-band table is what exposed it: `fico_s`
+and `orig_ltv` were cleanly monotonic and this one was not.
 
 A loan missing a covariate is **dropped, not imputed**: imputing an underwriting
 characteristic invents the very thing being measured.
