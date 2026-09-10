@@ -70,7 +70,7 @@ warn_unreachable = true
 # lifelines and autograd ship no type information. Everything the project
 # itself exposes stays strictly typed; only the third-party surface is relaxed.
 [[tool.mypy.overrides]]
-module = ["lifelines.*", "autograd.*", "formulaic.*", "scipy.*"]
+module = ["lifelines.*", "autograd.*", "formulaic.*", "scipy.*", "pyarrow.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

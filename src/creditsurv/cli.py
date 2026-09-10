@@ -60,6 +60,40 @@ def fetch_macro(
     typer.echo(f"Series: {', '.join(spec.column for spec in MACRO_SERIES)}")
 
 
+@app.command()
+def ingest(
+    years: Annotated[
+        str | None, typer.Option(help="Year or range, e.g. 2006 or 1999-2026.")
+    ] = None,
+    force: Annotated[bool, typer.Option(help="Re-convert quarters already done.")] = False,
+) -> None:
+    """Convert the downloaded archives to parquet.
+
+    Idempotent: a quarter already converted is skipped, so an interrupted run costs
+    only the quarter it was in the middle of.
+    """
+    import logging
+
+    from creditsurv.data.ingest import discover_years
+    from creditsurv.data.ingest import ingest as run_ingest
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    selected = _parse_years(years) if years else discover_years()
+    typer.echo(f"Ingesting {len(selected)} vintage year(s): {selected[0]}-{selected[-1]}")
+
+    manifest = run_ingest(selected, force=force)
+    performance = sum(entry["perf"] for entry in manifest.values())
+    origination = sum(entry["orig"] for entry in manifest.values())
+    typer.echo(f"\n{len(manifest)} quarters: {origination:,} loans, {performance:,} loan-months")
+
+
+def _parse_years(spec: str) -> list[int]:
+    if "-" in spec:
+        first, last = (int(part) for part in spec.split("-", 1))
+        return list(range(first, last + 1))
+    return [int(spec)]
+
+
 @app.command("build-data")
 def build_data(
     orig: Annotated[Path, typer.Option(help="orig_YYYYQn.txt from the dataset.")],

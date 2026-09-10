@@ -324,3 +324,31 @@ def build_panel(
     orig_path, perf_path, params = simulate_book(directory, macro, **kwargs)  # type: ignore[arg-type]
     panel = add_macro_covariates(load_sample(orig_path, perf_path), macro)
     return panel, params
+
+
+def write_archives(
+    root: Path,
+    year: int,
+    quarters: dict[int, tuple[list[str], list[str]]],
+) -> Path:
+    """Build the nested archive layout the real download has.
+
+    ``historical_data_YYYY.zip`` containing ``historical_data_YYYYQn.zip``, each
+    containing ``orig_YYYYQn.txt`` and ``perf_YYYYQn.txt``. Tests build this rather
+    than a flat directory because the nesting is exactly what the ingest has to
+    handle, and a flat fixture would exercise none of it.
+    """
+    import zipfile
+
+    root.mkdir(parents=True, exist_ok=True)
+    outer_path = root / f"historical_data_{year}.zip"
+    with zipfile.ZipFile(outer_path, "w") as outer:
+        for quarter, (origination, performance) in sorted(quarters.items()):
+            tag = f"{year}Q{quarter}"
+            inner_bytes = root / f"_inner_{tag}.zip"
+            with zipfile.ZipFile(inner_bytes, "w") as inner:
+                inner.writestr(f"orig_{tag}.txt", "\n".join(origination) + "\n")
+                inner.writestr(f"perf_{tag}.txt", "\n".join(performance) + "\n")
+            outer.write(inner_bytes, f"historical_data_{tag}.zip")
+            inner_bytes.unlink()
+    return outer_path
