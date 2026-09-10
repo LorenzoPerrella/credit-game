@@ -29,14 +29,14 @@ an infinite upper bound.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
+import pandas as pd
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-    import pandas as pd
 
 LOAN_ID: Final = "loan_id"
 AGE: Final = "age"
@@ -237,3 +237,74 @@ def to_loan_level(panel: pd.DataFrame) -> pd.DataFrame:
     loans["duration"] = grouped[AGE].max().to_numpy(dtype=float) + 1.0
     loans[EVENT] = grouped[EVENT].max().to_numpy(dtype=bool)
     return loans.reset_index()
+
+
+#: Longest loan age an episode can run to, in months. A thirty-year mortgage is 360,
+#: and the final open-ended age band has to close somewhere for the likelihood to
+#: evaluate.
+MAX_AGE_MONTHS: Final = 360
+
+
+def cells_to_episodes(
+    cells: pd.DataFrame,
+    macro: pd.DataFrame,
+    *,
+    lag_months: int = 3,
+    max_age: int = MAX_AGE_MONTHS,
+) -> pd.DataFrame:
+    """Turn aggregated cells into weighted episodes the fitter can read.
+
+    Cells carry a loan age *band* rather than a month, so episodes are the intervals
+    between band edges rather than single months. The encoding is unchanged — that is
+    the point of stating it in terms of bounds rather than months in the first place:
+    a survivor contributes ``log[S(stop)/S(start)]`` and a default
+    ``log[1 - S(stop)/S(start)]`` whatever the width of the interval.
+
+    Band edges are read off the data rather than passed in. The ``age`` column holds
+    each band's lower edge, so the distinct values *are* the edges, and deriving them
+    means a cell table can never disagree with the bands it was built with.
+
+    Macro covariates are recomputed here from vintage and age, which is why they were
+    kept out of the grouping key: ``period = vintage + age``, so nothing was lost by
+    leaving them out and the cardinality was spared. Only the two that depend on
+    nothing else are rebuilt -- unemployment gap and financial conditions. Anything
+    needing a loan-level quantity that is not in the key, such as the refinancing
+    incentive, would have to have that quantity added to the specification first.
+    """
+    if cells.empty:
+        message = "No cells to expand."
+        raise PanelValidationError(message)
+
+    episodes = cells.copy()
+    edges = sorted(int(edge) for edge in episodes[AGE].unique())
+    # Each band runs to the next edge; the last one runs to the horizon.
+    upper_of = dict(pairwise(edges))
+    upper_of[edges[-1]] = max_age
+
+    episodes[AGE_START] = episodes[AGE].astype(float)
+    episodes[AGE_STOP] = episodes[AGE].map(upper_of).astype(float)
+
+    quarter = episodes["vintage"].str.extract(r"(\d{4})Q(\d)")
+    orig_month = quarter[0].astype(int) * 12 + (quarter[1].astype(int) - 1) * 3
+    # A period ordinal in months since year zero, so age can simply be added.
+    observation = orig_month + episodes[AGE_START].astype(int)
+
+    lagged = macro.shift(lag_months)
+    macro_index = pd.PeriodIndex(macro.index)
+    macro_month = macro_index.year * 12 + (macro_index.month - 1)
+    unemployment = pd.Series(lagged["unemployment_rate"].to_numpy(), index=macro_month)
+    conditions = pd.Series(lagged["nfci"].to_numpy(), index=macro_month)
+
+    episodes["unemp_gap"] = (
+        observation.map(unemployment).to_numpy() - orig_month.map(unemployment).to_numpy()
+    )
+    episodes["nfci_lagged"] = observation.map(conditions).to_numpy()
+
+    defaulted = episodes[EVENT].to_numpy(dtype=bool)
+    start = episodes[AGE_START].to_numpy(dtype=float)
+    stop = episodes[AGE_STOP].to_numpy(dtype=float)
+    episodes[LOWER_BOUND] = np.where(defaulted, start, stop)
+    episodes[UPPER_BOUND] = np.where(defaulted, stop, np.inf)
+    episodes[EXACT_OBSERVATION] = False
+
+    return episodes.dropna(subset=["unemp_gap", "nfci_lagged"]).reset_index(drop=True)

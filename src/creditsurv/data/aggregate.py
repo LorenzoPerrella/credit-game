@@ -127,10 +127,19 @@ def _state_of_the_book_sql() -> str:
             CAST(loan_age AS INTEGER)                                   AS age,
             CAST(period AS INTEGER)                                     AS period_key,
             TRY_CAST(estimated_loan_to_value AS DOUBLE)                 AS eltv,
-            COALESCE(TRY_CAST(current_loan_delinquency_status AS INTEGER)
-                     >= {DEFAULT_DELINQUENCY}, FALSE)
-                OR zero_balance_code IN ({default_codes})               AS defaulted,
-            zero_balance_code = '{PREPAYMENT_ZERO_BALANCE}'             AS prepaid
+            -- COALESCE wraps the whole expression, not just the cast. Most rows
+            -- have no zero-balance code, so `IN (...)` is NULL there, and
+            -- `FALSE OR NULL` is NULL rather than FALSE -- which propagates a
+            -- nullable event flag all the way to the fitter. The fixtures did not
+            -- catch it because they write an empty string where the real files
+            -- leave the field absent.
+            COALESCE(
+                COALESCE(TRY_CAST(current_loan_delinquency_status AS INTEGER)
+                         >= {DEFAULT_DELINQUENCY}, FALSE)
+                OR COALESCE(zero_balance_code IN ({default_codes}), FALSE),
+                FALSE
+            )                                                           AS defaulted,
+            COALESCE(zero_balance_code = '{PREPAYMENT_ZERO_BALANCE}', FALSE) AS prepaid
         FROM read_parquet(?)
         WHERE TRY_CAST(loan_age AS INTEGER) >= 0
     ),
@@ -179,8 +188,8 @@ def _state_of_the_book_sql() -> str:
         t.age,
         t.period_key,
         t.eltv,
-        t.defaulted AND t.age = t.terminal_age                          AS event,
-        t.prepaid  AND t.age = t.terminal_age                           AS prepaid,
+        COALESCE(t.defaulted AND t.age = t.terminal_age, FALSE)         AS event,
+        COALESCE(t.prepaid AND t.age = t.terminal_age, FALSE)           AS prepaid,
         o.*
     FROM truncated t JOIN orig o USING (loan_identifier)
     WHERE o.credit_score IS NOT NULL AND o.orig_ltv IS NOT NULL AND o.dti IS NOT NULL

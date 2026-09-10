@@ -133,7 +133,13 @@ def performance_row(
     zero_balance: str = "",
     upb: str = "200000",
 ) -> str:
-    """One line of ``perf_YYYYQn.txt``."""
+    """One line of ``perf_YYYYQn.txt``.
+
+    An unset field is written empty, which is what the real files contain and what
+    pyarrow then reads as null. That distinction matters: SQL treating an absent
+    zero-balance code as null rather than as "not a default" propagates a nullable
+    event flag all the way to the fitter.
+    """
     values = dict.fromkeys(PERFORMANCE_COLUMNS, "")
     values.update(
         loan_identifier=loan_id,
