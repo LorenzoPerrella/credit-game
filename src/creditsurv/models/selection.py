@@ -235,3 +235,253 @@ def cox_snell_residuals(
         ]
     )
     return pd.Series(hazard, index=rows.index, name="cox_snell")
+
+
+# --------------------------------------------------------------------------------------
+# Variable selection
+# --------------------------------------------------------------------------------------
+
+#: A covariate whose variance inflation exceeds this is carrying the same information
+#: as the others already in the model. The conventional threshold, and the one `nmds`
+#: uses.
+VIF_THRESHOLD: Final = 10.0
+
+#: A coefficient no more significant than this has not earned its place.
+PVALUE_THRESHOLD: Final = 0.05
+
+#: The sign each covariate's coefficient must take, on the accelerated-failure-time
+#: scale where **positive lengthens survival and therefore lowers risk**.
+#:
+#: This is the piece of the `nmds` procedure most worth having. A covariate whose
+#: coefficient comes out economically backwards is not salvaged by being significant
+#: -- it is evidence that something else is wrong, usually collinearity -- so it is
+#: eliminated on the sign alone. A model that says higher credit scores default sooner
+#: fits its sample and will not survive the next one.
+EXPECTED_SIGNS: Final[dict[str, int]] = {
+    "fico_s": +1,  # better credit survives longer
+    "orig_ltv": -1,  # more leverage fails sooner
+    "orig_cltv": -1,
+    "dti": -1,  # more debt burden fails sooner
+    "cltv_drift": -1,  # leverage rising after origination fails sooner
+    "unemp_gap": -1,  # unemployment above origination fails sooner
+    "nfci_lagged": -1,  # tighter financial conditions fail sooner
+    "mi_percent": +1,  # insured loans are underwritten against a stricter standard
+}
+
+
+def variance_inflation(
+    frame: pd.DataFrame, columns: Sequence[str], *, weight: str | None = None
+) -> pd.DataFrame:
+    """Variance inflation factor for each covariate, largest first.
+
+    ``1 / (1 - R²)`` from regressing each covariate on the others, weighted by
+    exposure where a weight is given — unweighted on an aggregated panel would
+    measure collinearity among *cells*, which is a property of the binning.
+
+    Computed with least squares directly rather than through scikit-learn. `nmds`
+    uses ``LinearRegression(normalize=True)``, which was removed in scikit-learn 1.2,
+    so its implementation no longer runs; the method is worth taking, the code is not.
+    """
+    values = frame.loc[:, list(columns)].to_numpy(dtype=float)
+    weights = frame[weight].to_numpy(dtype=float) if weight else np.ones(len(frame), dtype=float)
+    root = np.sqrt(weights)
+
+    rows = []
+    for index, name in enumerate(columns):
+        target = values[:, index]
+        others = np.delete(values, index, axis=1)
+        design = np.column_stack([np.ones(len(others)), others])
+
+        coefficients, *_ = np.linalg.lstsq(design * root[:, None], target * root, rcond=None)
+        residual = target - design @ coefficients
+        weighted_mean = float((target * weights).sum() / weights.sum())
+
+        residual_ss = float((weights * residual**2).sum())
+        total_ss = float((weights * (target - weighted_mean) ** 2).sum())
+        r_squared = 1.0 - residual_ss / total_ss if total_ss > 0 else 0.0
+        inflation = 1.0 / (1.0 - r_squared) if r_squared < 1.0 else np.inf
+
+        rows.append({"covariate": name, "vif": inflation, "tolerance": 1.0 - r_squared})
+
+    return pd.DataFrame(rows).sort_values("vif", ascending=False).reset_index(drop=True)
+
+
+def stepwise_vif(
+    frame: pd.DataFrame,
+    columns: Sequence[str],
+    *,
+    weight: str | None = None,
+    threshold: float = VIF_THRESHOLD,
+    priority: Sequence[str] = (),
+) -> tuple[pd.DataFrame, list[str]]:
+    """Drop the most inflated covariate, recompute, repeat.
+
+    Returns the elimination log and the surviving covariates.
+
+    ``priority`` names covariates to protect, most protected last — the convention
+    `nmds` uses, and the reason it matters: when two covariates are collinear the
+    procedure has no view on which one the model is *for*. Left alone it drops
+    whichever happens to have the larger factor, which is arbitrary and unstable
+    across samples. Stating the order makes the choice explicit and repeatable.
+    """
+    protected = {name: rank for rank, name in enumerate(priority)}
+    surviving = list(columns)
+    log: list[dict[str, object]] = []
+
+    while len(surviving) > 1:
+        inflation = variance_inflation(frame, surviving, weight=weight)
+        worst = inflation.iloc[0]
+        if float(worst["vif"]) <= threshold:
+            break
+
+        offenders = inflation[inflation["vif"] > threshold]["covariate"].tolist()
+        # Among the offenders, drop the least protected. `offenders` is already
+        # ordered by descending inflation, so an unprotected tie falls to the largest.
+        victim = min(offenders, key=lambda name: protected.get(name, -1))
+
+        log.append(
+            {
+                "step": len(log) + 1,
+                "removed": victim,
+                "vif": float(inflation.loc[inflation["covariate"] == victim, "vif"].iloc[0]),
+                "remaining": len(surviving) - 1,
+            }
+        )
+        surviving.remove(victim)
+
+    return pd.DataFrame(log, columns=["step", "removed", "vif", "remaining"]), surviving
+
+
+def univariate_screening(
+    encoded: pd.DataFrame,
+    candidates: Sequence[str],
+    *,
+    always_include: Sequence[str] = (),
+    distribution: str = "weibull",
+    weights_col: str | None = None,
+) -> pd.DataFrame:
+    """Fit one model per candidate covariate and report its significance.
+
+    A cheap first pass that removes covariates carrying nothing at all, before the
+    multivariate fit has to carry them. Following `nmds`, the covariates in
+    ``always_include`` are forced into every fit, so each candidate is judged on what
+    it adds rather than on what it happens to proxy.
+
+    It is a screen and not a decision: a covariate can be insignificant alone and
+    matter in combination, which is why the surviving set still goes through backward
+    elimination.
+    """
+    rows = []
+    for name in candidates:
+        terms = [*always_include, name]
+        formula = " + ".join(terms)
+        try:
+            result = fit_aft(
+                encoded, terms, formula, distribution=distribution, weights_col=weights_col
+            )
+        except Exception as error:  # a candidate that will not converge is a result
+            rows.append(
+                {
+                    "covariate": name,
+                    "coef": np.nan,
+                    "p": np.nan,
+                    "aic": np.nan,
+                    "note": type(error).__name__,
+                }
+            )
+            continue
+
+        summary = result.fitter.summary
+        key = ("lambda_", name)
+        if key not in summary.index:
+            continue
+        rows.append(
+            {
+                "covariate": name,
+                "coef": float(summary.loc[key, "coef"]),
+                "p": float(summary.loc[key, "p"]),
+                "aic": result.aic,
+                "note": "",
+            }
+        )
+
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return table
+    table["keep"] = table["p"] <= PVALUE_THRESHOLD
+    return table.sort_values("p").reset_index(drop=True)
+
+
+def _wrong_sign(covariate: str, coefficient: float) -> bool:
+    expected = EXPECTED_SIGNS.get(covariate)
+    return expected is not None and coefficient * expected < 0
+
+
+def backward_elimination(
+    encoded: pd.DataFrame,
+    covariates: Sequence[str],
+    *,
+    categorical: Sequence[str] = (),
+    distribution: str = "weibull",
+    weights_col: str | None = None,
+    threshold: float = PVALUE_THRESHOLD,
+) -> tuple[pd.DataFrame, list[str], FitResult]:
+    """Remove one covariate at a time until every survivor earns its place.
+
+    Two criteria, applied together, as `nmds` does. A coefficient no more significant
+    than ``threshold`` goes; so does one whose sign is economically backwards, even
+    when it is significant. The second matters more than it looks: a wrong sign is not
+    a weak result but a symptom, usually of collinearity, and a model asserting that
+    higher credit scores default sooner will fit this sample and no other.
+
+    Returns the elimination log, the surviving covariates, and the final fit.
+    """
+    surviving = list(covariates)
+    log: list[dict[str, object]] = []
+
+    while True:
+        terms = [*surviving, *categorical]
+        formula = " + ".join([*surviving, *(f"C({name})" for name in categorical)])
+        result = fit_aft(
+            encoded, terms, formula, distribution=distribution, weights_col=weights_col
+        )
+        summary = result.fitter.summary.loc["lambda_"]
+
+        worst: tuple[str, float, str] | None = None
+        for name in surviving:
+            if name not in summary.index:
+                continue
+            coefficient = float(summary.loc[name, "coef"])
+            p_value = float(summary.loc[name, "p"])
+            if _wrong_sign(name, coefficient):
+                # A backwards sign outranks any p-value: it says the specification is
+                # wrong, not that the evidence is thin.
+                worst = (name, p_value, "wrong sign")
+                break
+            if p_value > threshold and (worst is None or p_value > worst[1]):
+                worst = (name, p_value, "insignificant")
+
+        if worst is None:
+            return (
+                pd.DataFrame(log, columns=["step", "removed", "p", "reason", "remaining"]),
+                surviving,
+                result,
+            )
+
+        name, p_value, reason = worst
+        log.append(
+            {
+                "step": len(log) + 1,
+                "removed": name,
+                "p": p_value,
+                "reason": reason,
+                "remaining": len(surviving) - 1,
+            }
+        )
+        surviving.remove(name)
+        if not surviving:
+            return (
+                pd.DataFrame(log, columns=["step", "removed", "p", "reason", "remaining"]),
+                surviving,
+                result,
+            )
