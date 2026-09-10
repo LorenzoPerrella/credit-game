@@ -149,10 +149,15 @@ def test_binning_clips_rather_than_drops_outliers() -> None:
 
 
 def test_binning_covers_every_modelled_continuous_covariate() -> None:
-    """A covariate without cut points would silently stay continuous."""
+    """A covariate without cut points would silently stay continuous.
+
+    A subset rather than an equality: cut points also exist for covariates the
+    aggregation does not carry into the cell key, which the loan-level path can still
+    bin. An unused set of edges is harmless; a modelled covariate without any is not.
+    """
     from creditsurv.config import STATIC_CONTINUOUS, TIME_VARYING_CONTINUOUS
 
-    assert set(STATIC_CONTINUOUS) | set(TIME_VARYING_CONTINUOUS) == set(BIN_EDGES)
+    assert set(STATIC_CONTINUOUS) | set(TIME_VARYING_CONTINUOUS) <= set(BIN_EDGES)
 
 
 def test_binned_formula_rewrites_only_continuous_terms() -> None:

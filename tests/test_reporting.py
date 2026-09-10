@@ -149,17 +149,21 @@ def test_cli_exposes_every_command() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    for command in ("fetch-macro", "build-data", "fit", "compare", "backtest", "report"):
+    for command in (
+        "fetch-macro",
+        "ingest",
+        "portfolio",
+        "profile",
+        "aggregate",
+        "fit",
+        "compare",
+        "backtest",
+        "report",
+    ):
         assert command in result.stdout
 
 
-def test_build_data_rejects_an_unknown_source() -> None:
-    result = runner.invoke(app, ["build-data", "--source", "nonsense"])
-
-    assert result.exit_code != 0
-
-
-def test_fit_without_a_panel_explains_how_to_build_one(
+def test_fit_without_cells_explains_how_to_build_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A missing artefact should say what to run, not raise a bare path error."""
@@ -168,7 +172,7 @@ def test_fit_without_a_panel_explains_how_to_build_one(
     result = runner.invoke(app, ["fit"])
 
     assert result.exit_code != 0
-    assert "build-data" in str(result.exception)
+    assert "creditsurv aggregate" in str(result.exception)
 
 
 def test_time_varying_covariates_have_a_marginal_effect(

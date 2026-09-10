@@ -151,13 +151,26 @@ MACRO_LAG_MONTHS: Final = 3
 # --------------------------------------------------------------------------------------
 
 #: Measured once at origination and constant thereafter.
+#:
+#: These are exactly the continuous covariates the aggregation coarse-classes into
+#: the cell key, and the correspondence is not optional: a covariate the key does not
+#: carry is not recoverable from a cell, so a formula naming one cannot be fitted at
+#: all. ``tests/test_aggregate.py`` holds the two in step.
+#:
+#: ``log_orig_upb`` and ``orig_spread`` are absent for that reason rather than on
+#: their merits -- the cell count is the product of the band counts, so every
+#: covariate added to the key multiplies it. What each would cost is measured in
+#: docs/variable_selection.md.
 STATIC_CONTINUOUS: Final[tuple[str, ...]] = (
     "fico_s",
     "orig_ltv",
     "dti",
-    "log_orig_upb",
-    "orig_spread",
 )
+
+#: Takes two values, 15 and 30, so a linear term and a dummy are the same model.
+#: Kept numeric because the aggregation emits it as an integer, and a treatment
+#: reference would then have to agree with that dtype across the SQL and the formula.
+ORDINAL: Final[tuple[str, ...]] = ("term_years",)
 
 #: Recomputed every loan-month. Loan age is the time scale, not a covariate.
 #:
@@ -166,20 +179,22 @@ STATIC_CONTINUOUS: Final[tuple[str, ...]] = (
 #: both gives unstable coefficients. The pair is decomposed into a level
 #: (``orig_ltv``, underwriting at origination) and a movement (``cltv_drift``,
 #: how far house prices have carried the position since, zero at origination).
+#: ``refi_incentive`` is absent: it needs the note rate, which the key does not
+#: carry. It is recoverable the same way ``cltv_drift`` is -- from a banded
+#: ``orig_spread`` plus the mortgage-rate path, both functions of the key -- which is
+#: the cheapest of the candidate additions and the one to weigh first.
 TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
     "cltv_drift",
     "unemp_gap",
-    "refi_incentive",
     "nfci_lagged",
 )
 
 #: Categorical covariates mapped to their treatment-coding reference level.
+#: ``channel``, ``region`` and ``first_time_buyer`` are screened and mapped but not
+#: in the key: together they would multiply the cell count by sixteen.
 CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
     "purpose": "purchase",
     "occupancy": "owner_occupied",
-    "channel": "retail",
-    "region": "South",
-    "first_time_buyer": "N",
 }
 
 
@@ -189,7 +204,7 @@ def default_formula() -> str:
     Categorical reference levels are stated explicitly so coefficients remain
     comparable across refits even if a level goes missing from a training slice.
     """
-    continuous = " + ".join(STATIC_CONTINUOUS + TIME_VARYING_CONTINUOUS)
+    continuous = " + ".join(STATIC_CONTINUOUS + TIME_VARYING_CONTINUOUS + ORDINAL)
     categorical = " + ".join(
         f"C({name}, Treatment('{reference}'))" for name, reference in CATEGORICAL_REFERENCE.items()
     )

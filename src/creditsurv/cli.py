@@ -11,9 +11,6 @@ Commands that need a model fit one.
 
 from __future__ import annotations
 
-# typer resolves annotations at runtime, so Path cannot move into the
-# type-checking block the way ruff would prefer -- the CLI stops working.
-from pathlib import Path  # noqa: TC003
 from typing import TYPE_CHECKING, Annotated
 
 import typer
@@ -21,6 +18,7 @@ import typer
 from creditsurv.config import (
     CATEGORICAL_REFERENCE,
     MACRO_SERIES,
+    ORDINAL,
     STATIC_CONTINUOUS,
     TIME_VARYING_CONTINUOUS,
     default_formula,
@@ -41,7 +39,7 @@ app = typer.Typer(
 
 def default_covariates() -> list[str]:
     """Every column the default formula is allowed to read."""
-    return [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *CATEGORICAL_REFERENCE]
+    return [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL, *CATEGORICAL_REFERENCE]
 
 
 def _echo_table(frame: pd.DataFrame, *, index: bool = False) -> None:
@@ -225,31 +223,20 @@ def aggregate(
     typer.echo(f"Saved to {path}")
 
 
-@app.command("build-data")
-def build_data(
-    orig: Annotated[Path, typer.Option(help="orig_YYYYQn.txt from the dataset.")],
-    svcg: Annotated[Path, typer.Option(help="perf_YYYYQn.txt from the dataset.")],
-) -> None:
-    """Build the loan-month panel from Freddie Mac files and save it.
+def _episodes() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The weighted episode panel every model command works from, and the macro path.
 
-    The dataset is not downloadable programmatically -- registration is free but
-    manual -- so the two files are named explicitly rather than guessed at.
+    Aggregated cells rather than a loan-month panel: the book is 2.9 billion
+    loan-months and 15.8 million cells, and only one of those two is a table a
+    fitter can be handed. Expansion is deterministic, so this is the same panel the
+    loan-level path would produce, carrying counts instead of repeated rows.
     """
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.freddiemac import load_sample
-    from creditsurv.data.store import save_panel
-    from creditsurv.features import add_macro_covariates
+    from creditsurv.data.panel import cells_to_episodes
+    from creditsurv.data.store import load_cells
 
     macro = load_macro_panel()
-    # Macro covariates are derived by the same code for every source, so a
-    # difference in results can never come from a difference in feature building.
-    panel = add_macro_covariates(load_sample(orig, svcg), macro)
-    path = save_panel(panel)
-
-    loans = panel["loan_id"].nunique()
-    defaults = int(panel["event"].sum())
-    typer.echo(f"Panel: {len(panel):,} loan-months, {loans:,} loans -> {path}")
-    typer.echo(f"Defaults: {defaults:,} ({defaults / loans:.2%} of loans)")
+    return cells_to_episodes(load_cells(), macro), macro
 
 
 @app.command()
@@ -260,21 +247,26 @@ def fit(
     ] = "interval_censored",
 ) -> None:
     """Fit the model and print its coefficients."""
-    from creditsurv.data.panel import to_interval_censored
-    from creditsurv.data.store import load_panel
+    import logging
+
+    from creditsurv.data.panel import WEIGHT
     from creditsurv.models.aft import Likelihood, coefficient_table, fit_aft
 
-    encoded = to_interval_censored(load_panel())
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # Already encoded: cells_to_episodes writes the interval bounds as it expands,
+    # because the bounds are a function of the cell's age band and its event flag.
+    encoded, _ = _episodes()
     result = fit_aft(
         encoded,
         default_covariates(),
         default_formula(),
         distribution=dist,
         likelihood=Likelihood(likelihood),
+        weights_col=WEIGHT,
     )
     typer.echo(
         f"{result.distribution} / {result.likelihood.value}: "
-        f"{result.n_episodes:,} episodes, {result.n_events:,} defaults, "
+        f"{result.n_episodes:,} cells, {result.n_events:,} defaults, "
         f"AIC {result.aic:,.1f}, {result.elapsed_seconds:.1f}s"
     )
     _echo_table(coefficient_table(result).round(4), index=True)
@@ -283,25 +275,30 @@ def fit(
 @app.command()
 def compare() -> None:
     """Compare distributional forms and test the shape assumption."""
-    from creditsurv.data.panel import to_interval_censored
-    from creditsurv.data.store import load_panel
+    import logging
+
+    from creditsurv.data.panel import WEIGHT
     from creditsurv.models.selection import (
         distribution_comparison,
         marginal_comparison,
         shape_depends_on_covariates,
     )
 
-    panel = load_panel()
-    encoded = to_interval_censored(panel)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    encoded, _ = _episodes()
     covariates = default_covariates()
     formula = default_formula()
 
     typer.echo("Marginal (univariate) fits:")
-    _echo_table(marginal_comparison(panel).round(2))
+    _echo_table(marginal_comparison(encoded, weights_col=WEIGHT).round(2))
     typer.echo("\nRegression fits on identical episodes:")
-    _echo_table(distribution_comparison(encoded, covariates, formula).round(2))
+    _echo_table(distribution_comparison(encoded, covariates, formula, weights_col=WEIGHT).round(2))
     typer.echo("\nDoes the hazard's shape vary with covariates?")
-    _echo_table(shape_depends_on_covariates(encoded, covariates, formula, "fico_s").round(4))
+    _echo_table(
+        shape_depends_on_covariates(
+            encoded, covariates, formula, "fico_s", weights_col=WEIGHT
+        ).round(4)
+    )
 
 
 @app.command()
@@ -325,20 +322,16 @@ def backtest(
     import pandas as pd
 
     from creditsurv.backtest.runner import macro_mode_gap, run_backtest
-    from creditsurv.backtest.splits import as_of_split, walk_forward
-    from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import cells_to_episodes
-    from creditsurv.data.store import load_cells
+    from creditsurv.backtest.splits import split_at, walk_forward
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    macro = load_macro_panel()
-    panel = cells_to_episodes(load_cells(), macro)
+    panel, macro = _episodes()
     reporting_date = pd.Period(as_of, freq="M")
 
     if walk_forward_folds:
         splits = walk_forward(panel, _reporting_dates(panel, walk_forward_folds))
     else:
-        splits = [as_of_split(panel, reporting_date)]
+        splits = [split_at(panel, reporting_date)]
 
     for split in splits:
         typer.echo(str(split.describe()))
@@ -371,33 +364,38 @@ def report(
     loans: Annotated[int, typer.Option(help="Loans to score for the PD report.")] = 500,
 ) -> None:
     """Run the full pipeline and write the reports."""
+    import logging
+
     from creditsurv.backtest.runner import run_backtest
     from creditsurv.backtest.splits import walk_forward
-    from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import at_origination, to_interval_censored
-    from creditsurv.data.store import load_panel
+    from creditsurv.data.panel import WEIGHT
     from creditsurv.models.aft import fit_aft
     from creditsurv.reporting import backtesting, calibration, methodology
 
-    panel = load_panel()
-    macro = load_macro_panel()
-    encoded = to_interval_censored(panel)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    encoded, macro = _episodes()
     covariates = default_covariates()
     formula = default_formula()
     destination = reports_dir()
 
     typer.echo("Fitting...")
-    fitted = fit_aft(encoded, covariates, formula)
+    fitted = fit_aft(encoded, covariates, formula, weights_col=WEIGHT)
 
     typer.echo("Writing methodology report...")
     written = [
-        methodology.generate(panel, encoded, fitted, covariates, formula, reports_dir=destination)
+        methodology.generate(
+            encoded,
+            encoded,
+            fitted,
+            covariates,
+            formula,
+            reports_dir=destination,
+            weights_col=WEIGHT,
+        )
     ]
 
     typer.echo("Writing calibration report...")
-    book = at_origination(panel).head(loans).copy()
-    book["age"] = 0
-    book["period"] = macro.index.max() + 1
+    book = _origination_book(encoded, macro, loans)
     written.append(
         calibration.generate(
             fitted,
@@ -407,12 +405,13 @@ def report(
             [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS],
             reports_dir=destination,
             horizon_months=horizon,
+            weights=book.set_index("loan_id")[WEIGHT],
         )
     )
 
     typer.echo("Running backtest...")
     summary, results = run_backtest(
-        walk_forward(panel, _reporting_dates(panel, folds)),
+        walk_forward(encoded, _reporting_dates(encoded, folds)),
         macro,
         covariates,
         formula,
@@ -423,6 +422,30 @@ def report(
     typer.echo("\nWritten:")
     for path in written:
         typer.echo(f"  {path}")
+
+
+def _origination_book(encoded: pd.DataFrame, macro: pd.DataFrame, size: int) -> pd.DataFrame:
+    """The commonest origination profiles, as a book to be scored from today.
+
+    Calibration asks what the regressors are worth on a book, so the book has to be
+    one that exists. Cells at age zero are exactly the origination profiles the
+    portfolio was written in, and their counts say how much of it each accounts for
+    -- so the largest ``size`` of them, carried with their weights, describe the book
+    far better than the same number of individual loans drawn arbitrarily.
+
+    They are then dated to the present: age zero at the last macro period, which asks
+    what these profiles would be worth if written today rather than replaying the
+    history they were actually written in.
+    """
+    from creditsurv.data.panel import AGE, LOAN_ID, WEIGHT
+
+    book = encoded.loc[encoded[AGE] == 0].nlargest(size, WEIGHT).reset_index(drop=True)
+    book[AGE] = 0
+    book["period"] = macro.index.max() + 1
+    # Named here rather than left to the projection, because the weights have to be
+    # indexed by the same label the scored results come back under.
+    book[LOAN_ID] = [f"row_{index:09d}" for index in range(len(book))]
+    return book
 
 
 if __name__ == "__main__":  # pragma: no cover

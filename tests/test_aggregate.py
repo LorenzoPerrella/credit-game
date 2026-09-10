@@ -337,3 +337,35 @@ def test_channel_is_collapsed_to_a_comparable_binary(tmp_path: Path) -> None:
 
     assert set(cells["channel"]) == {"retail", "third_party"}
     assert int(cells.loc[cells["channel"] == "third_party", "n"].sum()) == 3
+
+
+def test_the_default_formula_only_names_covariates_the_cells_carry() -> None:
+    """The specification and the formula have to agree, or nothing can be fitted.
+
+    A cell is a covariate combination: whatever the key does not carry is not
+    recoverable from it, so a formula naming such a covariate cannot be evaluated at
+    all. The two drifted apart once -- the formula kept five covariates the
+    aggregation had stopped producing -- and the symptom was ``creditsurv fit``
+    failing on real data while every test passed, because the tests used a
+    loan-level panel that carried everything.
+
+    Derived covariates are exempt: they are functions of the key rather than part of
+    it, which is the whole reason they are cheap.
+    """
+    from creditsurv.config import (
+        CATEGORICAL_REFERENCE,
+        ORDINAL,
+        STATIC_CONTINUOUS,
+        TIME_VARYING_CONTINUOUS,
+    )
+    from creditsurv.data.aggregate import DEFAULT_SPEC
+
+    in_key = set(DEFAULT_SPEC.continuous) | set(DEFAULT_SPEC.categorical)
+    #: Rebuilt by cells_to_episodes from the vintage, the age and the macro path.
+    derived = {"cltv_drift", "unemp_gap", "nfci_lagged"}
+
+    modelled = set(STATIC_CONTINUOUS) | set(TIME_VARYING_CONTINUOUS) | set(ORDINAL)
+    modelled |= set(CATEGORICAL_REFERENCE)
+
+    missing = modelled - in_key - derived
+    assert not missing, f"the formula names {sorted(missing)}, which no cell carries"
