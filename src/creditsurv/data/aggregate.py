@@ -49,16 +49,35 @@ DEFAULT_DELINQUENCY: Final = 3
 DEFAULT_ZERO_BALANCE: Final = ("02", "03", "09", "15")
 PREPAYMENT_ZERO_BALANCE: Final = "01"
 
-#: Upper edges of the loan-age bands, in months. Episodes become the intervals
-#: between them rather than single months.
+#: Months per episode. Loan age is collapsed to multiples of this, so an episode
+#: spans ``(k*step, (k+1)*step]``.
 #:
-#: Widening with age on purpose. The hazard moves fastest in the first two years and
-#: flattens afterwards, so fine resolution early costs little and buys the shape,
-#: while a single band covering years eight to twelve loses almost nothing. Measured
-#: on 1999Q1: monthly ages give 12.8 million cells, quarterly gives *exactly the
-#: same* -- because the time-varying covariate moves anyway -- and these bands give
-#: 920 thousand. Age was the wrong lever until it was made coarse enough to matter.
-AGE_BANDS: Final[tuple[int, ...]] = (6, 12, 24, 36, 60, 96, 144)
+#: **Set by how often the covariates move, not by how much it compresses.** The
+#: time-varying covariates come from monthly series -- unemployment, the house price
+#: index, financial conditions -- so an episode that spans more than a month asks the
+#: model to hold constant something the data says changed. Monthly is what the data
+#: supports, so monthly is what this is.
+#:
+#: Measured on 1999Q1, 27.7 million loan-months, with the current specification:
+#:
+#: ===============  ==========  =============  ==================
+#: Episode          Cells       Compression    Whole dataset
+#: ===============  ==========  =============  ==================
+#: **Monthly**        226,229           122x               ~24 M
+#: Quarterly            79,930           347x              ~8.6 M
+#: Half-yearly          42,343           654x              ~4.5 M
+#: ===============  ==========  =============  ==================
+#:
+#: Two earlier versions got this wrong in the same way, by choosing on compression
+#: rather than on the data. The first used bands widening to four years because they
+#: compressed 2,600x -- which asks a model to treat unemployment as constant across
+#: a presidency. The second rested on a measurement taken while a monthly-varying
+#: covariate was still in the grouping key, which made quarterly episodes look no
+#: better than monthly: nothing can collapse on age while a covariate moves
+#: underneath it. With that covariate derived instead of carried, the comparison is
+#: honest, and monthly costs a factor of three against quarterly for a panel that is
+#: tractable either way.
+EPISODE_MONTHS: Final = 1
 
 _STATE_TO_REGION: Final[dict[str, str]] = {}
 for _region, _states in {
@@ -222,10 +241,11 @@ _SOURCE: Final[dict[str, str]] = {
 #:
 #: * ``9`` and ``99`` are "not available" codes, not categories. Folding them into a
 #:   real level -- which an ``ELSE`` branch does silently -- invents data.
-#: * ``channel`` has five values, and ``T`` (third-party origination, not otherwise
-#:   specified) is **24.8% of the book**, larger than ``C`` at 14.4%. Merging the two,
-#:   which the codes invite, would have buried a quarter of the portfolio inside a
-#:   smaller category.
+#: * ``channel`` cannot be used at four levels at all. Until 2008 about half of
+#:   originations are coded ``T`` and broker and correspondent are near zero; from
+#:   2009 ``T`` vanishes and those two absorb it. That is a coding change, not a
+#:   market one, and a model given the four levels reads it as a risk effect. It is
+#:   collapsed to retail against third-party, which is stable across the history.
 #: * ``amortization_type`` and ``interest_only_indicator`` each take exactly **one**
 #:   value across the whole dataset. Dropped rather than modelled.
 #: * ``property_type`` and ``number_of_units`` have long tails below 5%, merged into an
@@ -243,10 +263,18 @@ _CATEGORICAL: Final[dict[str, str]] = {
         "CASE occupancy_status WHEN 'P' THEN 'owner_occupied' "
         "WHEN 'S' THEN 'second_home' WHEN 'I' THEN 'investor' END"
     ),
-    # T stays apart from C: it is a quarter of the book, not a footnote to it.
+    # Retail against everything else, because the finer split is not comparable
+    # across the history. Until 2008 roughly half of originations are coded T,
+    # third-party not otherwise specified, and broker and correspondent are near
+    # zero; from 2009 T vanishes and those two absorb it. That is a change in how
+    # Freddie Mac coded the field, not a change in how loans were sold, and a model
+    # given the four levels would read the coding change as a risk effect. Retail's
+    # own share is stable throughout -- 53.8% in 1999, 57.9% in 2021 -- so the binary
+    # split is the part that means the same thing in every vintage.
     "channel": (
-        "CASE channel WHEN 'R' THEN 'retail' WHEN 'B' THEN 'broker' "
-        "WHEN 'C' THEN 'correspondent' WHEN 'T' THEN 'third_party' END"
+        "CASE channel WHEN 'R' THEN 'retail' "
+        "WHEN 'B' THEN 'third_party' WHEN 'C' THEN 'third_party' "
+        "WHEN 'T' THEN 'third_party' END"
     ),
     "region": "region",
     "first_time_buyer": (
@@ -303,7 +331,7 @@ class CellSpec:
 
     continuous: dict[str, tuple[float, ...]]
     categorical: tuple[str, ...]
-    age_bands: tuple[int, ...] = AGE_BANDS
+    episode_months: int = EPISODE_MONTHS
 
     def validate(self) -> None:
         unknown = set(self.continuous) - set(_SOURCE)
@@ -332,18 +360,21 @@ DEFAULT_SPEC: Final = CellSpec(
 )
 
 
-def _age_band_expression(bands: tuple[int, ...]) -> str:
-    """Render the age bands as SQL, returning the band's lower edge in months.
+def _age_expression(step: int) -> str:
+    """Loan age collapsed to the start of its episode, in months.
 
     The lower edge rather than an index, so the value keeps the units of loan age and
-    the episode bounds can be read straight off it.
+    the episode bounds read straight off it.
     """
-    clauses = []
-    previous = 0
-    for upper in bands:
-        clauses.append(f"WHEN age < {upper} THEN {previous}")
-        previous = upper
-    return f"CASE {' '.join(clauses)} ELSE {previous} END AS age"
+    return f"CAST(age / {step} AS INTEGER) * {step} AS age"
+
+
+def _not_null_filter(spec: CellSpec) -> str:
+    """WHERE clause dropping rows whose categorical mapping came back NULL."""
+    if not spec.categorical:
+        return ""
+    conditions = " AND ".join(f"{name} IS NOT NULL" for name in spec.categorical)
+    return f"WHERE {conditions}"
 
 
 def _select_columns(spec: CellSpec) -> str:
@@ -357,7 +388,7 @@ def _select_columns(spec: CellSpec) -> str:
         _case_expression(_SOURCE[name], edges, name) for name, edges in spec.continuous.items()
     ]
     columns += [f"{_CATEGORICAL[name]} AS {name}" for name in spec.categorical]
-    columns.append(_age_band_expression(spec.age_bands))
+    columns.append(_age_expression(spec.episode_months))
     columns.append("event")
     return ",\n            ".join(columns)
 
@@ -410,6 +441,11 @@ def _cells_for_quarter(
     )
     SELECT '{vintage}' AS vintage, *, COUNT(*) AS n
     FROM classed
+    -- A categorical that mapped to NULL is a code nobody has looked at. The loan is
+    -- dropped rather than aggregated into a NULL level, for the same reason a loan
+    -- with no credit score is dropped: it cannot be modelled, and imputing the
+    -- category would invent the thing being measured.
+    {_not_null_filter(spec)}
     GROUP BY ALL
     """
     frame: pd.DataFrame = connection.execute(query, [perf_path, orig_path]).df()

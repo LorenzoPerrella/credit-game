@@ -260,19 +260,18 @@ def cells_to_episodes(
     macro: pd.DataFrame,
     *,
     lag_months: int = 3,
-    max_age: int = MAX_AGE_MONTHS,
 ) -> pd.DataFrame:
     """Turn aggregated cells into weighted episodes the fitter can read.
 
-    Cells carry a loan age *band* rather than a month, so episodes are the intervals
-    between band edges rather than single months. The encoding is unchanged — that is
-    the point of stating it in terms of bounds rather than months in the first place:
-    a survivor contributes ``log[S(stop)/S(start)]`` and a default
-    ``log[1 - S(stop)/S(start)]`` whatever the width of the interval.
+    Cells carry the start of a fixed-width episode rather than a single month, so an
+    episode spans ``(start, start + step]``. The encoding is unchanged — that is the
+    point of stating it in terms of bounds rather than months: a survivor contributes
+    ``log[S(stop)/S(start)]`` and a default ``log[1 - S(stop)/S(start)]`` whatever the
+    width of the interval, which is the same conditional-survival construction a
+    monthly panel uses.
 
-    Band edges are read off the data rather than passed in. The ``age`` column holds
-    each band's lower edge, so the distinct values *are* the edges, and deriving them
-    means a cell table can never disagree with the bands it was built with.
+    The width is read off the data rather than passed in, so a cell table can never
+    disagree with the width it was built with.
 
     Macro covariates are recomputed here from vintage and age, which is why they were
     kept out of the grouping key: ``period = vintage + age``, so nothing was lost by
@@ -286,13 +285,14 @@ def cells_to_episodes(
         raise PanelValidationError(message)
 
     episodes = cells.copy()
-    edges = sorted(int(edge) for edge in episodes[AGE].unique())
-    # Each band runs to the next edge; the last one runs to the horizon.
-    upper_of = dict(pairwise(edges))
-    upper_of[edges[-1]] = max_age
+    # Episodes are fixed width, so the stop is the start plus the step. The step is
+    # read off the data -- the spacing of the distinct ages -- so a cell table can
+    # never disagree with the width it was built with.
+    ages = sorted(int(age) for age in episodes[AGE].unique())
+    step = min((b - a) for a, b in pairwise(ages)) if len(ages) > 1 else 1
 
     episodes[AGE_START] = episodes[AGE].astype(float)
-    episodes[AGE_STOP] = episodes[AGE].map(upper_of).astype(float)
+    episodes[AGE_STOP] = episodes[AGE_START] + float(step)
 
     quarter = episodes["vintage"].str.extract(r"(\d{4})Q(\d)")
     orig_month = quarter[0].astype(int) * 12 + (quarter[1].astype(int) - 1) * 3

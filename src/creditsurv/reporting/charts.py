@@ -281,3 +281,161 @@ def backtest_discrimination(summary: pd.DataFrame, path: Path) -> Path:
     )
     axis.legend(frameon=False, fontsize=9, labelcolor=INK_MUTED, loc="lower right")
     return _save(figure, path)
+
+
+# --------------------------------------------------------------------------------------
+# Portfolio description
+# --------------------------------------------------------------------------------------
+
+
+def _timeline(axis: Axes, periods: pd.Series) -> np.ndarray:
+    """Monthly periods as a numeric axis matplotlib can draw."""
+    del axis
+    return np.asarray([p.year + (p.month - 1) / 12 for p in periods], dtype=float)
+
+
+def outstanding_book(table: pd.DataFrame, path: Path) -> Path:
+    """Contracts and balance outstanding, in two panels.
+
+    Two panels rather than two y-axes. A count and a currency amount share no scale,
+    and a dual axis would let the choice of scales decide how related they appear.
+    """
+    figure, (top, bottom) = plt.subplots(2, 1, figsize=(8.4, 5.4), sharex=True, facecolor=SURFACE)
+    time = _timeline(top, table["period"])
+
+    top.set_facecolor(SURFACE)
+    top.plot(time, table["contracts"] / 1e6, color=SERIES[0], linewidth=_LINE_WIDTH)
+    _style(top, title="Contracts outstanding", xlabel="", ylabel="Millions of loans")
+
+    bottom.set_facecolor(SURFACE)
+    bottom.plot(time, table["balance"] / 1e12, color=SERIES[1], linewidth=_LINE_WIDTH)
+    _style(bottom, title="Unpaid balance", xlabel="Year", ylabel="USD trillions")
+
+    figure.tight_layout()
+    return _save(figure, path)
+
+
+def new_lending(table: pd.DataFrame, path: Path) -> Path:
+    """New loans written each month, by count and by amount."""
+    figure, (top, bottom) = plt.subplots(2, 1, figsize=(8.4, 5.4), sharex=True, facecolor=SURFACE)
+    time = _timeline(top, table["period"])
+
+    top.set_facecolor(SURFACE)
+    top.fill_between(time, table["loans"] / 1e3, color=SERIES[0], alpha=0.75, linewidth=0)
+    _style(top, title="Loans originated per month", xlabel="", ylabel="Thousands")
+
+    bottom.set_facecolor(SURFACE)
+    bottom.fill_between(time, table["amount"] / 1e9, color=SERIES[1], alpha=0.75, linewidth=0)
+    _style(bottom, title="Amount originated per month", xlabel="Year", ylabel="USD billions")
+
+    figure.tight_layout()
+    return _save(figure, path)
+
+
+def underwriting_over_time(table: pd.DataFrame, path: Path) -> Path:
+    """Median and interquartile range of the underwriting covariates, by vintage.
+
+    Distribution and drift in one figure: the band is who was being lent to, the line
+    is the middle of the book. A median that moves is a change in what was written.
+    """
+    figure, axes = plt.subplots(3, 1, figsize=(8.0, 7.0), sharex=True, facecolor=SURFACE)
+    years = table["year"].astype(int).to_numpy()
+
+    for axis, (name, label, colour) in zip(
+        axes,
+        (
+            ("score", "Credit score", SERIES[0]),
+            ("ltv", "Loan-to-value (%)", SERIES[1]),
+            ("dti", "Debt-to-income (%)", SERIES[2]),
+        ),
+        strict=True,
+    ):
+        axis.set_facecolor(SURFACE)
+        axis.fill_between(
+            years,
+            table[f"{name}_q25"],
+            table[f"{name}_q75"],
+            color=colour,
+            alpha=0.20,
+            linewidth=0,
+        )
+        axis.plot(years, table[f"{name}_q50"], color=colour, linewidth=_LINE_WIDTH)
+        _style(axis, title=label, xlabel="", ylabel="")
+
+    axes[-1].set_xlabel("Vintage year", color=INK_MUTED, fontsize=9)
+    figure.tight_layout()
+    return _save(figure, path)
+
+
+def origination_mix_over_time(table: pd.DataFrame, path: Path, *, title: str) -> Path:
+    """Share of new lending by category and year, stacked.
+
+    A mix that moves is the reason a model fitted on one decade can mislead about
+    another, and it is worth seeing before the coefficients rather than after.
+    """
+    wide = table.pivot(index="year", columns="level", values="share").fillna(0.0)
+    figure, axis = plt.subplots(figsize=(8.4, 4.0), facecolor=SURFACE)
+    axis.set_facecolor(SURFACE)
+
+    colours = [SERIES[i % len(SERIES)] for i in range(len(wide.columns))]
+    axis.stackplot(
+        wide.index.astype(int),
+        *[wide[column].to_numpy() for column in wide.columns],
+        labels=[str(column) for column in wide.columns],
+        colors=colours,
+        edgecolor=SURFACE,
+        linewidth=0.6,
+    )
+
+    _style(axis, title=title, xlabel="Vintage year", ylabel="Share of loans written")
+    axis.set_ylim(0, 1)
+    axis.legend(frameon=False, fontsize=8.5, labelcolor=INK_MUTED, loc="lower left", ncols=3)
+    return _save(figure, path)
+
+
+def default_rate_and_unemployment(defaults: pd.DataFrame, macro: pd.DataFrame, path: Path) -> Path:
+    """Realised default hazard beside unemployment, in two panels.
+
+    The whole argument for a time-varying model in one figure — provided the two are
+    not forced onto a shared frame, where the scales would be doing the arguing.
+    """
+    figure, (top, bottom) = plt.subplots(2, 1, figsize=(8.4, 5.4), sharex=True, facecolor=SURFACE)
+
+    time = _timeline(top, defaults["period"])
+    top.set_facecolor(SURFACE)
+    top.plot(time, defaults["default_rate"] * 10000, color=SERIES[1], linewidth=_LINE_WIDTH)
+    _style(top, title="Realised monthly default rate", xlabel="", ylabel="Basis points")
+
+    macro_time = np.asarray([p.year + (p.month - 1) / 12 for p in macro.index], dtype=float)
+    bottom.set_facecolor(SURFACE)
+    bottom.plot(
+        macro_time, macro["unemployment_rate"].to_numpy(), color=SERIES[0], linewidth=_LINE_WIDTH
+    )
+    _style(bottom, title="Unemployment rate", xlabel="Year", ylabel="Percent")
+
+    figure.tight_layout()
+    return _save(figure, path)
+
+
+def macro_panel(macro: pd.DataFrame, path: Path) -> Path:
+    """The macroeconomic series the model reads, one panel each."""
+    columns = [c for c in ("unemployment_rate", "hpi", "mortgage_rate_30y", "nfci") if c in macro]
+    figure, axes = plt.subplots(
+        len(columns), 1, figsize=(8.0, 1.7 * len(columns) + 1.0), sharex=True, facecolor=SURFACE
+    )
+    time = np.asarray([p.year + (p.month - 1) / 12 for p in macro.index], dtype=float)
+
+    labels = {
+        "unemployment_rate": "Unemployment rate (%)",
+        "hpi": "House price index (Jan 2000 = 100)",
+        "mortgage_rate_30y": "30-year mortgage rate (%)",
+        "nfci": "Financial conditions (0 = average)",
+    }
+    for axis, name in zip(np.atleast_1d(axes), columns, strict=True):
+        axis.set_facecolor(SURFACE)
+        axis.plot(time, macro[name].to_numpy(), color=SERIES[0], linewidth=_LINE_WIDTH)
+        _style(axis, title=labels.get(name, name), xlabel="", ylabel="")
+
+    np.atleast_1d(axes)[-1].set_xlabel("Year", color=INK_MUTED, fontsize=9)
+    figure.tight_layout()
+    return _save(figure, path)
