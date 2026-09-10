@@ -14,17 +14,21 @@ import pandas as pd
 import pytest
 
 from creditsurv.backtest.metrics import (
+    actual_versus_expected,
     brier_score,
     calibration_slope_intercept,
     calibration_table,
     discrimination,
     population_stability_index,
     stability_report,
+    weighted_calibration,
+    weighted_gini,
 )
 from creditsurv.backtest.runner import MacroMode, macro_mode_gap, run_backtest, run_split
 from creditsurv.backtest.splits import (
     as_of_split,
     assert_no_lookahead,
+    cell_split,
     out_of_sample,
     out_of_time,
     walk_forward,
@@ -298,3 +302,112 @@ def test_a_fold_with_no_defaults_is_reported_not_raised(
     for result in results:
         if not result.metrics:
             assert result.error, "a fold that produced nothing must say why"
+
+
+# --------------------------------------------------------------------------------------
+# Aggregated panels
+# --------------------------------------------------------------------------------------
+
+
+def _cells() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "period": pd.PeriodIndex(
+                ["2023-06", "2023-12", "2024-06", "2024-12", "2025-06"], freq="M"
+            ),
+            "age": [0, 6, 12, 24, 36],
+            "event": [False, True, False, True, False],
+            "n": [1000, 10, 900, 8, 700],
+        }
+    )
+
+
+def test_cell_split_divides_on_calendar_time() -> None:
+    """Aggregated cells have no loan identifier -- that is what aggregating means --
+    so the loan-level split does not apply."""
+    split = cell_split(_cells(), pd.Period("2024-06", freq="M"))
+
+    assert (split.train["period"] <= pd.Period("2024-06", freq="M")).all()
+    assert (split.test["period"] > pd.Period("2024-06", freq="M")).all()
+    assert len(split.train) == 3
+
+
+def test_cell_split_reports_exposure_not_loans() -> None:
+    """Exposure is the quantity both panel shapes can report, and the one a backtest
+    is actually sized by."""
+    described = cell_split(_cells(), pd.Period("2024-06", freq="M")).describe()
+
+    assert described["train_loan_months"] == 1910
+    assert described["test_loan_months"] == 708
+
+
+def test_cell_split_rejects_a_date_before_the_data() -> None:
+    with pytest.raises(ValueError, match="No exposure"):
+        cell_split(_cells(), pd.Period("2000-01", freq="M"))
+
+
+def test_weighted_gini_rewards_a_correct_ordering() -> None:
+    """A cell is not a subject, so a concordance index has no pairs to form. The
+    Lorenz curve asks the equivalent question of the data that does exist."""
+    exposure = pd.Series([1000.0] * 4)
+    events = pd.Series([40.0, 20.0, 10.0, 5.0])
+    good = pd.Series([0.04, 0.02, 0.01, 0.005])
+    reversed_order = pd.Series([0.005, 0.01, 0.02, 0.04])
+
+    assert weighted_gini(good, events, exposure) > 0.3
+    assert weighted_gini(reversed_order, events, exposure) < 0
+
+
+def test_weighted_gini_is_zero_without_ordering() -> None:
+    exposure = pd.Series([1000.0] * 4)
+    events = pd.Series([20.0] * 4)
+
+    assert weighted_gini(pd.Series([0.01, 0.02, 0.03, 0.04]), events, exposure) == pytest.approx(
+        0.0, abs=1e-9
+    )
+
+
+def test_weighted_gini_is_undefined_without_events() -> None:
+    exposure = pd.Series([1000.0, 1000.0])
+    events = pd.Series([0.0, 0.0])
+
+    assert np.isnan(weighted_gini(pd.Series([0.01, 0.02]), events, exposure))
+
+
+def test_weighted_calibration_buckets_by_exposure() -> None:
+    """Buckets are weighted so each is a comparable slice of the book, not of the
+    cell table -- which is an artefact of the binning."""
+    predicted = pd.Series(np.linspace(0.001, 0.05, 100))
+    exposure = pd.Series(np.full(100, 1000.0))
+    events = predicted * exposure
+
+    table = weighted_calibration(predicted, events, exposure, n_buckets=5)
+
+    assert len(table) == 5
+    assert table["expected_rate"].is_monotonic_increasing
+    assert int(table["loan_months"].sum()) == 100_000
+    assert np.allclose(table["ratio"], 1.0, atol=0.05)
+
+
+def test_actual_versus_expected_flags_under_prediction() -> None:
+    """Above one the model under-predicts; below one it over-predicts."""
+    frame = pd.DataFrame(
+        {
+            "predicted": [0.01, 0.01],
+            "events": [20.0, 5.0],
+            "exposure": [1000.0, 1000.0],
+            "vintage": ["2006", "2012"],
+        }
+    )
+
+    table = actual_versus_expected(
+        frame["predicted"], frame["events"], frame["exposure"], frame["vintage"]
+    ).set_index("group")
+
+    assert cell(table, "2006", "actual_over_expected") == pytest.approx(2.0)
+    assert cell(table, "2012", "actual_over_expected") == pytest.approx(0.5)
+
+
+def cell(frame: pd.DataFrame, row: object, column: str) -> float:
+    """Read one numeric cell by label; pandas-stubs cannot narrow a label lookup."""
+    return float(frame.loc[frame.index == row, column].to_numpy(dtype=float)[0])

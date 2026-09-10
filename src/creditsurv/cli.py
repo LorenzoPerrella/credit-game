@@ -205,23 +205,45 @@ def compare() -> None:
 
 @app.command()
 def backtest(
-    horizon: Annotated[int, typer.Option(help="Months to predict forward.")] = 12,
-    folds: Annotated[int, typer.Option(help="Number of walk-forward reporting dates.")] = 3,
+    as_of: Annotated[str, typer.Option(help="Reporting date, e.g. 2024-12.")] = "2024-12",
+    horizon: Annotated[int, typer.Option(help="Months to predict forward.")] = 24,
+    walk_forward_folds: Annotated[
+        int, typer.Option(help="Repeat at several dates instead of one.")
+    ] = 0,
 ) -> None:
-    """Run the walk-forward backtest under both macro modes."""
-    from creditsurv.backtest.runner import macro_mode_gap, run_backtest
-    from creditsurv.backtest.splits import walk_forward
-    from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.store import load_panel
+    """Backtest at a single reporting date, or walk forward across several.
 
-    panel = load_panel()
+    One date by default, and a late one. Everything up to it trains the model, which
+    is the point: a credit model wants every loan-month it can get, and holding back
+    a decade to see the same result at four dates is a poor trade. The walk-forward
+    is still there for when the question is whether a result held across regimes
+    rather than what the model can do.
+    """
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.backtest.runner import macro_mode_gap, run_backtest
+    from creditsurv.backtest.splits import as_of_split, walk_forward
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.panel import cells_to_episodes
+    from creditsurv.data.store import load_cells
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     macro = load_macro_panel()
+    panel = cells_to_episodes(load_cells(), macro)
+    reporting_date = pd.Period(as_of, freq="M")
+
+    if walk_forward_folds:
+        splits = walk_forward(panel, _reporting_dates(panel, walk_forward_folds))
+    else:
+        splits = [as_of_split(panel, reporting_date)]
+
+    for split in splits:
+        typer.echo(str(split.describe()))
+
     summary, _ = run_backtest(
-        walk_forward(panel, _reporting_dates(panel, folds)),
-        macro,
-        default_covariates(),
-        default_formula(),
-        horizon_months=horizon,
+        splits, macro, default_covariates(), default_formula(), horizon_months=horizon
     )
     _echo_table(summary.round(4))
     typer.echo("\nCalibration gap between macro modes:")

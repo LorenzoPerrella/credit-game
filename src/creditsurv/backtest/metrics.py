@@ -197,3 +197,109 @@ def stability_report(
         ).astype(str),
     )
     return table
+
+
+# --------------------------------------------------------------------------------------
+# Metrics for an aggregated panel
+# --------------------------------------------------------------------------------------
+
+
+def weighted_calibration(
+    predicted: pd.Series,
+    observed: pd.Series,
+    exposure: pd.Series,
+    *,
+    n_buckets: int = 10,
+) -> pd.DataFrame:
+    """Predicted against realised default rate, by bucket of predicted risk.
+
+    The aggregated counterpart of :func:`calibration_table`. Both quantities are
+    hazards over exposure rather than shares of loans, and buckets are weighted by
+    exposure so a bucket is a comparable slice of the book rather than of the cell
+    table.
+    """
+    frame = pd.DataFrame(
+        {
+            "predicted": predicted.to_numpy(dtype=float),
+            "events": observed.to_numpy(dtype=float),
+            "exposure": exposure.to_numpy(dtype=float),
+        }
+    ).sort_values("predicted")
+
+    cumulative = frame["exposure"].cumsum()
+    frame["bucket"] = np.minimum(
+        (cumulative / frame["exposure"].sum() * n_buckets).astype(int), n_buckets - 1
+    )
+
+    grouped = frame.groupby("bucket", observed=True).agg(
+        loan_months=("exposure", "sum"),
+        events=("events", "sum"),
+        expected_rate=("predicted", "mean"),
+    )
+    grouped["actual_rate"] = grouped["events"] / grouped["loan_months"]
+    grouped["ratio"] = np.where(
+        grouped["expected_rate"] > 0, grouped["actual_rate"] / grouped["expected_rate"], np.nan
+    )
+    return grouped.reset_index()
+
+
+def weighted_gini(predicted: pd.Series, observed: pd.Series, exposure: pd.Series) -> float:
+    """Discrimination on an aggregated panel, from the Lorenz curve.
+
+    An aggregated panel has no loans to rank, so a concordance index is not
+    available: it needs pairs of subjects, and a cell is not a subject. The
+    exposure-weighted Lorenz curve asks the equivalent question of the data that does
+    exist -- order the cells by predicted risk, and see how much of the realised
+    default falls in the riskiest slice of exposure.
+
+    Returns twice the area between that curve and the diagonal, so it lands on the
+    same 0-to-1 scale as a Gini from a concordance index, and means the same thing:
+    zero is no ordering, one is perfect.
+    """
+    frame = pd.DataFrame(
+        {
+            "predicted": predicted.to_numpy(dtype=float),
+            "events": observed.to_numpy(dtype=float),
+            "exposure": exposure.to_numpy(dtype=float),
+        }
+    ).sort_values("predicted", ascending=False)
+
+    total_events = float(frame["events"].sum())
+    total_exposure = float(frame["exposure"].sum())
+    if total_events <= 0 or total_exposure <= 0:
+        return float("nan")
+
+    share_exposure = np.concatenate([[0.0], (frame["exposure"].cumsum() / total_exposure)])
+    share_events = np.concatenate([[0.0], (frame["events"].cumsum() / total_events)])
+
+    area = float(np.trapezoid(share_events, share_exposure))
+    return 2.0 * area - 1.0
+
+
+def actual_versus_expected(
+    predicted: pd.Series,
+    observed: pd.Series,
+    exposure: pd.Series,
+    by: pd.Series,
+) -> pd.DataFrame:
+    """Realised against predicted default, grouped by anything.
+
+    Usually by vintage or by reporting period. The single number a credit committee
+    reads is the ratio: above one the model under-predicts, below one it
+    over-predicts.
+    """
+    frame = pd.DataFrame(
+        {
+            "group": by.to_numpy(),
+            "expected": predicted.to_numpy(dtype=float) * exposure.to_numpy(dtype=float),
+            "events": observed.to_numpy(dtype=float),
+            "exposure": exposure.to_numpy(dtype=float),
+        }
+    )
+    grouped = frame.groupby("group", observed=True)[["expected", "events", "exposure"]].sum()
+    grouped["expected_rate"] = grouped["expected"] / grouped["exposure"]
+    grouped["actual_rate"] = grouped["events"] / grouped["exposure"]
+    grouped["actual_over_expected"] = np.where(
+        grouped["expected"] > 0, grouped["events"] / grouped["expected"], np.nan
+    )
+    return grouped.reset_index()
