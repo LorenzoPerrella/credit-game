@@ -20,13 +20,34 @@ _DATA_DIR_ENV: Final = "CREDITSURV_DATA_DIR"
 _REPORTS_DIR_ENV: Final = "CREDITSURV_REPORTS_DIR"
 
 
+#: Files that mark the root of a source checkout.
+_ROOT_MARKERS: Final = ("pyproject.toml", ".git")
+
+
+def project_root() -> Path:
+    """The checkout root, or the working directory when there is not one.
+
+    Walks up from the working directory looking for a marker. Without this, running
+    from a subdirectory silently resolves ``data/`` relative to wherever the process
+    happened to start -- a notebook in ``notebooks/`` looks for
+    ``notebooks/data/processed`` and reports the panel as missing when it is sitting
+    one level up.
+    """
+    current = Path.cwd().resolve()
+    for candidate in (current, *current.parents):
+        if any((candidate / marker).exists() for marker in _ROOT_MARKERS):
+            return candidate
+    return current
+
+
 def data_dir() -> Path:
     """Root for cached downloads and generated panels.
 
-    Resolved at call time from the working directory so the package behaves the same
-    whether it is run from a source checkout or installed as a wheel.
+    Resolved at call time rather than at import, so an environment variable set by a
+    test or a notebook takes effect without reimporting the package.
     """
-    return Path(os.environ.get(_DATA_DIR_ENV, Path.cwd() / "data"))
+    override = os.environ.get(_DATA_DIR_ENV)
+    return Path(override) if override else project_root() / "data"
 
 
 def raw_dir() -> Path:
@@ -41,7 +62,8 @@ def processed_dir() -> Path:
 
 def reports_dir() -> Path:
     """Generated figures and numeric tables."""
-    return Path(os.environ.get(_REPORTS_DIR_ENV, Path.cwd() / "reports"))
+    override = os.environ.get(_REPORTS_DIR_ENV)
+    return Path(override) if override else project_root() / "reports"
 
 
 # --------------------------------------------------------------------------------------
