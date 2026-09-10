@@ -11,11 +11,13 @@ The Freddie Mac Single-Family Loan-Level Dataset ships as one zip per vintage ye
 pipe-delimited files — `orig_YYYYQn.txt` with 31 fields, one row per loan, and
 `perf_YYYYQn.txt` with 35 fields, one row per loan-month.
 
-| | |
+| | Measured |
 |---|---|
-| Archives | 28 vintage years, 40 GB compressed |
-| Extracted | roughly 245 GB |
-| Performance rows | on the order of 1.75 billion |
+| Archives | 28 vintage years (1999–2026), 40 GB compressed |
+| Quarters | 107 |
+| Loans | **48,827,197** |
+| Loan-months | **2,876,284,955** |
+| Parquet after ingest | 17 GB |
 | Machine | 8 cores, 16 GB RAM |
 
 Nothing about that fits in memory, and re-parsing it on every run would be
@@ -49,8 +51,8 @@ discarded fields are never materialised. Two groups are dropped deliberately:
 | `postal_code`, `seller_name`, `msa` | High cardinality, no signal for a default model at this granularity |
 
 **Measured, not estimated:** 2024Q1 is 4.9 million rows in 4.8 seconds. 500 MB of
-text becomes 28 MB of parquet — about eighteen-fold. Extrapolated over the dataset:
-roughly half an hour, roughly 10 GB.
+text becomes 28 MB of parquet — about eighteen-fold. Over the whole dataset: 2.88
+billion rows, 17 GB of parquet.
 
 The stage is **idempotent**. A quarter whose parquet already exists is skipped, so an
 interrupted run costs only the quarter it was in the middle of.
@@ -146,10 +148,55 @@ Cut points live in `BIN_EDGES` in `src/creditsurv/features.py`.
 key    = coarse-classed continuous covariates
        × categorical covariates
        × vintage quarter
-       × loan age
+       × loan age band
        × event
 weight = COUNT(*) AS n
 ```
+
+Quarters are aggregated **one at a time**. Every loan appears in exactly one
+quarter's files — verified rather than assumed: the identifiers of 1999Q1 and 1999Q2
+do not intersect at all — so a quarter can be collapsed on its own and the results
+concatenated, which keeps memory flat.
+
+The alternative was tried first. Grouping all quarters at once builds one hash table
+over hundreds of millions of loan identifiers; DuckDB spilled **20 GB into the
+working tree** before it was stopped. The connection now also points its temporary
+directory outside the repository.
+
+### Age bands, and the measurement that chose them
+
+Episodes are the intervals between age bands rather than single months. The bands
+widen with age on purpose: the hazard moves fastest in the first two years and
+flattens afterwards, so fine resolution early costs little and buys the shape, while
+a single band covering years eight to twelve loses almost nothing.
+
+`AGE_BANDS = (6, 12, 24, 36, 60, 96, 144)`
+
+This was chosen by measurement, on 1999Q1 (27.7 million loan-months):
+
+| Specification | Cells | Compression |
+|---|---|---|
+| 9 continuous + 9 categorical, **monthly** ages | 12,752,331 | 2.2× |
+| same, **quarterly** ages | 12,752,331 | **2.2×** |
+| same, **banded** ages | 919,634 | 30.1× |
+| 4 coarse continuous + 3 categorical, banded | **14,221** | **1,948×** |
+
+Two things in that table are worth reading twice.
+
+**Quarterly ages compress exactly as badly as monthly ones.** The obvious lever does
+nothing, because a time-varying covariate changes band anyway — collapsing on age
+alone buys nothing while another key still moves. Only bands wide enough to swallow
+the long flat tail of the hazard help.
+
+**The specification *is* the cardinality.** Cell count is the product of every
+covariate's band count, so the choice of covariates decides whether the result fits
+at all. Aggregating on everything available and selecting variables afterwards is the
+wrong order, and produced a table of roughly a billion cells on the first attempt.
+Variable selection comes first; the aggregation is parameterised by `CellSpec` so
+that its output can follow.
+
+On the full dataset the default specification collapses a 65-million-row quarter into
+about 23,000 cells — roughly 2,800× — for something near 2 million cells in total.
 
 **The macro series are deliberately absent from the key.** Since
 `period = orig_period + age`, unemployment, house prices and financial conditions are
