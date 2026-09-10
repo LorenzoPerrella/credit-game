@@ -79,7 +79,7 @@ class Report:
         return self
 
     def figure(self, path: Path, alt: str, *, caption: str = "") -> Report:
-        # Reports live in reports/ and figures in reports/figures/, so a path
+        # Reports live in docs/reports/ and figures in docs/reports/figures/, so a path
         # relative to the report file survives being moved or served elsewhere.
         self._parts.append(f"![{alt}]({path.parent.name}/{path.name})")
         if caption:

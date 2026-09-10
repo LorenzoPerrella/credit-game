@@ -43,7 +43,7 @@ structure. A Cox model gives none of the three.
 
 Fitted on 10,000 loans and 429,945 loan-months against real FRED history.
 
-![Fitted survival against Kaplan-Meier](reports/figures/survival_vs_km.png)
+![Fitted survival against Kaplan-Meier](docs/reports/figures/survival_vs_km.png)
 
 | | |
 |---|---|
@@ -60,8 +60,8 @@ The strongest covariates, as change in 12-month PD per one standard deviation:
 mark-to-market leverage **+0.25pp**, credit score **−0.19pp**, unemployment gap
 **+0.14pp** — the ordering mortgage credit expects.
 
-**Full reports:** [methodology](reports/methodology.md) ·
-[calibration](reports/calibration.md) · [backtesting](reports/backtesting.md) ·
+**Full reports:** [methodology](docs/reports/methodology.md) ·
+[calibration](docs/reports/calibration.md) · [backtesting](docs/reports/backtesting.md) ·
 [data dictionary](docs/data_dictionary.md)
 
 ---
@@ -75,7 +75,7 @@ uv run creditsurv build-data --n-loans 10000 --seed 42
 uv run creditsurv fit
 uv run creditsurv compare                              # distribution selection
 uv run creditsurv backtest --folds 4 --horizon 24
-uv run creditsurv report                               # writes reports/
+uv run creditsurv report                               # writes docs/reports/
 ```
 
 Python ≥3.11 (lifelines requires it); `uv` manages the toolchain.

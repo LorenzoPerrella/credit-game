@@ -109,12 +109,12 @@ jobs:
       - name: Check the reports were written
         run: |
           for name in methodology calibration backtesting; do
-            test -s "reports/$name.md" || { echo "missing reports/$name.md"; exit 1; }
+            test -s "docs/reports/$name.md" || { echo "missing docs/reports/$name.md"; exit 1; }
           done
-          test -d reports/figures && test "$(ls -1 reports/figures | wc -l)" -ge 4
+          test -d docs/reports/figures && test "$(ls -1 docs/reports/figures | wc -l)" -ge 4
 
       - name: Upload reports
         uses: actions/upload-artifact@v7
         with:
           name: reports
-          path: reports/
+          path: docs/reports/

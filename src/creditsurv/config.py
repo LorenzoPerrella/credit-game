@@ -61,9 +61,14 @@ def processed_dir() -> Path:
 
 
 def reports_dir() -> Path:
-    """Generated figures and numeric tables."""
+    """Generated figures and numeric tables.
+
+    Under ``docs/`` alongside the hand-written documentation. Splitting narrative
+    from generated output across two top-level directories cost more than it
+    explained: a reader looking for "the documentation" should find one place.
+    """
     override = os.environ.get(_REPORTS_DIR_ENV)
-    return Path(override) if override else project_root() / "reports"
+    return Path(override) if override else project_root() / "docs" / "reports"
 
 
 # --------------------------------------------------------------------------------------
