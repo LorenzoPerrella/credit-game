@@ -1,7 +1,7 @@
 """Command line interface.
 
 Each command does one thing and says what it found. ``report`` runs the whole
-pipeline and writes the documents in ``reports/``.
+pipeline and writes the documents in ``docs/reports/``.
 
 Fitted models are deliberately not persisted between commands. Pickling a lifelines
 fitter couples the artefact to the installed version of several libraries, and a

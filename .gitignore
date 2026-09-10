@@ -24,10 +24,14 @@ htmlcov/
 # Notebooks
 .ipynb_checkpoints/
 
-# Data: cached downloads and generated panels are reproducible, never committed.
-# See docs/data_dictionary.md for how to regenerate them.
-# Anchored to the root: an unanchored `data/` also matches src/creditsurv/data/.
-/data/
+# Data: downloads, extracted parquet and generated panels. Reproducible from
+# `creditsurv ingest`; see docs/data_preparation.md.
+#
+# Unanchored so it catches a stray data/ directory at any depth -- a notebook run
+# from notebooks/ creates its cache there, and an anchored rule silently let those
+# parquet files into a commit. The package's own data module is excluded by name.
+data/
+!src/creditsurv/data/
 
 # OS
 .DS_Store
