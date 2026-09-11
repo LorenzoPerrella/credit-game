@@ -254,32 +254,42 @@ def scenario_comparison(pds: pd.DataFrame, path: Path) -> Path:
     return _save(figure, path)
 
 
-def backtest_discrimination(summary: pd.DataFrame, path: Path) -> Path:
-    """Concordance by reporting date, one series per macro mode."""
-    figure, axis = plt.subplots(figsize=(7.2, 4.0), facecolor=SURFACE)
-    axis.set_facecolor(SURFACE)
+def backtest_over_time(table: pd.DataFrame, path: Path) -> Path:
+    """Predicted against realised default rate, month by month of the test window.
 
-    for slot, (mode, rows) in enumerate(summary.groupby("macro_mode", observed=True)):
-        axis.plot(
-            rows["as_of"],
-            rows["concordance"],
-            marker="o",
-            markersize=_MARKER_SIZE,
-            linewidth=_LINE_WIDTH,
-            color=SERIES[slot % len(SERIES)],
-            label=str(mode).capitalize(),
-            markeredgecolor=SURFACE,
-            markeredgewidth=1.2,
-        )
-
-    axis.axhline(0.5, color=INK_MUTED, linewidth=1.0, linestyle=(0, (3, 3)))
-    _style(
-        axis,
-        title="Discrimination by reporting date",
-        xlabel="Reporting date",
-        ylabel="Concordance",
+    The one picture the whole backtest reduces to. Two series on one axis because
+    both are monthly hazards in the same units -- which is the case a shared axis is
+    actually for, and the gap between them is the result.
+    """
+    figure, (top, bottom) = plt.subplots(
+        2, 1, figsize=(8.4, 5.2), sharex=True, facecolor=SURFACE, height_ratios=[2, 1]
     )
-    axis.legend(frameon=False, fontsize=9, labelcolor=INK_MUTED, loc="lower right")
+    time = _timeline(top, table["group"])
+
+    top.set_facecolor(SURFACE)
+    top.plot(
+        time,
+        table["expected_rate"] * 1e4,
+        color=SERIES[0],
+        linewidth=_LINE_WIDTH,
+        label="Predicted",
+    )
+    top.plot(
+        time,
+        table["actual_rate"] * 1e4,
+        color=SERIES[1],
+        linewidth=_LINE_WIDTH,
+        label="Realised",
+    )
+    _style(top, title="Monthly default rate over the test window", xlabel="", ylabel="Basis points")
+    top.legend(frameon=False, fontsize=9, labelcolor=INK_MUTED, loc="upper left")
+
+    bottom.set_facecolor(SURFACE)
+    bottom.plot(time, table["actual_over_expected"], color=SERIES[2], linewidth=_LINE_WIDTH)
+    bottom.axhline(1.0, color=INK_MUTED, linewidth=1.0, linestyle=(0, (3, 3)))
+    _style(bottom, title="", xlabel="Month", ylabel="Actual / expected")
+
+    figure.tight_layout()
     return _save(figure, path)
 
 

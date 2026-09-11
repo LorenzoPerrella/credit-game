@@ -1,7 +1,7 @@
-"""Tests for splits, metrics and the backtest runner.
+"""Tests for the split, the metrics and the backtest runner.
 
-The split tests matter most. A leaking split produces excellent numbers and no
-error, so the absence of look-ahead is asserted structurally rather than trusted.
+The split test matters most. A leaking split produces excellent numbers and no error,
+so the absence of look-ahead is asserted structurally rather than trusted.
 """
 
 from __future__ import annotations
@@ -15,24 +15,14 @@ import pytest
 
 from creditsurv.backtest.metrics import (
     actual_versus_expected,
-    brier_score,
-    calibration_slope_intercept,
-    calibration_table,
-    discrimination,
     population_stability_index,
     stability_report,
     weighted_calibration,
     weighted_gini,
 )
-from creditsurv.backtest.runner import MacroMode, macro_mode_gap, run_backtest, run_split
-from creditsurv.backtest.splits import (
-    as_of_split,
-    assert_no_lookahead,
-    cell_split,
-    out_of_sample,
-    out_of_time,
-    walk_forward,
-)
+from creditsurv.backtest.runner import run_backtest, score
+from creditsurv.backtest.splits import Split, assert_no_lookahead, cell_split
+from creditsurv.models.aft import fit_aft
 from fixtures import DEFAULT_PARAMS, build_panel
 
 if TYPE_CHECKING:
@@ -55,253 +45,6 @@ PARAMS = replace(
 def panel(book_dir: Path, macro_module: pd.DataFrame) -> pd.DataFrame:
     built, _ = build_panel(book_dir, macro_module, n_loans=1500, seed=91, params=PARAMS)
     return built
-
-
-# --------------------------------------------------------------------------------------
-# Splits
-# --------------------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("factory", [as_of_split, out_of_time, out_of_sample])
-def test_no_split_leaks_the_future_into_training(panel: pd.DataFrame, factory: object) -> None:
-    """The failure this guards against produces excellent numbers and no error."""
-    split = factory(panel, AS_OF)  # type: ignore[operator]
-
-    assert_no_lookahead(split)
-    assert split.train["period"].max() <= AS_OF
-
-
-def test_as_of_split_holds_only_loans_on_the_books(panel: pd.DataFrame) -> None:
-    """Written by the reporting date and not yet terminated.
-
-    Dropping the origination condition lets later vintages in, whose test window
-    would open years after the reporting date -- so their covariates would describe
-    a different economy from the one being scored.
-    """
-    split = as_of_split(panel, AS_OF)
-
-    first_test_period = split.test.groupby("loan_id", observed=True)["period"].min()
-    assert (first_test_period == AS_OF + 1).all()
-
-
-def test_out_of_time_holds_only_later_vintages(panel: pd.DataFrame) -> None:
-    split = out_of_time(panel, AS_OF)
-
-    assert (split.test["orig_period"] > AS_OF).all()
-    assert not set(split.train["loan_id"]) & set(split.test["loan_id"])
-
-
-def test_out_of_sample_separates_loans_not_periods(panel: pd.DataFrame) -> None:
-    split = out_of_sample(panel, AS_OF, test_fraction=0.3, seed=1)
-
-    assert not set(split.train["loan_id"]) & set(split.test["loan_id"])
-    assert split.test["period"].max() <= AS_OF
-
-
-def test_walk_forward_expands_the_training_window(panel: pd.DataFrame) -> None:
-    dates = [pd.Period(p, freq="M") for p in ("2006-12", "2008-12", "2010-12")]
-
-    splits = walk_forward(panel, dates)
-
-    sizes = [len(split.train) for split in splits]
-    assert sizes == sorted(sizes)
-    assert [split.as_of for split in splits] == dates
-
-
-def test_lookahead_check_catches_a_corrupted_split(panel: pd.DataFrame) -> None:
-    split = as_of_split(panel, AS_OF)
-    leaked = replace(split, train=panel)
-
-    with pytest.raises(ValueError, match="beyond the reporting date"):
-        assert_no_lookahead(leaked)
-
-
-# --------------------------------------------------------------------------------------
-# Metrics
-# --------------------------------------------------------------------------------------
-
-
-def test_discrimination_is_above_a_half_for_a_useful_score() -> None:
-    durations = pd.Series([5.0, 10.0, 15.0, 20.0])
-    events = pd.Series([True, True, True, False])
-    predicted = pd.Series([0.9, 0.6, 0.3, 0.1])
-
-    result = discrimination(durations, events, predicted)
-
-    assert result["concordance"] > 0.9
-    assert result["gini"] == pytest.approx(2 * result["concordance"] - 1)
-
-
-def test_reversing_the_score_reverses_concordance() -> None:
-    """Guards the negation: a sign error reads as a broken model, not a flipped one."""
-    durations = pd.Series([5.0, 10.0, 15.0, 20.0])
-    events = pd.Series([True, True, True, False])
-
-    good = discrimination(durations, events, pd.Series([0.9, 0.6, 0.3, 0.1]))
-    bad = discrimination(durations, events, pd.Series([0.1, 0.3, 0.6, 0.9]))
-
-    assert good["concordance"] + bad["concordance"] == pytest.approx(1.0)
-
-
-def test_brier_score_rewards_confident_correctness() -> None:
-    observed = pd.Series([True, False, True, False])
-
-    confident = brier_score(observed, pd.Series([0.95, 0.05, 0.95, 0.05]))
-    hedged = brier_score(observed, pd.Series([0.5, 0.5, 0.5, 0.5]))
-
-    assert confident < hedged
-
-
-def test_calibration_table_buckets_by_predicted_risk() -> None:
-    rng = np.random.default_rng(0)
-    predicted = pd.Series(rng.uniform(0.01, 0.4, 500))
-    observed = pd.Series(rng.uniform(size=500) < predicted)
-
-    table = calibration_table(observed, predicted, n_buckets=5)
-
-    assert len(table) == 5
-    assert table["expected"].is_monotonic_increasing
-    assert table["loans"].sum() == 500
-
-
-def test_calibration_reports_actual_over_expected() -> None:
-    predicted = pd.Series([0.1] * 100)
-    observed = pd.Series([True] * 20 + [False] * 80)
-
-    result = calibration_slope_intercept(observed, predicted)
-
-    assert result["expected"] == pytest.approx(0.1)
-    assert result["actual"] == pytest.approx(0.2)
-    assert result["actual_over_expected"] == pytest.approx(2.0)
-
-
-def test_psi_is_zero_for_an_unchanged_distribution() -> None:
-    rng = np.random.default_rng(1)
-    sample = pd.Series(rng.normal(size=2000))
-
-    assert population_stability_index(sample, sample) == pytest.approx(0.0, abs=1e-9)
-
-
-def test_psi_grows_when_a_distribution_moves() -> None:
-    rng = np.random.default_rng(2)
-    reference = pd.Series(rng.normal(size=2000))
-    shifted = pd.Series(rng.normal(loc=1.5, size=2000))
-
-    assert population_stability_index(reference, shifted) > 0.25
-
-
-def test_time_varying_covariates_are_labelled_not_flagged() -> None:
-    """Their index is large whenever the economy moved, which is not a defect.
-
-    Scoring them against thresholds meant for application characteristics would
-    trigger a model review every time anything happened.
-    """
-    rng = np.random.default_rng(3)
-    train = pd.DataFrame({"fico_s": rng.normal(size=800), "unemp_gap": rng.normal(size=800)})
-    test = pd.DataFrame(
-        {"fico_s": rng.normal(size=800), "unemp_gap": rng.normal(loc=3.0, size=800)}
-    )
-
-    report = stability_report(train, test, ["fico_s", "unemp_gap"], time_varying=["unemp_gap"])
-    by_covariate = report.set_index("covariate")
-
-    assert by_covariate.loc["unemp_gap", "interpretation"] == "expected to move"
-    assert by_covariate.loc["fico_s", "interpretation"] == "stable"
-
-
-# --------------------------------------------------------------------------------------
-# Runner
-# --------------------------------------------------------------------------------------
-
-
-def test_a_split_can_be_scored_end_to_end(panel: pd.DataFrame, macro_module: pd.DataFrame) -> None:
-    result = run_split(
-        as_of_split(panel, AS_OF), macro_module, COVARIATES, FORMULA, horizon_months=12
-    )
-
-    assert result.n_loans > 0
-    assert result.n_defaults > 0
-    assert 0.0 <= result.metrics["concordance"] <= 1.0
-    assert not result.calibration.empty
-
-
-def test_the_model_discriminates_better_than_chance(
-    panel: pd.DataFrame, macro_module: pd.DataFrame
-) -> None:
-    result = run_split(
-        as_of_split(panel, AS_OF), macro_module, COVARIATES, FORMULA, horizon_months=12
-    )
-
-    assert result.metrics["concordance"] > 0.55
-
-
-def test_both_macro_modes_run_and_are_reported(
-    panel: pd.DataFrame, macro_module: pd.DataFrame
-) -> None:
-    splits = walk_forward(panel, [AS_OF, pd.Period("2010-12", freq="M")])
-
-    summary, results = run_backtest(splits, macro_module, COVARIATES, FORMULA, horizon_months=12)
-
-    assert len(summary) == 4
-    assert set(summary["macro_mode"]) == {"conditional", "unconditional"}
-    assert len(results) == 4
-
-
-def test_macro_mode_gap_is_reported_on_calibration(
-    panel: pd.DataFrame, macro_module: pd.DataFrame
-) -> None:
-    """Discrimination barely moves between the modes; the level does.
-
-    A macro path shifts every loan's PD in the same direction, so the ranking
-    survives and the calibration does not.
-    """
-    splits = walk_forward(panel, [AS_OF])
-    summary, _ = run_backtest(splits, macro_module, COVARIATES, FORMULA, horizon_months=12)
-
-    concordance_gap = macro_mode_gap(summary, "concordance")
-    calibration_gap = macro_mode_gap(summary, "actual_over_expected")
-
-    assert abs(float(concordance_gap["gap"].iloc[0])) < 0.02
-    assert "gap" in calibration_gap.columns
-
-
-def test_unconditional_mode_cannot_see_the_future_macro(
-    panel: pd.DataFrame, macro_module: pd.DataFrame
-) -> None:
-    """The two modes must actually differ, or the unconditional path is not being
-    built from a truncated panel at all."""
-    split = as_of_split(panel, AS_OF)
-
-    conditional = run_split(
-        split, macro_module, COVARIATES, FORMULA, macro_mode=MacroMode.CONDITIONAL
-    )
-    unconditional = run_split(
-        split, macro_module, COVARIATES, FORMULA, macro_mode=MacroMode.UNCONDITIONAL
-    )
-
-    assert conditional.metrics["expected"] != unconditional.metrics["expected"]
-
-
-def test_a_fold_with_no_defaults_is_reported_not_raised(
-    panel: pd.DataFrame, macro_module: pd.DataFrame
-) -> None:
-    """lifelines raises ZeroDivisionError from concordance_index when a fold holds
-    no admissible pairs, and it descends from ArithmeticError rather than
-    ValueError -- so catching ValueError alone lets it through.
-
-    That is exactly how a small nightly run died while every test stayed green: the
-    suite always used panels large enough to have defaults in every fold.
-    """
-    late = pd.Period("2014-11", freq="M")
-    splits = walk_forward(panel.head(4000), [late])
-
-    summary, results = run_backtest(splits, macro_module, COVARIATES, FORMULA, horizon_months=1)
-
-    assert len(summary) == 2
-    assert all(result.n_loans == 0 or result.metrics for result in results)
-    for result in results:
-        if not result.metrics:
-            assert result.error, "a fold that produced nothing must say why"
 
 
 # --------------------------------------------------------------------------------------
@@ -411,3 +154,150 @@ def test_actual_versus_expected_flags_under_prediction() -> None:
 def cell(frame: pd.DataFrame, row: object, column: str) -> float:
     """Read one numeric cell by label; pandas-stubs cannot narrow a label lookup."""
     return float(frame.loc[frame.index == row, column].to_numpy(dtype=float)[0])
+
+
+# --------------------------------------------------------------------------------------
+# Population stability
+# --------------------------------------------------------------------------------------
+
+
+def test_psi_is_zero_for_an_unchanged_distribution() -> None:
+    values = pd.Series(np.random.default_rng(0).normal(size=2000))
+
+    assert population_stability_index(values, values) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_psi_grows_when_a_distribution_moves() -> None:
+    rng = np.random.default_rng(1)
+    reference = pd.Series(rng.normal(size=4000))
+
+    near = population_stability_index(reference, pd.Series(rng.normal(0.1, size=4000)))
+    far = population_stability_index(reference, pd.Series(rng.normal(1.5, size=4000)))
+
+    assert far > near
+
+
+def test_psi_weights_by_exposure_not_by_row() -> None:
+    """A cell stands for a number of loan-months, so an unweighted index would
+    describe the binning rather than the book."""
+    reference = pd.Series([0.0, 1.0])
+    comparison = pd.Series([0.0, 1.0])
+    # Same two values on both sides, but almost all the exposure has moved across.
+    moved = population_stability_index(
+        reference,
+        comparison,
+        reference_weights=pd.Series([999.0, 1.0]),
+        comparison_weights=pd.Series([1.0, 999.0]),
+    )
+    unmoved = population_stability_index(reference, comparison)
+
+    assert unmoved == pytest.approx(0.0, abs=1e-9)
+    assert moved > 1.0
+
+
+def test_time_varying_covariates_are_labelled_not_flagged() -> None:
+    """The PSI thresholds were devised for application characteristics. A covariate
+    designed to move with the economy is large whenever anything happened, which is
+    not news and must not read as a model defect."""
+    rng = np.random.default_rng(3)
+    train = pd.DataFrame(
+        {"fico_s": rng.normal(size=3000), "unemp_gap": rng.normal(size=3000), "n": 1.0}
+    )
+    test = pd.DataFrame(
+        {"fico_s": rng.normal(size=3000), "unemp_gap": rng.normal(4.0, size=3000), "n": 1.0}
+    )
+
+    table = stability_report(
+        train, test, ["fico_s", "unemp_gap"], time_varying=["unemp_gap"], weights_col="n"
+    ).set_index("covariate")
+
+    assert table.loc["unemp_gap", "interpretation"] == "expected to move"
+    assert table.loc["fico_s", "interpretation"] == "stable"
+
+
+# --------------------------------------------------------------------------------------
+# The backtest, end to end
+# --------------------------------------------------------------------------------------
+
+
+def _encoded(panel: pd.DataFrame) -> pd.DataFrame:
+    """The fixture book as a weighted, interval-censored panel."""
+    from creditsurv.data.panel import to_interval_censored
+
+    return to_interval_censored(panel.assign(n=1))
+
+
+def test_lookahead_check_catches_a_corrupted_split(panel: pd.DataFrame) -> None:
+    """A leaking split produces excellent numbers and no error, so it is caught
+    structurally rather than trusted."""
+    encoded = _encoded(panel)
+    split = cell_split(encoded, AS_OF)
+    corrupted = Split(as_of=split.as_of, train=encoded, test=split.test)
+
+    with pytest.raises(ValueError, match="beyond the reporting date"):
+        assert_no_lookahead(corrupted)
+
+
+def test_the_backtest_fits_once_and_scores_what_follows(panel: pd.DataFrame) -> None:
+    """One fit, then predicted against realised. Nothing is calibrated on the test half."""
+    split, fitted, result = run_backtest(_encoded(panel), AS_OF, COVARIATES, FORMULA)
+
+    assert (split.train["period"] <= AS_OF).all()
+    assert (split.test["period"] > AS_OF).all()
+    assert fitted.n_episodes == len(split.train)
+    assert result.expected_defaults > 0
+    assert result.loan_months == int(split.test["n"].sum())
+
+
+def test_a_model_from_the_wrong_panel_is_refused(panel: pd.DataFrame) -> None:
+    """The guarantee that "no further calibration" is a property of the code.
+
+    A model fitted on the whole panel would score its own training data and return a
+    flattering number with nothing visibly wrong, so passing one in is an error rather
+    than a shortcut.
+    """
+    encoded = _encoded(panel)
+    everything = fit_aft(encoded, COVARIATES, FORMULA, weights_col="n")
+
+    with pytest.raises(ValueError, match="scoring its own training data"):
+        run_backtest(encoded, AS_OF, COVARIATES, FORMULA, fitted=everything)
+
+
+def test_passing_the_fitted_model_in_does_not_refit(panel: pd.DataFrame) -> None:
+    encoded = _encoded(panel)
+    split = cell_split(encoded, AS_OF)
+    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="n")
+
+    _, returned, _ = run_backtest(encoded, AS_OF, COVARIATES, FORMULA, fitted=fitted)
+
+    assert returned is fitted
+
+
+def test_scoring_recovers_the_realised_default_count(panel: pd.DataFrame) -> None:
+    """On a book drawn from a known process, expected and realised should be close.
+
+    Not a calibration claim about the model -- the process is known and the model is
+    correctly specified for it -- but a check that the two sides of the comparison are
+    counting the same thing. An expected count in the wrong units would be off by
+    orders of magnitude, not by a few percent.
+    """
+    _, _, result = run_backtest(_encoded(panel), AS_OF, COVARIATES, FORMULA)
+
+    assert result.actual_defaults > 0
+    assert 0.5 < result.actual_over_expected < 2.0
+
+
+def test_the_over_time_table_covers_the_whole_test_window(panel: pd.DataFrame) -> None:
+    _, _, result = run_backtest(_encoded(panel), AS_OF, COVARIATES, FORMULA)
+
+    assert (result.over_time["group"] > AS_OF).all()
+    assert result.over_time["exposure"].sum() == pytest.approx(result.loan_months)
+
+
+def test_score_refuses_an_empty_test_half(panel: pd.DataFrame) -> None:
+    encoded = _encoded(panel)
+    split = cell_split(encoded, AS_OF)
+    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="n")
+
+    with pytest.raises(ValueError, match="No exposure after"):
+        score(fitted, split.test.iloc[:0], COVARIATES, as_of=AS_OF)

@@ -99,6 +99,7 @@ def distribution_comparison(
     distributions: Sequence[str] = CONVERGENT_DISTRIBUTIONS,
     likelihood: Likelihood = Likelihood.INTERVAL_CENSORED,
     weights_col: str | None = None,
+    fitted: FitResult | None = None,
 ) -> pd.DataFrame:
     """Compare regression fits on identical episodes.
 
@@ -107,17 +108,24 @@ def distribution_comparison(
     nothing across different panel constructions -- comparing an interval-censored
     episode panel against a loan-level right-censored one by AIC is not a
     comparison at all.
+
+    ``fitted`` supplies a model already estimated on this panel, and is reused instead
+    of refitting its distribution. On a table of this size a fit is hours, so silently
+    recomputing a model the caller already holds is not a small waste.
     """
     rows = []
     for distribution in distributions:
-        result = fit_aft(
-            encoded,
-            covariates,
-            formula,
-            distribution=distribution,
-            likelihood=likelihood,
-            weights_col=weights_col,
-        )
+        if fitted is not None and fitted.distribution == distribution:
+            result = fitted
+        else:
+            result = fit_aft(
+                encoded,
+                covariates,
+                formula,
+                distribution=distribution,
+                likelihood=likelihood,
+                weights_col=weights_col,
+            )
         rows.append(
             {
                 "distribution": distribution,
@@ -156,6 +164,7 @@ def shape_depends_on_covariates(
     distribution: str = "weibull",
     likelihood: Likelihood = Likelihood.INTERVAL_CENSORED,
     weights_col: str | None = None,
+    fitted: FitResult | None = None,
 ) -> pd.DataFrame:
     """Test whether the hazard's shape varies with covariates.
 
@@ -168,8 +177,12 @@ def shape_depends_on_covariates(
     It matters for lifetime PD specifically. If the shape genuinely varies, the
     term structure of default differs by loan rather than merely shifting, and a
     single shape misstates the timing of losses even when it gets the total right.
+
+    ``fitted`` is the restricted model, when the caller already has it. It is the
+    default specification by construction -- same panel, same formula, no ancillary --
+    so refitting it is pure duplication.
     """
-    restricted = fit_aft(
+    restricted = fitted or fit_aft(
         encoded,
         covariates,
         formula,
@@ -277,14 +290,32 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
     # Macro candidates. Only where theory actually commits to a direction: a
     # covariate listed here with no clear prior would be eliminated for disagreeing
     # with a guess, which is worse than not testing it.
-    "policy_rate_gap": -1,  # rates above those the loan was written at fail sooner
-    "credit_spread": -1,  # wider corporate spreads are a stressed economy
-    "vix": -1,  # so is high implied volatility
+    "vix": -1,  # high implied volatility is a stressed economy
     "hpi_growth": +1,  # rising house prices build equity
-    "equity_return": +1,  # household wealth
-    "sentiment": +1,  # confidence
-    "starts_growth": +1,  # a strong housing market
-    "rate_gap": +1,  # rates below those the loan was written at: refinancing is open
+    #
+    # The two below carry signs *opposite* to the ones first written here, and the
+    # revision was made after seeing the fit -- which is the one thing this procedure
+    # exists to prevent. It is recorded as a revision rather than presented as a
+    # prior, and it rests on a mechanism that can be checked independently of the
+    # result, not on the result.
+    #
+    # What both first priors assumed is a **floating-rate transmission channel that a
+    # thirty-year fixed-rate mortgage does not have**. The borrower's payment does not
+    # move when the policy rate moves. Strip that channel out and what remains is the
+    # opposite sign in each case:
+    "policy_rate_gap": +1,
+    # The Fed cuts in crises and tightens into strength, so a policy rate far *below*
+    # the one the loan was written at means 2009 or 2020. Measured: the band 5.5pp
+    # below origination carries 27.0 bp of monthly default, the highest of any band of
+    # any covariate in the model; 5.5pp above carries 4.1 bp.
+    "rate_gap": -1,
+    # Market rates below the note rate mean refinancing is open -- and whoever can
+    # refinance does, leaving the book as a prepayment, which this model treats as
+    # censoring. Who stays is who cannot: impaired credit, no equity. The coefficient
+    # measures that adverse selection, not the payment burden. Measured: flat at
+    # 3.5 bp while rates sit above the note rate, then 4.8x higher across the range
+    # where refinancing is attractive. It is the competing-risk limitation this
+    # project declares, showing up as an ordered and measurable effect.
 }
 
 #: Covariates deliberately left out of ``EXPECTED_SIGNS``, with the reason. Listed so

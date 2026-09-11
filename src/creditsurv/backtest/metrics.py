@@ -1,14 +1,18 @@
-"""Backtest metrics: discrimination, calibration, accuracy and stability.
+"""Backtest metrics: discrimination, calibration and stability, on weighted cells.
 
 Discrimination and calibration answer different questions, and a model can be
 excellent at one while useless at the other. A model that ranks every loan
 correctly but predicts three times the observed default rate discriminates
 perfectly and would still misprice the book. Both are reported, always.
 
-Every metric here is computed **per loan**, never per loan-month. The episode panel
-weights a loan by how long it survived, so a five-year loan would count sixty times
-and a loan that defaulted in month three would count three times -- which is
-precisely backwards.
+Everything is **exposure-weighted**, because the unit here is a cell rather than a
+loan. A cell stands for a number of loan-months, so a statistic taken over rows would
+describe the binning instead of the book -- weighting a cell holding six loan-months
+the same as one holding sixty thousand.
+
+That has one consequence worth naming. A concordance index is not available: it needs
+pairs of *subjects*, and a cell is not a subject. The exposure-weighted Lorenz curve
+asks the equivalent question of the data that does exist, and is reported in its place.
 """
 
 from __future__ import annotations
@@ -17,94 +21,9 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from lifelines.utils import concordance_index
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-
-def discrimination(
-    durations: pd.Series, events: pd.Series, predicted_pd: pd.Series
-) -> dict[str, float]:
-    """Harrell's concordance and the Gini coefficient derived from it.
-
-    Concordance is computed against *negated* PD, because the index expects a
-    predicted survival time: a higher probability of default must mean a shorter
-    expected life. Getting that sign wrong yields a mirror-image result -- 0.3
-    instead of 0.7 -- which reads as a broken model rather than a flipped sign.
-    """
-    index = float(
-        concordance_index(durations, -predicted_pd.to_numpy(dtype=float), events.astype(bool))
-    )
-    return {"concordance": index, "gini": 2.0 * index - 1.0}
-
-
-def brier_score(observed: pd.Series, predicted_pd: pd.Series) -> float:
-    """Mean squared error of the predicted default probability."""
-    outcome = observed.astype(float).to_numpy()
-    prediction = predicted_pd.to_numpy(dtype=float)
-    return float(np.mean((prediction - outcome) ** 2))
-
-
-def calibration_table(
-    observed: pd.Series,
-    predicted_pd: pd.Series,
-    *,
-    n_buckets: int = 10,
-) -> pd.DataFrame:
-    """Predicted against realised default rate, by bucket of predicted PD.
-
-    The actual-versus-expected view a credit committee reads. Buckets are quantiles
-    of the prediction, so each holds a similar number of loans and the tail buckets
-    -- where the model earns or loses its money -- are not one loan wide.
-    """
-    frame = pd.DataFrame(
-        {
-            "predicted": predicted_pd.to_numpy(dtype=float),
-            "observed": observed.astype(float).to_numpy(),
-        }
-    )
-    ranks = frame["predicted"].rank(method="first")
-    frame["bucket"] = pd.qcut(ranks, q=min(n_buckets, len(frame)), labels=False, duplicates="drop")
-
-    grouped = frame.groupby("bucket", observed=True).agg(
-        loans=("observed", "size"),
-        expected=("predicted", "mean"),
-        actual=("observed", "mean"),
-    )
-    grouped["difference"] = grouped["actual"] - grouped["expected"]
-    grouped["ratio"] = np.where(
-        grouped["expected"] > 0, grouped["actual"] / grouped["expected"], np.nan
-    )
-    return grouped.reset_index()
-
-
-def calibration_slope_intercept(observed: pd.Series, predicted_pd: pd.Series) -> dict[str, float]:
-    """Regress realised outcomes on predicted log-odds.
-
-    A perfectly calibrated model gives slope 1 and intercept 0. Slope below 1 means
-    the predictions are spread too widely -- the model is more confident than the
-    data supports; intercept away from 0 means a level bias, the whole book
-    mispriced in one direction.
-    """
-    prediction = np.clip(predicted_pd.to_numpy(dtype=float), 1e-6, 1 - 1e-6)
-    logit = np.log(prediction / (1.0 - prediction))
-    outcome = observed.astype(float).to_numpy()
-
-    design = np.column_stack([np.ones_like(logit), logit])
-    coefficients, *_ = np.linalg.lstsq(design, outcome, rcond=None)
-
-    # Convert the linear fit back to a calibration statement on the logit scale.
-    mean_prediction = float(prediction.mean())
-    return {
-        "slope": float(coefficients[1] / max(mean_prediction * (1 - mean_prediction), 1e-9)),
-        "intercept": float(coefficients[0] - outcome.mean() + mean_prediction),
-        "expected": mean_prediction,
-        "actual": float(outcome.mean()),
-        "actual_over_expected": float(outcome.mean() / mean_prediction)
-        if mean_prediction > 0
-        else float("nan"),
-    }
 
 
 def population_stability_index(
@@ -253,8 +172,7 @@ def weighted_calibration(
 ) -> pd.DataFrame:
     """Predicted against realised default rate, by bucket of predicted risk.
 
-    The aggregated counterpart of :func:`calibration_table`. Both quantities are
-    hazards over exposure rather than shares of loans, and buckets are weighted by
+    Quantities are over exposure rather than shares of loans, and buckets are weighted by
     exposure so a bucket is a comparable slice of the book rather than of the cell
     table.
 

@@ -436,3 +436,18 @@ def test_truncation_follows_calendar_time_not_age(tmp_path: Path) -> None:
 
     assert book["age"].tolist() == [0, 1, 2, 3, 4]
     assert book["event"].tolist() == [False, False, False, False, True]
+
+
+def test_the_eliminated_covariates_are_out_of_the_model() -> None:
+    """The record of what was dropped and the specification cannot drift apart.
+
+    A covariate removed by the selection that quietly reappears in the formula is a
+    silent reversal of a documented decision, and nothing else in the suite would
+    notice it.
+    """
+    from creditsurv.config import ELIMINATED, MACRO_CANDIDATES, default_formula
+
+    formula = default_formula()
+    for name, reason in ELIMINATED.items():
+        assert name in MACRO_CANDIDATES, f"{name} is recorded as eliminated but never a candidate"
+        assert name not in formula, f"{name} was eliminated ({reason}) but is still fitted"

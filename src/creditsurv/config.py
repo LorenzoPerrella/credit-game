@@ -280,7 +280,10 @@ TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
     "unemp_gap",
     "nfci_lagged",
     "rate_gap",
+    "policy_rate_gap",
     "hpi_growth",
+    "vix",
+    "inflation",
 )
 
 #: Every macro-derived covariate available, including the ones the default model does
@@ -316,6 +319,34 @@ MACRO_CANDIDATES: Final[tuple[str, ...]] = (
 #: preference for whichever answer came out. The principle: keep what is specific to
 #: mortgage credit, give up what is a general business-cycle proxy, and among
 #: equivalents keep the series with the longest clean history.
+#: Macro candidates removed by the selection, each with the rule that removed it.
+#: Recorded here rather than only in the documentation, so the list and the model
+#: cannot drift apart -- and so the omissions read as decisions.
+#:
+#: See docs/variable_selection.md for the measured tables behind each.
+ELIMINATED: Final[dict[str, str]] = {
+    "credit_spread": (
+        "marginal/conditional sign reversal: alone it orders default 4.1x in the "
+        "right direction, and flips once nfci_lagged is present -- which is built "
+        "from 105 indicators including this very spread"
+    ),
+    "term_spread": (
+        "marginal/conditional sign reversal: 2.9x alone in the right direction, "
+        "flips against policy_rate_gap (rho -0.69), its other view of the same cycle"
+    ),
+    "equity_return": (
+        "no marginal signal: 1.4x across its whole range and unordered, against "
+        "8.7x for fico_s -- yet p = 0.0000, which is what 2.5 billion loan-months "
+        "does to a p-value"
+    ),
+    "sentiment": "no marginal signal: 2.0x and unordered, same story",
+    "starts_growth": (
+        "U-shaped: 16.8 bp when construction collapses, 5.3 bp in the middle, "
+        "15.1 bp when it booms. The information is real and a linear term cannot "
+        "carry it; re-entering it banded would"
+    ),
+}
+
 MACRO_ELIMINATION_PRIORITY: Final[tuple[str, ...]] = (
     "equity_return",
     "vix",

@@ -26,8 +26,6 @@ from creditsurv.config import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     import pandas as pd
 
 app = typer.Typer(
@@ -318,91 +316,91 @@ def compare() -> None:
     )
 
 
+#: The reporting date the backtest cuts at, unless one is given. Late on purpose: a
+#: credit model wants every loan-month it can get in training, and the test window
+#: only has to be long enough to judge it.
+DEFAULT_AS_OF = "2024-12"
+
+
 @app.command()
 def backtest(
-    as_of: Annotated[str, typer.Option(help="Reporting date, e.g. 2024-12.")] = "2024-12",
-    horizon: Annotated[int, typer.Option(help="Months to predict forward.")] = 24,
-    walk_forward_folds: Annotated[
-        int, typer.Option(help="Repeat at several dates instead of one.")
-    ] = 0,
+    as_of: Annotated[str, typer.Option(help="Reporting date, e.g. 2024-12.")] = DEFAULT_AS_OF,
 ) -> None:
-    """Backtest at a single reporting date, or walk forward across several.
+    """Fit once on everything up to the reporting date, then predict against realised.
 
-    One date by default, and a late one. Everything up to it trains the model, which
-    is the point: a credit model wants every loan-month it can get, and holding back
-    a decade to see the same result at four dates is a poor trade. The walk-forward
-    is still there for when the question is whether a result held across regimes
-    rather than what the model can do.
+    One cut and one fit. There is no second calibration anywhere in this command:
+    what comes after the date is scored by the model that never saw it, and the
+    comparison is expected defaults against the ones that happened.
     """
     import logging
 
     import pandas as pd
 
-    from creditsurv.backtest.runner import macro_mode_gap, run_backtest
-    from creditsurv.backtest.splits import split_at, walk_forward
+    from creditsurv.backtest.runner import run_backtest
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    panel, macro = _episodes()
-    reporting_date = pd.Period(as_of, freq="M")
+    episodes, _ = _episodes()
 
-    if walk_forward_folds:
-        splits = walk_forward(panel, _reporting_dates(panel, walk_forward_folds))
-    else:
-        splits = [split_at(panel, reporting_date)]
-
-    for split in splits:
-        typer.echo(str(split.describe()))
-
-    summary, _ = run_backtest(
-        splits, macro, default_covariates(), default_formula(), horizon_months=horizon
+    split, fitted, result = run_backtest(
+        episodes, pd.Period(as_of, freq="M"), default_covariates(), default_formula()
     )
-    _echo_table(summary.round(4))
-    typer.echo("\nCalibration gap between macro modes:")
-    _echo_table(macro_mode_gap(summary).round(4))
+    typer.echo(str(split.describe()))
+    typer.echo(f"Fitted in {fitted.elapsed_seconds / 60:.1f} minutes on the training half.\n")
 
-
-def _reporting_dates(panel: pd.DataFrame, folds: int) -> Sequence[pd.Period]:
-    """Evenly spaced reporting dates inside the observed window.
-
-    The window is trimmed at both ends: the earliest dates have too little history
-    to fit on, and the latest leave no room to predict forward into.
-    """
-    periods = panel["period"].sort_values().unique()
-    start, stop = int(len(periods) * 0.45), int(len(periods) * 0.9)
-    step = max((stop - start) // max(folds, 1), 1)
-    return [periods[index] for index in range(start, stop, step)][:folds]
+    _echo_table(pd.DataFrame([result.summary()]))
+    typer.echo("\nBy decile of predicted risk:")
+    _echo_table(result.calibration.round(6))
 
 
 @app.command()
 def report(
     horizon: Annotated[int, typer.Option(help="Months for the PD term structure.")] = 60,
-    backtest_horizon: Annotated[int, typer.Option(help="Months to predict forward.")] = 12,
-    folds: Annotated[int, typer.Option(help="Walk-forward reporting dates.")] = 3,
-    loans: Annotated[int, typer.Option(help="Loans to score for the PD report.")] = 500,
+    as_of: Annotated[str, typer.Option(help="Reporting date for the backtest.")] = DEFAULT_AS_OF,
+    loans: Annotated[int, typer.Option(help="Origination profiles to score.")] = 500,
 ) -> None:
-    """Run the full pipeline and write the reports."""
+    """Run the pipeline and write the reports, from a single fit.
+
+    The model is fitted **once**, on everything up to the reporting date, and that one
+    model is what all three reports describe: the methodology report characterises it,
+    the calibration report prices with it, and the backtest scores it on the months it
+    has never seen. Nothing here refits it.
+
+    That the same model appears in all three is the point. A report describing a model
+    fitted on everything, next to a backtest of a different model fitted on a subset,
+    invites the reader to attribute one's performance to the other.
+    """
     import logging
 
+    import pandas as pd
+
     from creditsurv.backtest.runner import run_backtest
-    from creditsurv.backtest.splits import walk_forward
+    from creditsurv.backtest.splits import cell_split
     from creditsurv.data.panel import WEIGHT
-    from creditsurv.models.aft import fit_aft
+    from creditsurv.models.aft import coefficient_table, fit_aft
     from creditsurv.reporting import backtesting, calibration, methodology
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    encoded, macro = _episodes()
+    episodes, macro = _episodes()
     covariates = default_covariates()
     formula = default_formula()
     destination = reports_dir()
 
-    typer.echo("Fitting...")
-    fitted = fit_aft(encoded, covariates, formula, weights_col=WEIGHT)
+    reporting_date = pd.Period(as_of, freq="M")
+    split = cell_split(episodes, reporting_date)
+
+    typer.echo(f"Fitting on {int(split.train[WEIGHT].sum()):,} loan-months up to {as_of}...")
+    fitted = fit_aft(split.train, covariates, formula, weights_col=WEIGHT)
+    typer.echo(f"  {fitted.elapsed_seconds / 60:.1f} minutes")
+
+    coefficients = destination / COEFFICIENTS_FILE
+    coefficients.parent.mkdir(parents=True, exist_ok=True)
+    coefficient_table(fitted).to_csv(coefficients)
 
     typer.echo("Writing methodology report...")
     written = [
         methodology.generate(
-            encoded,
-            encoded,
+            split.train,
+            split.train,
             fitted,
             covariates,
             formula,
@@ -412,7 +410,7 @@ def report(
     ]
 
     typer.echo("Writing calibration report...")
-    book = _origination_book(encoded, macro, loans)
+    book = _origination_book(split.train, macro, loans)
     written.append(
         calibration.generate(
             fitted,
@@ -426,18 +424,12 @@ def report(
         )
     )
 
-    typer.echo("Running backtest...")
-    summary, results = run_backtest(
-        walk_forward(encoded, _reporting_dates(encoded, folds)),
-        macro,
-        covariates,
-        formula,
-        horizon_months=backtest_horizon,
-    )
-    written.append(backtesting.generate(summary, results, reports_dir=destination))
+    typer.echo("Backtesting against what happened...")
+    _, _, result = run_backtest(episodes, reporting_date, covariates, formula, fitted=fitted)
+    written.append(backtesting.generate(split, result, reports_dir=destination))
 
     typer.echo("\nWritten:")
-    for path in written:
+    for path in [*written, coefficients]:
         typer.echo(f"  {path}")
 
 

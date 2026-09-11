@@ -143,7 +143,12 @@ layers instead.
         "which family fits best."
     ).table(marginal, decimals=2)
 
-    regression = distribution_comparison(encoded, covariates, formula, weights_col=weights_col)
+    # `fitted` is passed through so neither of these refits the model already in
+    # hand: the Weibull row of the comparison and the restricted arm of the shape
+    # test are both the default specification, and at hours per fit that matters.
+    regression = distribution_comparison(
+        encoded, covariates, formula, weights_col=weights_col, fitted=fitted
+    )
     report.heading("2. Regression fits on identical episodes", level=3).text(
         """
 The log-normal is absent because it does not converge on this panel structure --
@@ -160,7 +165,7 @@ loan-level right-censored one by AIC is not a comparison at all.
     ).table(regression, decimals=2)
 
     shape = shape_depends_on_covariates(
-        encoded, covariates, formula, covariates[0], weights_col=weights_col
+        encoded, covariates, formula, covariates[0], weights_col=weights_col, fitted=fitted
     )
     report.heading("3. Does the hazard's shape vary with covariates?", level=3).text(
         f"""

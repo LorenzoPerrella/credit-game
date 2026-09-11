@@ -268,6 +268,198 @@ instead of its move since origination — the covariates would collapse onto cal
 time and the collinearity would return at full strength. The decomposition into level
 and movement is doing load-bearing work in more than one place.
 
+### 7-8. The fit, and what the signs said
+
+One fit, 19 terms, **308.8 minutes** on 15,858,492 cells. It converged cleanly — 168
+iterations, exit mode 0 — and produced a table in which **every covariate has
+p = 0.0000**.
+
+That is the single most important line in this document. At 2.5 billion loan-months a
+p-value is not a filter: it separates nothing, because nothing is insignificant. The
+univariate screen at p > 0.05 and the backward elimination's p-value arm are both
+**inert on this data**, and every discriminating decision has to come from somewhere
+else — the sign, the shape of the marginal relationship, or the economics.
+
+So the diagnosis was made by comparing each covariate's **marginal** relationship with
+default against its **conditional** coefficient. That comparison separates three things
+a bare "wrong sign" cannot:
+
+| | Marginal | Conditional | Diagnosis |
+|---|---|---|---|
+| Same direction, both strong | ✓ | ✓ | The covariate works; if it contradicts the prior, **the prior was wrong** |
+| Right direction alone, flips with others | ✓ | ✗ | **Collinearity**, the classic case |
+| No ordering at all | ✗ | (large, p=0) | **No content**; significance is an artefact of size |
+
+### What survived, and what it is worth
+
+The marginal default hazard across each covariate's own bands, events over exposure,
+on the whole population. The ratio is first band to last:
+
+| Covariate | First band | Last band | Ratio | Sign |
+|---|---|---|---|---|
+| `fico_s` | 28.11 bp | 3.23 bp | **8.7×** | + |
+| `cltv_drift` | 6.12 bp | 49.65 bp | **8.1×** | − |
+| `unemp_gap` | 3.89 bp | 28.52 bp | **7.3×** | − |
+| `vix` | 4.40 bp | 32.23 bp | **7.3×** | − |
+| `policy_rate_gap` | 26.99 bp | 4.13 bp | **6.5×** | + |
+| `hpi_growth` | 20.61 bp | 3.86 bp | **5.3×** | + |
+| `rate_gap` | 3.62 bp | 17.51 bp | **4.8×** | − |
+| `inflation` | 17.56 bp | 4.83 bp | 3.6× | none |
+| `dti` | 3.93 bp | 13.70 bp | 3.5× | − |
+| `nfci_lagged` | 6.42 bp | 19.99 bp | 3.1× | − |
+| `term_years` | 3.10 bp | 9.37 bp | 3.0× | none |
+| `orig_ltv` | 4.75 bp | 14.35 bp | 3.0× | − |
+
+Twelve covariates, plus `purpose` and `occupancy`.
+
+### Two priors that were wrong, and the revision
+
+`rate_gap` and `policy_rate_gap` came out against the signs written for them, and both
+are kept with the prior **revised** rather than eliminated. This is the one place the
+procedure was overruled, so it is set out in full.
+
+Revising an expected sign after seeing the fit is precisely what the sign constraint
+exists to prevent, and doing it on the strength of the fit would make the constraint
+worthless. The justification here is not the fit. It is a mechanism that can be checked
+without it — and the check is the marginal table above, which was computed
+independently of the model and says the same thing, strongly and in order.
+
+**What both priors assumed is a floating-rate transmission channel that a thirty-year
+fixed-rate mortgage does not have.** The borrower's payment does not move when the
+policy rate moves. Strip that channel out and the remaining sign is the opposite one in
+each case.
+
+`policy_rate_gap` — the Fed cuts in crises and tightens into strength, so a policy rate
+far *below* the one the loan was written at means 2009 or 2020, not relief. The band
+5.5pp below origination carries **26.99 bp** of monthly default, the highest of any
+band of any covariate in this model; the band 5.5pp above carries 4.13 bp.
+
+`rate_gap` — market rates below the note rate mean refinancing is open, and whoever can
+refinance does, leaving the book as a prepayment, which this model treats as censoring.
+Who stays is who *cannot*: impaired credit, no equity. The coefficient measures that
+adverse selection, not the payment burden:
+
+```
+rate_gap   -4.00 → 3.62 bp    +0.25 →  6.20 bp
+           -1.50 → 4.21 bp    +0.75 → 11.94 bp
+           -0.75 → 3.48 bp    +1.50 → 16.64 bp
+           -0.25 → 3.58 bp    +4.00 → 17.51 bp
+```
+
+Flat at 3.5 bp for as long as rates sit above the note rate; 4.8× higher across the
+whole range where refinancing is attractive. **This is the competing-risk limitation
+this project declares, appearing as a measurable and ordered effect rather than as a
+caveat.** Treating prepayment as independent censoring is not innocuous here: it is
+visibly wrong in the direction theory predicts, and the sign flip is how it announces
+itself.
+
+## The five covariates given up
+
+Recorded in `config.ELIMINATED`, with a test asserting none of them reappears in the
+formula — a covariate that quietly comes back is a silent reversal of a documented
+decision, and nothing else in the suite would notice.
+
+### `credit_spread` and `term_spread` — collinearity, the textbook case
+
+Both order default correctly **on their own** and flip once the others are present.
+
+```
+credit_spread  0.75 → 4.55 bp    2.75 → 10.73 bp       (4.1×, monotone)
+               1.75 → 4.38 bp    3.50 → 15.13 bp
+               2.25 → 4.54 bp    5.50 → 18.49 bp
+```
+
+Conditional coefficient **+0.123**: wider spreads, longer survival. The cause is not
+mysterious. `nfci_lagged` is in the model, and the Chicago Fed's index is built from 105
+indicators of risk, liquidity and leverage — **including Baa-Treasury spreads**. With
+NFCI present, `credit_spread` is a residual, and ρ(`credit_spread`, `vix`) = +0.70
+finishes the job. `term_spread` is the same story against `policy_rate_gap`
+(ρ = −0.69), its other view of the same monetary cycle.
+
+A wrong sign is not a weak result — it is a symptom, and this is what of.
+
+**This rule is an addition to the `nmds` procedure, not a borrowing from it.** `nmds`
+eliminates on a violated *prior*; `term_spread` never had one, so a prior-based rule
+would have kept it. The rule applied here is a **marginal/conditional sign reversal**:
+a covariate whose conditional coefficient contradicts its own unconditional
+relationship with the outcome is carrying something other than what its name says. It
+is stated so it can be applied consistently rather than invoked when convenient.
+
+### `equity_return` and `sentiment` — no content
+
+```
+equity_return   -0.45 → 9.45 bp   +0.05 → 7.99 bp   +0.30 → 6.63 bp
+                -0.10 → 7.05 bp   +0.15 → 8.34 bp   +0.95 → 8.70 bp
+
+sentiment        57.5 → 7.76 bp    80.0 → 6.47 bp   105.0 → 8.74 bp
+                 70.0 → 10.44 bp   90.0 → 5.10 bp
+```
+
+Flat and unordered across their entire range: 1.4× and 2.0×, against 8.7× for
+`fico_s`. Every band holds between 8% and 32% of exposure, so this is not a small-band
+artefact. **Neither covariate carries any univariate information about mortgage
+default.**
+
+And both are hugely significant. `equity_return` receives a coefficient of −0.44 at
+p = 0.0000, on 2.5 billion loan-months, having no relationship with the outcome at all.
+
+If this document makes one argument worth taking away, it is that one.
+
+### `starts_growth` — real information, wrong functional form
+
+```
+starts_growth  -0.50 → 16.81 bp    +0.05 →  6.12 bp
+               -0.20 →  6.78 bp    +0.20 →  7.57 bp
+               -0.05 →  5.34 bp    +0.90 → 15.13 bp
+```
+
+**A U.** Both extremes carry three times the risk of the middle: the collapse of
+construction (2008–2010) and the boom (2005–2006, 2021). A construction boom *is* the
+top of the housing cycle, and loans written at the top are the worst in the dataset.
+
+A linear term fits a straight line through a parabola and its slope means nothing —
+which is why the conditional coefficient is large, significant and uninterpretable. The
+information is real; the form cannot carry it.
+
+It is eliminated **as a linear term**, and the way back in is stated rather than left
+implicit: banded and entered as a categorical, the U is representable. That is what
+`nmds` would have done, and it is the one place where its approach is straightforwardly
+better than this one — see below.
+
+## Would `nmds` have done the same?
+
+Four of the five, yes. The other decisions diverge, and it is worth being precise about
+which.
+
+| Decision | `nmds` | Here |
+|---|---|---|
+| `credit_spread` eliminated on a violated sign | **Yes** — `elimination_type="invalid_coefficient"` | Same |
+| `term_spread` eliminated | **No** — it has no expected sign, so nothing catches it | Marginal/conditional reversal |
+| `equity_return`, `sentiment` eliminated | **On sign**, if it had a prior for equity indices — its univariate screen is p > 0.05, which they pass at p = 0 | On absent marginal content |
+| `starts_growth` as a linear term | **Would not arise** — `nmds` coarse-classes into bands, so the U is representable | Eliminated; banding is the way back |
+| `rate_gap`, `policy_rate_gap` priors revised | **No** — it would have eliminated both | Revised, with the mechanism stated |
+
+Two of these deserve more than a row.
+
+**`nmds` bins everything, and this pipeline does not.** Its covariates enter as coarse
+classes, which is why a U-shaped relationship is not a problem there and is one here:
+a class-based specification represents any shape, at the cost of parameters and of a
+binning decision per covariate. This pipeline bins the origination covariates and
+enters the macro-derived ones as linear terms, which is cheaper and assumes monotonicity
+— an assumption `starts_growth` violates and the others do not. **On this point `nmds`
+is simply better**, and the fix is known rather than hypothetical.
+
+**Revising the two priors is a departure, and the weaker of the two arguments here.**
+`nmds` would have dropped `rate_gap` and `policy_rate_gap` and kept its discipline
+intact, and a reader who thinks that is the right call would be applying the reference
+procedure correctly. The case for keeping them rests on the marginal tables being
+computed independently of the fit, on both mechanisms being checkable without it, and on
+what would be lost: `rate_gap` is the only covariate in the model that exposes the
+competing-risk limitation, and eliminating it would remove the evidence of a known
+weakness rather than the weakness.
+
+Both are recorded as revisions. Neither is presented as a prior.
+
 ## What this procedure does not do
 
 **No information value or weight of evidence.** `nmds` does not use them either.
