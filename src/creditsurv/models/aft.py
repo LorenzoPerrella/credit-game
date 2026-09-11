@@ -152,6 +152,7 @@ def fit_aft(
     penalizer: float = 0.0,
     weights_col: str | None = None,
     ancillary: str | bool | None = None,
+    show_progress: bool = False,
 ) -> FitResult:
     """Fit a parametric AFT model to an encoded episode panel.
 
@@ -162,6 +163,10 @@ def fit_aft(
     ``ancillary`` lets the shape parameter depend on covariates, relaxing the
     assumption that a covariate shifts the timing of default without changing the
     shape of the hazard over the life of the loan.
+
+    ``show_progress`` prints the optimiser's iterations. On a table of this size a fit
+    is tens of minutes, and the difference between "converging slowly" and "not
+    converging" is worth being able to see without waiting for the answer.
     """
     if distribution not in FITTERS:
         message = f"Unknown distribution {distribution!r}; expected one of {sorted(FITTERS)}."
@@ -187,6 +192,7 @@ def fit_aft(
             formula=formula,
             weights_col=weights_col,
             ancillary=ancillary,
+            show_progress=show_progress,
         )
     else:
         frame = right_censored_frame(encoded, covariates)
@@ -200,6 +206,7 @@ def fit_aft(
             formula=formula,
             weights_col=weights_col,
             ancillary=ancillary,
+            show_progress=show_progress,
         )
 
     elapsed = time.perf_counter() - started

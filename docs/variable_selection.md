@@ -189,6 +189,85 @@ One covariate is removed per step, the model refitted, and the test repeated. A
 backwards sign outranks any p-value: it says the specification is wrong, not that the
 evidence is thin.
 
+## Results of running it
+
+On the whole population: **15,858,492 cells covering 2,515,340,009 loan-months, with
+1,938,519 defaults.** No sampling at any step.
+
+### Candidates
+
+Seventeen, after the screening and remapping above:
+
+| Group | Covariates |
+|---|---|
+| Origination | `fico_s`, `orig_ltv`, `dti`, `term_years` |
+| Mark-to-market | `cltv_drift` |
+| Macro, gap since origination | `unemp_gap`, `policy_rate_gap`, `rate_gap` |
+| Macro, level now | `nfci_lagged`, `term_spread`, `credit_spread`, `vix`, `sentiment` |
+| Macro, year-on-year | `hpi_growth`, `inflation`, `equity_return`, `starts_growth` |
+| Categorical | `purpose`, `occupancy` |
+
+### 5. Weighted correlation — nothing reaches 0.8
+
+| Pair | ρ (exposure-weighted) |
+|---|---|
+| `rate_gap` ↔ `policy_rate_gap` | **−0.793** |
+| `credit_spread` ↔ `vix` | +0.701 |
+| `policy_rate_gap` ↔ `term_spread` | −0.686 |
+| `nfci_lagged` ↔ `credit_spread` | +0.670 |
+| `nfci_lagged` ↔ `hpi_growth` | −0.622 |
+| `nfci_lagged` ↔ `starts_growth` | −0.616 |
+| `rate_gap` ↔ `term_spread` | +0.617 |
+
+**Not one pair crosses the threshold**, and the closest is a hair under it. The
+priority ladder was fixed in advance precisely for this case and did not have to be
+used — which is the right order of events, and worth recording because a ladder that
+is never needed looks like wasted work until the one time it is.
+
+### 6. Variance inflation — nothing reaches 10
+
+| Covariate | VIF | | Covariate | VIF |
+|---|---|---|---|---|
+| `credit_spread` | **8.41** | | `starts_growth` | 2.36 |
+| `policy_rate_gap` | 4.89 | | `sentiment` | 2.27 |
+| `nfci_lagged` | 4.45 | | `equity_return` | 2.25 |
+| `rate_gap` | 4.17 | | `unemp_gap` | 2.01 |
+| `hpi_growth` | 3.37 | | `cltv_drift` | 1.82 |
+| `term_spread` | 3.37 | | `orig_ltv` | 1.18 |
+| `inflation` | 2.99 | | `term_years` | 1.14 |
+| `vix` | 2.71 | | `fico_s` | 1.08 |
+| | | | `dti` | 1.06 |
+
+The stepwise pass eliminated nothing. **All seventeen candidates survive both
+collinearity screens.**
+
+### Why thirteen macro covariates are not collinear
+
+This was the expected failure and it did not happen, so the reason matters.
+
+As *time series* these are hopelessly collinear — five of them are interest rates, and
+over 1999–2026 the Fed funds rate, the ten-year yield, the term spread and both
+mortgage rates move as one thing. A pure time-series regression on them would be
+unusable.
+
+**But the covariates are not the series.** The design matrix is indexed by *vintage
+and age*, not by calendar time, and three of the covariates are **gaps since
+origination** rather than levels. Two loans observed in the same month — identical
+`credit_spread`, identical `vix`, identical `hpi_growth` — have entirely different
+`rate_gap` and `unemp_gap` if one was written in 2004 and the other in 2019.
+
+So the panel spans two dimensions where a time series spans one, and the gap
+construction is what projects the covariates onto the second. `rate_gap` has a VIF of
+4.17 against its own underlying rate series being almost perfectly collinear with
+three others. That is not a trick: it is the identifying variation a vintage panel
+actually has, and it is the same reason the macro covariates can be estimated at all
+rather than being absorbed by the baseline hazard.
+
+The corollary is a warning. If the gaps were replaced by levels — `policy_rate` now
+instead of its move since origination — the covariates would collapse onto calendar
+time and the collinearity would return at full strength. The decomposition into level
+and movement is doing load-bearing work in more than one place.
+
 ## What this procedure does not do
 
 **No information value or weight of evidence.** `nmds` does not use them either.
