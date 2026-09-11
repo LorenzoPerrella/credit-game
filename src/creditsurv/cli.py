@@ -245,8 +245,14 @@ def fit(
     likelihood: Annotated[
         str, typer.Option(help="interval_censored or right_censored.")
     ] = "interval_censored",
+    save: Annotated[bool, typer.Option(help="Write the coefficients under docs/reports.")] = True,
 ) -> None:
-    """Fit the model and print its coefficients."""
+    """Fit the model and print its coefficients.
+
+    The coefficient table is saved by default, because a fit on the whole population
+    is tens of minutes and the notebooks and reports should not each pay for one. It
+    is a generated artefact: regenerate it, do not edit it.
+    """
     import logging
 
     from creditsurv.data.panel import WEIGHT
@@ -269,7 +275,18 @@ def fit(
         f"{result.n_episodes:,} cells, {result.n_events:,} defaults, "
         f"AIC {result.aic:,.1f}, {result.elapsed_seconds:.1f}s"
     )
-    _echo_table(coefficient_table(result).round(4), index=True)
+    table = coefficient_table(result)
+    _echo_table(table.round(4), index=True)
+
+    if save:
+        destination = reports_dir() / COEFFICIENTS_FILE
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(destination)
+        typer.echo(f"\nCoefficients written to {destination}")
+
+
+#: Where ``fit --save`` leaves its coefficient table, and where the notebooks read it.
+COEFFICIENTS_FILE = "coefficients.csv"
 
 
 @app.command()
