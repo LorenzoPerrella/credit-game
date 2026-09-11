@@ -71,7 +71,10 @@ measurements behind that.
 | [**The portfolio**](docs/portfolio.md) | What the book looks like: outstanding, new lending, mix, drift, macro |
 | [Data dictionary](docs/data_dictionary.md) | The record layout, layer by layer |
 | [Data preparation](docs/data_preparation.md) | 40 GB of archives to a fittable table |
-| [Variable selection](docs/variable_selection.md) | Which covariates survive, and why |
+| [**Variable selection**](docs/variable_selection.md) | Which covariates survive, which were given up, and what `nmds` would have done |
+| [Methodology](docs/reports/methodology.md) | Generated: fit quality, distributional form, against Kaplan-Meier |
+| [Calibration](docs/reports/calibration.md) | Generated: what each regressor is worth, in PD |
+| [Backtesting](docs/reports/backtesting.md) | Generated: predicted against realised, after 2024 |
 
 Notebooks: [`01_portfolio.ipynb`](notebooks/01_portfolio.ipynb) carries the evidence;
 the statistics themselves live in the package, tested, so a notebook reads like a
@@ -85,11 +88,10 @@ report rather than an implementation.
 uv sync
 uv run creditsurv fetch-macro    # real FRED data, no API key
 uv run creditsurv ingest         # 40 GB of archives to parquet, ~30 min, idempotent
-uv run creditsurv portfolio      # describe the book
-uv run creditsurv profile        # screen the covariates
+uv run creditsurv portfolio      # describe the book before modelling it
+uv run creditsurv profile        # screen the covariates before aggregating
 uv run creditsurv aggregate      # collapse to weighted cells
-uv run creditsurv fit
-uv run creditsurv backtest --as-of 2024-12
+uv run creditsurv report         # one fit; writes all three reports
 ```
 
 The dataset is **not downloadable programmatically** — free but manual registration
@@ -97,6 +99,27 @@ at [Clarity](https://claritydownload.fmapps.freddiemac.com/CRT/). Nothing in thi
 repository touches the network for it.
 
 ---
+
+## One fit
+
+Every number in this repository comes from **a single fitted model**, calibrated on
+every loan-month up to **2024-12** and never refitted.
+
+That is a deliberate constraint, and it shapes the design. The methodology report
+characterises that model, the calibration report prices with it, and the backtest
+scores it on 2025 and 2026 — months it has never seen. A methodology report describing
+a model fitted on everything, sitting next to a backtest of a *different* model fitted
+on a subset, invites the reader to attribute one's performance to the other.
+
+It is also enforced rather than trusted. `run_backtest` takes the fitted model as an
+argument and **refuses** one whose training size does not match the split, because a
+model fitted on the whole panel would score its own training data and return a
+flattering number with nothing visibly wrong.
+
+The backtest is correspondingly plain: expected defaults against realised ones, in
+total, by month, and by decile of predicted risk. No projection, no refit, no folds.
+An earlier version refitted at four reporting dates under two macroeconomic
+assumptions — eight fits for one report, on a panel where **a fit is five hours.**
 
 ## Order of operations
 
@@ -151,6 +174,13 @@ verified, not assumed — so quarters are aggregated one at a time.
   the 1999 vintage to 94% of 2021, so a model built on it would estimate a different
   quantity in every decade. The house-price-indexed drift covers every vintage evenly.
 - **No LGD or EAD**, so no expected loss. PD only.
+- **The backtest grants the model the economy.** It is scored on the macro path that
+  actually occurred, which is what *predicted against realised* means and which a real
+  deployment would not have had. Read as the performance of the whole system it would
+  overstate what the system can do.
+- **Five macro covariates were given up**, and two expected signs turned out to be
+  wrong. Both are set out in [variable selection](docs/variable_selection.md), with the
+  measured evidence and a comparison against what `nmds` would have decided.
 
 ---
 

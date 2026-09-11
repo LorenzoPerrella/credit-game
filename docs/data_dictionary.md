@@ -275,21 +275,27 @@ and the loan age — both of which the key already carries. So the macro side of
 specification is free: adding a series cannot change the size of the cell table by
 one row, while adding a loan characteristic to the key can multiply it.
 
-| Covariate | Shape | Definition |
-|---|---|---|
-| `cltv_drift` | gap | `orig_ltv × hpi(orig)/hpi(now) − orig_ltv` — leverage gained or lost |
-| `unemp_gap` | gap | `unemployment(now) − unemployment(orig)` |
-| `policy_rate_gap` | gap | `policy_rate(now) − policy_rate(orig)` |
-| `rate_gap` | gap | `market_rate(orig) − market_rate(now)`, **switched by term** |
-| `nfci_lagged` | level | Financial conditions now |
-| `term_spread` | level | 10y − 2y now |
-| `credit_spread` | level | Baa − 10y now |
-| `vix` | level | Implied volatility now |
-| `sentiment` | level | Consumer sentiment now |
-| `hpi_growth` | year-on-year | House prices |
-| `inflation` | year-on-year | CPI |
-| `equity_return` | year-on-year | Nasdaq |
-| `starts_growth` | year-on-year | Housing starts |
+All thirteen are **built**; eight are **fitted**. The other five were given up by the
+variable selection, for reasons set out with their measured evidence in
+[variable_selection.md](variable_selection.md). They are still constructed, because
+the selection has to be re-runnable and because a covariate that cannot be built
+cannot be reconsidered.
+
+| Covariate | Shape | Definition | In the model |
+|---|---|---|---|
+| `cltv_drift` | gap | `orig_ltv × hpi(orig)/hpi(now) − orig_ltv` — leverage gained or lost | ✅ |
+| `unemp_gap` | gap | `unemployment(now) − unemployment(orig)` | ✅ |
+| `policy_rate_gap` | gap | `policy_rate(now) − policy_rate(orig)` | ✅ |
+| `rate_gap` | gap | `market_rate(orig) − market_rate(now)`, **switched by term** | ✅ |
+| `nfci_lagged` | level | Financial conditions now | ✅ |
+| `vix` | level | Implied volatility now | ✅ |
+| `hpi_growth` | year-on-year | House prices | ✅ |
+| `inflation` | year-on-year | CPI | ✅ |
+| `credit_spread` | level | Baa − 10y now | ✗ collinear with `nfci_lagged`, which contains it |
+| `term_spread` | level | 10y − 2y now | ✗ collinear with `policy_rate_gap` |
+| `sentiment` | level | Consumer sentiment now | ✗ no marginal signal |
+| `equity_return` | year-on-year | Nasdaq | ✗ no marginal signal |
+| `starts_growth` | year-on-year | Housing starts | ✗ U-shaped; a linear term cannot carry it |
 
 Three shapes, and the distinction is not cosmetic. A **gap** is zero at origination
 by construction, so it carries the *movement* and leaves the level to the
