@@ -11,7 +11,7 @@ Commands that need a model fit one.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 
@@ -27,6 +27,8 @@ from creditsurv.config import (
 
 if TYPE_CHECKING:
     import pandas as pd
+
+    from creditsurv.models.aft import FitResult
 
 #: The reporting date every command cuts at, unless one is given. Late on purpose: a
 #: credit model wants every loan-month it can get in training, and the test window only
@@ -376,6 +378,9 @@ def report(
     extra_fits: Annotated[
         bool, typer.Option(help="Also compare distributions and test the shape.")
     ] = True,
+    reuse: Annotated[
+        bool, typer.Option(help="Reuse a cached fit matching this specification exactly.")
+    ] = False,
 ) -> None:
     """Run the pipeline and write the reports, from a single fit.
 
@@ -399,7 +404,7 @@ def report(
     from creditsurv.backtest.runner import run_backtest
     from creditsurv.backtest.splits import cell_split
     from creditsurv.data.panel import WEIGHT
-    from creditsurv.models.aft import coefficient_table, fit_aft
+    from creditsurv.models.aft import coefficient_table
     from creditsurv.reporting import backtesting, calibration, methodology
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -412,8 +417,9 @@ def report(
     split = cell_split(episodes, reporting_date)
 
     typer.echo(f"Fitting on {int(split.train[WEIGHT].sum()):,} loan-months up to {as_of}...")
-    fitted = fit_aft(split.train, covariates, formula, weights_col=WEIGHT)
-    typer.echo(f"  {fitted.elapsed_seconds / 60:.1f} minutes")
+    fitted = cast(
+        "FitResult", _fit_once(split.train, covariates, formula, as_of=as_of, reuse=reuse)
+    )
 
     coefficients = destination / COEFFICIENTS_FILE
     coefficients.parent.mkdir(parents=True, exist_ok=True)
@@ -455,6 +461,54 @@ def report(
     typer.echo("\nWritten:")
     for path in [*written, coefficients]:
         typer.echo(f"  {path}")
+
+
+def _fit_once(
+    train: pd.DataFrame,
+    covariates: list[str],
+    formula: str,
+    *,
+    as_of: str,
+    reuse: bool,
+) -> object:
+    """Fit the training half, reusing a cached model when one matches exactly.
+
+    A fit on this population is two and a half hours, and the run that discovered that
+    completed one and was then killed while writing its reports -- throwing away the
+    expensive part and keeping nothing. The fit is therefore saved the moment it
+    succeeds, before anything downstream can fail.
+
+    Reuse is **opt-in**. The fingerprint covers the specification and the panel's size,
+    which does not catch a re-aggregation that happens to leave the row count alone, so
+    silently reusing would eventually mean reporting on a model built from data that no
+    longer exists.
+    """
+    from creditsurv.data.panel import WEIGHT
+    from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
+    from creditsurv.models.aft import fit_aft
+
+    described = {
+        "as_of": as_of,
+        "formula": formula,
+        "distribution": "weibull",
+        "weights_col": WEIGHT,
+        "rows": len(train),
+        "loan_months": int(train[WEIGHT].sum()),
+    }
+    fingerprint = fit_fingerprint(**described)
+
+    if reuse:
+        cached = load_fit(fingerprint)
+        if cached is not None:
+            typer.echo(f"  reusing the cached fit {fingerprint}")
+            return cached
+        typer.echo(f"  no cached fit {fingerprint}; fitting")
+
+    fitted = fit_aft(train, covariates, formula, weights_col=WEIGHT)
+    typer.echo(f"  {fitted.elapsed_seconds / 60:.1f} minutes")
+    path = save_fit(fitted, fingerprint, {**described, "minutes": fitted.elapsed_seconds / 60})
+    typer.echo(f"  saved to {path}")
+    return fitted
 
 
 def _origination_book(encoded: pd.DataFrame, macro: pd.DataFrame, size: int) -> pd.DataFrame:

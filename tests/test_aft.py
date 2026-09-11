@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
 from lifelines.exceptions import ConvergenceError
 
@@ -116,3 +117,39 @@ def test_aic_is_reported_on_the_episode_scale(encoded: pd.DataFrame) -> None:
     result = fit_aft(encoded, COVARIATES, FORMULA)
 
     assert result.aic == pytest.approx(-2 * result.log_likelihood + 2 * 5, rel=1e-6)
+
+
+def test_chunked_prediction_matches_a_single_call(encoded: pd.DataFrame) -> None:
+    """Blocking must not move a single number.
+
+    The blocks exist because one call allocates rows x horizon, which on the real
+    panel is 41.5 GB against 16 GB of RAM. That is a memory fix, not a modelling one,
+    so "identical apart from chunking" has to be asserted -- it is exactly the kind of
+    claim that quietly stops being true.
+    """
+    from creditsurv.models import aft
+
+    covariates = ["fico_s", "cltv_drift", "unemp_gap"]
+    result = fit_aft(encoded, covariates, " + ".join(covariates))
+
+    frame = encoded.loc[:, covariates]
+    ages = encoded["age"].to_numpy(dtype=int)
+
+    whole = aft.episode_hazards(result, frame, ages)
+    # A budget small enough to force many blocks on a fixture this size.
+    blocked = aft.episode_hazards(result, frame, ages, budget_bytes=8 * 1024)
+
+    assert aft._block_size(int(ages.max()) + 2) > 1
+    # Not bit-for-bit: BLAS multiplies differently shaped matrices along different
+    # blockings, so the last bit of a dot product moves. Measured at 8e-16 absolute on
+    # a hazard of order 1e-3 -- a tolerance this tight would still catch any change
+    # that alters an answer anyone asks of it.
+    np.testing.assert_allclose(blocked, whole, rtol=1e-12, atol=1e-15)
+
+
+def test_the_block_size_shrinks_as_the_horizon_grows() -> None:
+    """The budget is on memory, not on rows: a wider age grid means fewer rows."""
+    from creditsurv.models.aft import _block_size
+
+    assert _block_size(60) > _block_size(327)
+    assert _block_size(10**9) == 1

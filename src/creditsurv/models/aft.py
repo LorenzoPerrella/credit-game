@@ -233,10 +233,18 @@ def fit_aft(
     )
 
 
+#: Memory the row-by-time prediction grid may occupy, in bytes. 256 MB leaves room for
+#: the copies lifelines makes internally while staying large enough that the per-block
+#: overhead is negligible against the arithmetic.
+_PREDICTION_BUDGET: Final = 256 * 1024 * 1024
+
+
 def episode_hazards(
     result: FitResult,
     frame: pd.DataFrame,
     ages: np.ndarray,
+    *,
+    budget_bytes: int = _PREDICTION_BUDGET,
 ) -> np.ndarray:
     """Monthly conditional failure probability for each row, at its own age.
 
@@ -244,18 +252,39 @@ def episode_hazards(
     carries. This is the quantity the episode likelihood is built from, and the
     building block for every survival curve in the project.
 
-    The cumulative hazard is predicted once over the whole age grid and then
-    indexed per row, because lifelines returns a full row-by-time grid and calling
-    it once per row would be thousands of separate fits' worth of work.
+    lifelines predicts a full row-by-time grid, of which exactly two cells per row are
+    wanted. Asking for it in one call is the obvious implementation and it does not
+    survive contact with this panel: 15.9 million rows over a 327-month grid is a
+    **41.5 GB** array, on a machine with 16 GB. The process is killed by the kernel
+    with no traceback, two and a half hours into a run, at the first line that touches
+    a full-size prediction -- which is a memorable way to discover an O(rows x horizon)
+    allocation.
+
+    So the rows are processed in blocks sized to a memory budget rather than to a row
+    count: the wider the age grid, the fewer rows per block. The arithmetic inside a
+    block is unchanged, so the result is identical to the single-call version -- which
+    a test asserts, because "identical apart from chunking" is exactly the kind of
+    claim that quietly stops being true.
     """
     horizon = int(ages.max()) + 2
     grid = np.arange(0.0, float(horizon))
-    cumulative = result.fitter.predict_cumulative_hazard(frame, times=grid).to_numpy()
+    block = _block_size(horizon, budget_bytes)
 
-    columns = np.arange(cumulative.shape[1])
-    increment = cumulative[ages + 1, columns] - cumulative[ages, columns]
-    hazard: np.ndarray = 1.0 - np.exp(-increment)
+    hazard = np.empty(len(frame), dtype=float)
+    for start in range(0, len(frame), block):
+        stop = min(start + block, len(frame))
+        rows = frame.iloc[start:stop]
+        at = ages[start:stop]
+        cumulative = result.fitter.predict_cumulative_hazard(rows, times=grid).to_numpy()
+        columns = np.arange(cumulative.shape[1])
+        increment = cumulative[at + 1, columns] - cumulative[at, columns]
+        hazard[start:stop] = 1.0 - np.exp(-increment)
     return hazard
+
+
+def _block_size(horizon: int, budget_bytes: int = _PREDICTION_BUDGET) -> int:
+    """How many rows can be predicted at once within the budget."""
+    return max(int(budget_bytes / (horizon * 8)), 1)
 
 
 def coefficient_table(result: FitResult) -> pd.DataFrame:
