@@ -126,3 +126,67 @@ def test_absent_quarters_are_skipped_not_failed(archives: Path) -> None:
 def test_a_missing_quarter_inside_an_archive_raises(archives: Path) -> None:
     with pytest.raises(FileNotFoundError, match="does not contain"):
         ingest_quarter(2015, 3)
+
+
+def test_an_archive_is_safe_only_when_every_quarter_verifies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting the archives is the one irreversible step, so the check is three
+    conditions rather than the existence of a file."""
+    from creditsurv.data.ingest import audit_archives
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    write_archives(tmp_path / "FREDDIE MAC", 2015, {1: _one_loan_quarter()})
+    ingest([2015])
+
+    audit = audit_archives([2015])[0]
+    assert audit.safe_to_delete
+    assert audit.quarters == ("2015Q1",)
+
+
+def test_a_truncated_parquet_blocks_the_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row count that no longer matches the manifest is the condition the existence
+    of a file cannot catch -- a parquet overwritten or truncated since it was written."""
+    import pyarrow.parquet as pq
+
+    from creditsurv.data.ingest import Quarter, audit_archives
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    write_archives(tmp_path / "FREDDIE MAC", 2015, {1: _one_loan_quarter()})
+    ingest([2015])
+
+    path = Quarter(2015, 1).parquet_path("perf")
+    table = pq.read_table(path)
+    pq.write_table(table.slice(0, max(table.num_rows - 1, 0)), path)
+
+    audit = audit_archives([2015])[0]
+    assert not audit.safe_to_delete
+    assert audit.mismatched == ("2015Q1/perf",)
+
+
+def test_a_missing_parquet_blocks_the_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from creditsurv.data.ingest import Quarter, audit_archives
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    write_archives(tmp_path / "FREDDIE MAC", 2015, {1: _one_loan_quarter()})
+    ingest([2015])
+    Quarter(2015, 1).parquet_path("orig").unlink()
+
+    audit = audit_archives([2015])[0]
+    assert not audit.safe_to_delete
+    assert audit.missing == ("2015Q1/orig",)
+
+
+def _one_loan_quarter() -> tuple[list[str], list[str]]:
+    return (
+        [origination_row("F15Q1000001")],
+        [
+            performance_row("F15Q1000001", "201503", "0"),
+            performance_row("F15Q1000001", "201504", "1"),
+            performance_row("F15Q1000001", "201505", "2"),
+        ],
+    )

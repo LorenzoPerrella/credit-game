@@ -102,6 +102,66 @@ def _parse_years(spec: str) -> list[int]:
     return [int(spec)]
 
 
+@app.command("prune-archives")
+def prune_archives(
+    years: Annotated[
+        str | None, typer.Option(help="Year or range, e.g. 2006 or 1999-2026.")
+    ] = None,
+    yes: Annotated[bool, typer.Option(help="Skip the confirmation prompt.")] = False,
+) -> None:
+    """Delete the downloaded archives whose parquet is verified complete.
+
+    The one irreversible step in this pipeline, and re-downloading costs hours behind a
+    manual registration -- so it is a separate command and never a tail appended to the
+    ingest, where a parse gone wrong would take the only copy with it.
+
+    An archive is deleted only when **every** quarter of its year passes three separate
+    checks: the manifest records it finished, both parquet files exist, and their row
+    counts still match what the manifest recorded. The third is the one that catches a
+    file truncated or overwritten since, which the existence of a file does not.
+
+    Nothing is deleted without showing what would go and asking. Run it after a
+    complete fit rather than straight after the ingest: that the parquet parses is not
+    the same as that it is usable.
+    """
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.data.ingest import audit_archives
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    audits = audit_archives(_parse_years(years) if years else None)
+    if not audits:
+        typer.echo("No archives found.")
+        return
+
+    _echo_table(pd.DataFrame([audit.describe() for audit in audits]))
+    safe = [audit for audit in audits if audit.safe_to_delete]
+    blocked = [audit for audit in audits if not audit.safe_to_delete]
+
+    for audit in blocked:
+        typer.echo(
+            f"{audit.year}: NOT deleting -- {len(audit.missing)} missing, "
+            f"{len(audit.mismatched)} row counts disagree"
+        )
+
+    if not safe:
+        typer.echo("\nNothing is verified complete. Nothing deleted.")
+        return
+
+    freed = sum(audit.bytes_on_disk for audit in safe) / 1024**3
+    typer.echo(f"\n{len(safe)} archive(s) verified complete, {freed:.1f} GB.")
+    if not yes and not typer.confirm("Delete them? This cannot be undone"):
+        typer.echo("Nothing deleted.")
+        return
+
+    for audit in safe:
+        audit.path.unlink()
+        typer.echo(f"  deleted {audit.path.name}")
+    typer.echo(f"Freed {freed:.1f} GB.")
+
+
 @app.command()
 def portfolio() -> None:
     """Describe the book: outstanding, new lending, mix, drift, and the macro path.
