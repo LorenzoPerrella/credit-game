@@ -113,7 +113,8 @@ jobs:
           uv run creditsurv aggregate
           uv run creditsurv portfolio
           uv run creditsurv fit
-          uv run creditsurv report --loans 200 --folds 2 --horizon 24
+          uv run creditsurv backtest --as-of 2024-06
+          uv run creditsurv report --as-of 2024-06 --loans 200 --horizon 24
 
       - name: Check the reports were written
         run: |
@@ -123,7 +124,8 @@ jobs:
           # Named rather than counted: a count passes while the figure the run was
           # supposed to produce is the one missing, because the others are committed.
           for name in survival_vs_km coefficients term_structure scenarios \
-                      calibration new_lending outstanding_book macro_panel; do
+                      calibration backtest_over_time new_lending outstanding_book \
+                      macro_panel; do
             test -s "docs/reports/figures/$name.png" || {
               echo "missing docs/reports/figures/$name.png"; exit 1; }
           done

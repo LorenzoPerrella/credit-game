@@ -23,6 +23,8 @@ import warnings
 from typing import TYPE_CHECKING, Final, cast
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import requests
 
 from creditsurv.config import (
@@ -81,6 +83,29 @@ def _download(spec: SeriesSpec, start: str, end: str | None) -> pd.Series:
     return observations.dropna()
 
 
+#: Parquet metadata key holding the ``start`` a cached series was fetched with.
+_START_KEY = b"creditsurv_requested_start"
+
+
+def _write_cache(path: Path, frame: pd.DataFrame, start: str) -> None:
+    """Write the cache, recording which start it was fetched with."""
+    table = pa.Table.from_pandas(frame)
+    metadata = {**(table.schema.metadata or {}), _START_KEY: start.encode()}
+    pq.write_table(table.replace_schema_metadata(metadata), path)
+
+
+def _cached_start(path: Path) -> pd.Timestamp:
+    """The start a cached series was fetched with.
+
+    A cache written before this was recorded has no such key, and is treated as
+    reaching back forever -- refetching every pre-existing cache on the next run would
+    be a worse failure than trusting one that is almost certainly wide enough.
+    """
+    metadata = pq.read_schema(path).metadata or {}
+    recorded = metadata.get(_START_KEY)
+    return pd.Timestamp.min if recorded is None else pd.Timestamp(recorded.decode())
+
+
 def load_series(
     spec: SeriesSpec, *, start: str = MACRO_START, end: str | None = None, refresh: bool = False
 ) -> pd.Series:
@@ -90,26 +115,25 @@ def load_series(
     cached copy is used and a warning is emitted. This keeps the project usable
     offline without ever silently pretending a refresh succeeded.
 
-    A cached series that does not reach back to ``start`` is refetched rather than
-    returned short. The cache is keyed by series id alone, so without this check a
-    widened ``start`` is silently ignored -- and the covariates that need the extra
-    history are not *wrong*, they are **missing**, which means their rows are dropped.
-    That removes the opening months of the earliest vintages and leaves the rest,
-    which is left truncation nothing downstream can see.
+    A cached series fetched from a later ``start`` than the one asked for is refetched
+    rather than returned short. The cache is keyed by series id alone, so without this
+    check a widened ``start`` is silently ignored -- and the covariates that need the
+    extra history are not *wrong*, they are **missing**, which means their rows are
+    dropped. That removes the opening months of the earliest vintages and leaves the
+    rest, which is left truncation nothing downstream can see.
+
+    The check is against the start the cache was **requested** with, recorded in the
+    file, not against its first observation. Those differ for any series that does not
+    report on the first of the month: VIXCLS begins 1997-01-02 because 1 January is not
+    a trading day, and comparing observations would have refetched it on every single
+    load, forever.
     """
     cache_file = _cache_path(spec.series_id)
 
-    if not refresh and cache_file.exists():
+    if not refresh and cache_file.exists() and _cached_start(cache_file) <= pd.Timestamp(start):
         cached = pd.read_parquet(cache_file)[spec.column]
-        if cached.index.min() <= pd.Timestamp(start):
-            _LOGGER.debug("Loaded %s from cache (%d observations)", spec.series_id, len(cached))
-            return cached
-        _LOGGER.info(
-            "Cached %s starts %s, need %s; refetching.",
-            spec.series_id,
-            cached.index.min().date(),
-            start,
-        )
+        _LOGGER.debug("Loaded %s from cache (%d observations)", spec.series_id, len(cached))
+        return cached
 
     try:
         observations = _download(spec, start, end)
@@ -125,7 +149,7 @@ def load_series(
         raise FredUnavailableError(message) from error
 
     cache_file.parent.mkdir(parents=True, exist_ok=True)
-    observations.to_frame().to_parquet(cache_file)
+    _write_cache(cache_file, observations.to_frame(), start)
     _LOGGER.debug("Cached %s (%d observations)", spec.series_id, len(observations))
     return observations
 

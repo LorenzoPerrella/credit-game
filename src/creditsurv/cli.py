@@ -28,6 +28,16 @@ from creditsurv.config import (
 if TYPE_CHECKING:
     import pandas as pd
 
+#: The reporting date every command cuts at, unless one is given. Late on purpose: a
+#: credit model wants every loan-month it can get in training, and the test window only
+#: has to be long enough to judge it. Shared by `fit`, `backtest` and `report` so that
+#: all three mean the same model by the same name.
+DEFAULT_AS_OF = "2024-12"
+
+#: Where `fit --save` and `report` leave the coefficient table, and where the notebooks
+#: read it.
+COEFFICIENTS_FILE = "coefficients.csv"
+
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
@@ -243,16 +253,28 @@ def fit(
     likelihood: Annotated[
         str, typer.Option(help="interval_censored or right_censored.")
     ] = "interval_censored",
+    as_of: Annotated[
+        str, typer.Option(help="Fit on everything up to this month. Empty for all of it.")
+    ] = DEFAULT_AS_OF,
     save: Annotated[bool, typer.Option(help="Write the coefficients under docs/reports.")] = True,
 ) -> None:
     """Fit the model and print its coefficients.
 
-    The coefficient table is saved by default, because a fit on the whole population
-    is tens of minutes and the notebooks and reports should not each pay for one. It
-    is a generated artefact: regenerate it, do not edit it.
+    ``--as-of`` defaults to the same reporting date the backtest cuts at, so this
+    command and ``report`` produce the **same model** -- which matters because both
+    write the same coefficient file, and two commands quietly disagreeing about which
+    model is "the" model is a good way to publish a table nobody can reproduce. Pass
+    an empty string to fit the whole panel instead.
+
+    The coefficient table is saved by default: a fit on this population is hours, and
+    the notebooks and reports should not each pay for one. It is a generated artefact
+    -- regenerate it, do not edit it.
     """
     import logging
 
+    import pandas as pd
+
+    from creditsurv.backtest.splits import cell_split
     from creditsurv.data.panel import WEIGHT
     from creditsurv.models.aft import Likelihood, coefficient_table, fit_aft
 
@@ -260,6 +282,10 @@ def fit(
     # Already encoded: cells_to_episodes writes the interval bounds as it expands,
     # because the bounds are a function of the cell's age band and its event flag.
     encoded, _ = _episodes()
+    if as_of:
+        encoded = cell_split(encoded, pd.Period(as_of, freq="M")).train
+        typer.echo(f"Training on {int(encoded[WEIGHT].sum()):,} loan-months up to {as_of}.")
+
     result = fit_aft(
         encoded,
         default_covariates(),
@@ -281,10 +307,6 @@ def fit(
         destination.parent.mkdir(parents=True, exist_ok=True)
         table.to_csv(destination)
         typer.echo(f"\nCoefficients written to {destination}")
-
-
-#: Where ``fit --save`` leaves its coefficient table, and where the notebooks read it.
-COEFFICIENTS_FILE = "coefficients.csv"
 
 
 @app.command()
@@ -314,12 +336,6 @@ def compare() -> None:
             encoded, covariates, formula, "fico_s", weights_col=WEIGHT
         ).round(4)
     )
-
-
-#: The reporting date the backtest cuts at, unless one is given. Late on purpose: a
-#: credit model wants every loan-month it can get in training, and the test window
-#: only has to be long enough to judge it.
-DEFAULT_AS_OF = "2024-12"
 
 
 @app.command()
@@ -357,6 +373,9 @@ def report(
     horizon: Annotated[int, typer.Option(help="Months for the PD term structure.")] = 60,
     as_of: Annotated[str, typer.Option(help="Reporting date for the backtest.")] = DEFAULT_AS_OF,
     loans: Annotated[int, typer.Option(help="Origination profiles to score.")] = 500,
+    extra_fits: Annotated[
+        bool, typer.Option(help="Also compare distributions and test the shape.")
+    ] = True,
 ) -> None:
     """Run the pipeline and write the reports, from a single fit.
 
@@ -368,6 +387,10 @@ def report(
     That the same model appears in all three is the point. A report describing a model
     fitted on everything, next to a backtest of a different model fitted on a subset,
     invites the reader to attribute one's performance to the other.
+
+    ``--no-extra-fits`` drops the two model-selection sections that each cost a further
+    fit, taking the whole run to a single one. The reports then say the sections were
+    skipped rather than omitting them silently.
     """
     import logging
 
@@ -406,6 +429,7 @@ def report(
             formula,
             reports_dir=destination,
             weights_col=WEIGHT,
+            extra_fits=extra_fits,
         )
     ]
 

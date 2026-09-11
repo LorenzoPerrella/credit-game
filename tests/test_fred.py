@@ -12,8 +12,9 @@ import pandas as pd
 import pytest
 import requests
 
-from creditsurv.config import Frequency, SeriesSpec
+from creditsurv.config import MACRO_SERIES, Frequency, SeriesSpec
 from creditsurv.data import fred
+from creditsurv.data.fred import load_series
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -183,3 +184,64 @@ def test_live_fred_download_still_works() -> None:
 
     assert len(series) == 6
     assert series.max() > 10  # April 2020 unemployment spike
+
+
+def test_a_cache_fetched_from_a_later_start_is_refetched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Widening MACRO_START must not be silently ignored.
+
+    The cache is keyed by series id alone, so a cached series fetched from a later
+    start would be returned short. The covariates needing the extra history are then
+    not wrong but *missing*, and their rows are dropped -- which removes the opening
+    months of the earliest vintages and leaves the rest, a left truncation nothing
+    downstream can see.
+    """
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    spec = MACRO_SERIES[0]
+    calls: list[str] = []
+
+    def fake_download(_: object, start: str, __: object) -> pd.Series:
+        calls.append(start)
+        index = pd.date_range(start, periods=48, freq="MS")
+        return pd.Series(range(48), index=index, dtype=float, name=spec.column)
+
+    monkeypatch.setattr("creditsurv.data.fred._download", fake_download)
+
+    load_series(spec, start="2005-01-01")
+    load_series(spec, start="2005-01-01")
+    assert calls == ["2005-01-01"], "a cache wide enough must be reused"
+
+    load_series(spec, start="2000-01-01")
+    assert calls == ["2005-01-01", "2000-01-01"], "a cache starting too late must be refetched"
+
+    load_series(spec, start="2001-01-01")
+    assert len(calls) == 2, "a cache wider than asked for must be reused"
+
+
+def test_a_first_observation_after_the_start_is_not_refetched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """VIXCLS begins 1997-01-02 because 1 January is not a trading day.
+
+    Comparing the requested start against the first *observation* would refetch every
+    daily series on every single load, forever. The recorded request is compared
+    instead.
+    """
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    spec = MACRO_SERIES[0]
+    calls: list[str] = []
+
+    def fake_download(_: object, start: str, __: object) -> pd.Series:
+        calls.append(start)
+        # First observation two days after the start, as a market series has.
+        opens = pd.Timestamp(start) + pd.Timedelta(2, unit="D")
+        index = pd.date_range(opens, periods=24, freq="D")
+        return pd.Series(range(24), index=index, dtype=float, name=spec.column)
+
+    monkeypatch.setattr("creditsurv.data.fred._download", fake_download)
+
+    load_series(spec, start="1997-01-01")
+    load_series(spec, start="1997-01-01")
+
+    assert len(calls) == 1

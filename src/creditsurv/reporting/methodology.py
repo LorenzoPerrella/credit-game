@@ -32,6 +32,14 @@ if TYPE_CHECKING:
     from creditsurv.models.aft import FitResult
 
 
+#: What a skipped section says instead of quietly disappearing. A report missing a
+#: section reads as a report whose author had nothing to say about it.
+_SKIPPED = (
+    "> **Not run.** {what} costs a fit of its own, which on the whole population is "
+    "hours rather than seconds. Re-run with `{flag}` to compute it."
+)
+
+
 def generate(
     panel: pd.DataFrame,
     encoded: pd.DataFrame,
@@ -41,12 +49,19 @@ def generate(
     *,
     reports_dir: Path,
     weights_col: str | None = None,
+    extra_fits: bool = True,
 ) -> Path:
     """Write ``methodology.md`` and its figures.
 
     ``weights_col`` names the loan-month count carried by an aggregated panel. Every
     statistic below then describes the population rather than the set of distinct
     covariate combinations, which are very different books.
+
+    ``extra_fits`` controls the two sections that cost a fit of their own: the
+    distributional comparison and the shape test. Both are model *selection*, so they
+    belong in a report about methodology -- and on the whole population each is hours,
+    which is a reason to be able to skip them, not a reason to pretend they were run.
+    A skipped section says so in the report rather than vanishing from it.
     """
     figures = reports_dir / "figures"
 
@@ -146,8 +161,12 @@ layers instead.
     # `fitted` is passed through so neither of these refits the model already in
     # hand: the Weibull row of the comparison and the restricted arm of the shape
     # test are both the default specification, and at hours per fit that matters.
-    regression = distribution_comparison(
-        encoded, covariates, formula, weights_col=weights_col, fitted=fitted
+    regression = (
+        distribution_comparison(
+            encoded, covariates, formula, weights_col=weights_col, fitted=fitted
+        )
+        if extra_fits
+        else None
     )
     report.heading("2. Regression fits on identical episodes", level=3).text(
         """
@@ -162,10 +181,18 @@ sums over. It ranks distributions on one panel and means nothing across differen
 panel constructions -- comparing an interval-censored episode panel with a
 loan-level right-censored one by AIC is not a comparison at all.
 """
-    ).table(regression, decimals=2)
+    )
+    if regression is None:
+        report.text(_SKIPPED.format(what="comparing distributions", flag="--extra-fits"))
+    else:
+        report.table(regression, decimals=2)
 
-    shape = shape_depends_on_covariates(
-        encoded, covariates, formula, covariates[0], weights_col=weights_col, fitted=fitted
+    shape = (
+        shape_depends_on_covariates(
+            encoded, covariates, formula, covariates[0], weights_col=weights_col, fitted=fitted
+        )
+        if extra_fits
+        else None
     )
     report.heading("3. Does the hazard's shape vary with covariates?", level=3).text(
         f"""
@@ -179,7 +206,11 @@ the timing of losses even when it gets the total right.
 
 Tested on `{covariates[0]}`:
 """
-    ).table(shape, decimals=4)
+    )
+    if shape is None:
+        report.text(_SKIPPED.format(what="testing the shape", flag="--extra-fits"))
+    else:
+        report.table(shape, decimals=4)
 
     curve = kaplan_meier(panel, weights_col=weights_col)
     predicted = predicted_survival_curve(fitted, encoded, covariates, weights_col=weights_col)
