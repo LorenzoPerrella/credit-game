@@ -17,6 +17,7 @@ from creditsurv.models.nonparametric import (
 )
 from creditsurv.models.selection import (
     distribution_comparison,
+    exponential_is_rejected,
     marginal_comparison,
     shape_depends_on_covariates,
 )
@@ -30,6 +31,19 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from creditsurv.models.aft import FitResult
+
+
+def _direction(rho: float) -> str:
+    """How the Weibull hazard moves with age, read off its shape parameter.
+
+    Stated rather than asserted: a report that says "the hazard rises" while its own
+    number says otherwise is worse than one that says nothing.
+    """
+    if rho > 1.0:
+        return "**rises** with loan age, which is the seasoning pattern mortgages are expected to "
+    if rho < 1.0:
+        return "**falls** with loan age, which is *not* the seasoning pattern mortgages usually "
+    return "is constant in loan age, so the exponential is not rejected and is the simpler "
 
 
 #: What a skipped section says instead of quietly disappearing. A report missing a
@@ -146,16 +160,58 @@ returns a singular Hessian -- standard errors are NaN, lifelines warns against
 trusting the parameters, and on data generated from a Weibull process it
 estimates the shape parameter at 4.04 where the truth is 1.
 
-An unusable test is worse than no test, so selection rests on four weaker but sound
+An unusable test is worse than no test, so selection rests on five weaker but sound
 layers instead.
+
+**Where families nest, they are tested rather than ranked.** An information criterion
+is both more expensive and weaker than a hypothesis test, and the exponential nests
+inside the Weibull -- so it costs no fit at all, only a Wald test on a parameter the
+Weibull fit has already estimated. Only families that genuinely do not nest cost a fit
+each.
 """
     )
 
+    exponential = exponential_is_rejected(fitted) if fitted.distribution == "weibull" else None
+    if exponential is not None:
+        report.heading("1. Is the hazard constant? No fit required", level=3).text(
+            f"""
+The exponential is a Weibull with shape one, so the constant-hazard hypothesis is
+exactly `log rho = 0` and reads straight off the fitted coefficient table.
+
+**rho = {exponential["rho"]:.4f}, z = {exponential["z"]:.0f}, p = {exponential["p_value"]:.2e}.**
+The hazard {_direction(exponential["rho"])}show, and the constant-hazard hypothesis
+is settled without estimating anything further.
+"""
+        )
+
     marginal = marginal_comparison(panel, weights_col=weights_col)
-    report.heading("1. Marginal shape, covariate-free", level=3).text(
-        "A cheap check that catches a badly wrong family before any regression is "
-        "attempted. It cannot decide the final model, because covariates change "
-        "which family fits best."
+    report.heading("2. Marginal shape, covariate-free", level=3).text(
+        """
+Cheap -- seconds -- and **it does not answer the question it appears to answer.** It is
+shown because the obvious reading of it is wrong, and that is worth seeing.
+
+The marginal hazard is not the baseline hazard. On this panel it peaks at about
+forty-eight months of loan age, which looks like a seasoning curve and is not: it is
+2008 to 2010. Every vintage meets the crisis at a different loan age, so pooling them
+smears a calendar event across the age axis and produces a hump belonging to the economy
+rather than to the loan.
+
+Slicing the data differently does not repair it, because the obstruction is structural.
+Calendar period, origination cohort and loan age satisfy `period = cohort + age`
+**identically**, so no two can be held fixed while the third moves. Holding the calendar
+fixed at June 2009, the hazard rises to 61 bp at twenty-three months of age and falls to
+8 bp at eighty -- and the twenty-three month old loans are the 2007 vintage while the
+eighty month old ones are 2002. The profile tracks vintage quality exactly as well as it
+tracks age.
+
+This is the age-period-cohort identification problem, and its consequence here is that
+**the shape of the baseline hazard is not identified non-parametrically at all.** It
+becomes identified only under a restriction, and the restriction this model makes is
+that calendar time enters through a handful of macroeconomic covariates rather than as a
+free period effect. Which family fits therefore cannot be separated from which
+covariates are in the model -- which is why the comparison below, made *with* them, is
+the one that decides.
+"""
     ).table(marginal, decimals=2)
 
     # `fitted` is passed through so neither of these refits the model already in
@@ -168,7 +224,7 @@ layers instead.
         if extra_fits
         else None
     )
-    report.heading("2. Regression fits on identical episodes", level=3).text(
+    report.heading("3. Regression fits on identical episodes", level=3).text(
         """
 The log-normal is absent because it does not converge on this panel structure --
 observed across sample sizes, with and without a penalizer, under two optimisers,
@@ -194,7 +250,7 @@ loan-level right-censored one by AIC is not a comparison at all.
         if extra_fits
         else None
     )
-    report.heading("3. Does the hazard's shape vary with covariates?", level=3).text(
+    report.heading("4. Does the hazard's shape vary with covariates?", level=3).text(
         f"""
 The default model lets a covariate move *when* default happens while leaving the
 shape of the hazard over the life of the loan alone. That is an assumption, and a
@@ -218,7 +274,7 @@ Tested on `{covariates[0]}`:
     inside = int(band["inside"].sum())
 
     figure = charts.survival_vs_kaplan_meier(curve, predicted, figures / "survival_vs_km.png")
-    report.heading("4. Against the non-parametric estimate", level=3).text(
+    report.heading("5. Against the non-parametric estimate", level=3).text(
         f"""
 The strongest evidence available, because Kaplan-Meier assumes nothing about the
 distribution. A fitted curve straying outside its confidence band is being
