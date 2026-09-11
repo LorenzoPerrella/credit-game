@@ -89,13 +89,27 @@ def load_series(
     A network failure is not fatal when the series has been cached before: the
     cached copy is used and a warning is emitted. This keeps the project usable
     offline without ever silently pretending a refresh succeeded.
+
+    A cached series that does not reach back to ``start`` is refetched rather than
+    returned short. The cache is keyed by series id alone, so without this check a
+    widened ``start`` is silently ignored -- and the covariates that need the extra
+    history are not *wrong*, they are **missing**, which means their rows are dropped.
+    That removes the opening months of the earliest vintages and leaves the rest,
+    which is left truncation nothing downstream can see.
     """
     cache_file = _cache_path(spec.series_id)
 
     if not refresh and cache_file.exists():
         cached = pd.read_parquet(cache_file)[spec.column]
-        _LOGGER.debug("Loaded %s from cache (%d observations)", spec.series_id, len(cached))
-        return cached
+        if cached.index.min() <= pd.Timestamp(start):
+            _LOGGER.debug("Loaded %s from cache (%d observations)", spec.series_id, len(cached))
+            return cached
+        _LOGGER.info(
+            "Cached %s starts %s, need %s; refetching.",
+            spec.series_id,
+            cached.index.min().date(),
+            start,
+        )
 
     try:
         observations = _download(spec, start, end)
