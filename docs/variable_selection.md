@@ -536,6 +536,47 @@ Recorded rather than edited away, and mirrored in the code beside where the revi
 used to live. The lesson generalises: **a marginal relationship is evidence that a
 covariate is correlated with the outcome, never that it is identified in a model.**
 
+### The one stratum whose curves do cross
+
+The crossing check exists to be able to refuse the project's commitment to a single
+survival function, and on `purpose` and `term_years` it does not. On **`occupancy` it
+does**, and the crossing is substantive rather than an artefact:
+
+```
+ 60 months:   investor 0.9522   owner-occupied 0.9533
+ 91 months:   investor 0.9258   owner-occupied 0.9246
+```
+
+Investor loans die faster early and slower late. The reading is not exotic: an investor
+walks away from a property that stops paying, which is a business decision and a quick
+one, while an owner-occupier fights to stay. Past seven years the survivors on the
+investor side are professional landlords with seasoned cashflow, and the owner-occupied
+side keeps accumulating job losses, divorces and illnesses.
+
+**No scale factor maps one curve onto the other**, which is precisely what an
+accelerated failure time model assumes when a covariate enters only through the scale.
+For `occupancy` that assumption is violated.
+
+The remedy is available and is not segmentation: `ancillary` lets the *shape* parameter
+depend on the covariate, so a single parametric model represents both curves.
+`shape_depends_on_covariates` tests whether it earns its parameters. It costs a fit of
+its own on this panel, which is why it sits behind `report --extra-fits` — and it is the
+open item this document ends on rather than a question it has answered.
+
+Two floors were needed before the check could say anything at all, and both are worth
+recording because either omission made it useless in the opposite direction:
+
+* **Exposure**, at 10,000 loan-months. A thirty-year book has ages nobody reached; at
+  the far tail a stratum falls to single digits. Without this, every stratum "crossed"
+  on tails of 2, 4 and 109 loan-months.
+* **Materiality**, at 0.001 of survival. The default tolerance was `1e-9`, which treats
+  any difference as an ordering. Every crossing it found sat at two or three months of
+  loan age with a gap of 0.00000 to 0.0002 — because a default needs ninety days of
+  delinquency, so before month three every curve is at 1.0 by construction and they
+  differ only by rounding.
+
+A check that always fires refuses nothing.
+
 ## Would `nmds` have done the same?
 
 Four of the five, yes. The other decisions diverge, and it is worth being precise about
