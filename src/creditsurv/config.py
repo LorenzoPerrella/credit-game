@@ -275,13 +275,13 @@ ORDINAL: Final[tuple[str, ...]] = ("term_years",)
 #: carry. It is recoverable the same way ``cltv_drift`` is -- from a banded
 #: ``orig_spread`` plus the mortgage-rate path, both functions of the key -- which is
 #: the cheapest of the candidate additions and the one to weigh first.
+#: **One covariate per economic dimension**, and that rule is the outcome of getting
+#: it wrong twice. Housing, labour, financial stress, prices -- four dimensions, four
+#: covariates. Everything else tried duplicated one of them and was not identified
+#: beside it. See ``ELIMINATED`` for the measurements.
 TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
     "cltv_drift",
     "unemp_gap",
-    "nfci_lagged",
-    "rate_gap",
-    "policy_rate_gap",
-    "hpi_growth",
     "vix",
     "inflation",
 )
@@ -325,6 +325,43 @@ MACRO_CANDIDATES: Final[tuple[str, ...]] = (
 #:
 #: See docs/variable_selection.md for the measured tables behind each.
 ELIMINATED: Final[dict[str, str]] = {
+    # --- not identified beside a larger covariate carrying the same information ---
+    #
+    # These four passed the sign and collinearity screens and were eliminated by a rule
+    # those screens do not contain: a covariate whose standardised effect is small
+    # **and** which sits beside a larger correlated one carrying the same economic
+    # information is not identified, and its sign is noise.
+    #
+    # The evidence is that the sign moves when the sample does. Restricting the panel
+    # to everything before 2024-12 -- dropping 6.3% of exposure -- flipped all three of
+    # these that had a sign at all, while every covariate with a standardised effect
+    # above 0.1 held to within a few percent. In log survival time per standard
+    # deviation:
+    #
+    #     vix          -0.32  stable      hpi_growth       -0.09  flipped
+    #     cltv_drift   -0.29  stable      nfci_lagged      +0.05  flipped
+    #     inflation    +0.13  stable      policy_rate_gap  -0.04  flipped
+    #     unemp_gap    -0.09  stable      rate_gap         -0.01  ~zero
+    #
+    "hpi_growth": (
+        "not identified beside cltv_drift, which is built from the *same* house price "
+        "index: the information enters twice and the second time is residual. 1sd "
+        "effect -0.09 against -0.29, and the sign flips with the sample"
+    ),
+    "nfci_lagged": (
+        "not identified beside vix (rho +0.55), which carries financial stress with "
+        "six times the effect and holds its sign"
+    ),
+    "policy_rate_gap": (
+        "not identified beside rate_gap (rho -0.79); both effects are inside the noise"
+    ),
+    "rate_gap": (
+        "conditional effect -0.0066 per standard deviation, which is zero. Its 4.8x "
+        "marginal ordering is the macro cycle, not the refinancing incentive, and the "
+        "argument made earlier for revising its expected sign on the strength of that "
+        "ordering is RETRACTED"
+    ),
+    # --- eliminated earlier, by the sign and content screens ---
     "credit_spread": (
         "marginal/conditional sign reversal: alone it orders default 4.1x in the "
         "right direction, and flips once nfci_lagged is present -- which is built "

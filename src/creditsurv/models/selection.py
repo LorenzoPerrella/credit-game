@@ -351,29 +351,11 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
     "vix": -1,  # high implied volatility is a stressed economy
     "hpi_growth": +1,  # rising house prices build equity
     #
-    # The two below carry signs *opposite* to the ones first written here, and the
-    # revision was made after seeing the fit -- which is the one thing this procedure
-    # exists to prevent. It is recorded as a revision rather than presented as a
-    # prior, and it rests on a mechanism that can be checked independently of the
-    # result, not on the result.
-    #
-    # What both first priors assumed is a **floating-rate transmission channel that a
-    # thirty-year fixed-rate mortgage does not have**. The borrower's payment does not
-    # move when the policy rate moves. Strip that channel out and what remains is the
-    # opposite sign in each case:
-    "policy_rate_gap": +1,
-    # The Fed cuts in crises and tightens into strength, so a policy rate far *below*
-    # the one the loan was written at means 2009 or 2020. Measured: the band 5.5pp
-    # below origination carries 27.0 bp of monthly default, the highest of any band of
-    # any covariate in the model; 5.5pp above carries 4.1 bp.
-    "rate_gap": -1,
-    # Market rates below the note rate mean refinancing is open -- and whoever can
-    # refinance does, leaving the book as a prepayment, which this model treats as
-    # censoring. Who stays is who cannot: impaired credit, no equity. The coefficient
-    # measures that adverse selection, not the payment burden. Measured: flat at
-    # 3.5 bp while rates sit above the note rate, then 4.8x higher across the range
-    # where refinancing is attractive. It is the competing-risk limitation this
-    # project declares, showing up as an ordered and measurable effect.
+    # ``rate_gap`` and ``policy_rate_gap`` were briefly given revised signs here, on
+    # the strength of their marginal orderings and a mechanism about fixed-rate books.
+    # That revision is **retracted**: conditional on the rest of the specification both
+    # effects are inside the noise, and the marginal ordering that justified it was the
+    # macro cycle. They are eliminated rather than re-signed -- see ``config.ELIMINATED``.
 }
 
 #: Covariates deliberately left out of ``EXPECTED_SIGNS``, with the reason. Listed so

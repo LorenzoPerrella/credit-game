@@ -353,6 +353,12 @@ caveat.** Treating prepayment as independent censoring is not innocuous here: it
 visibly wrong in the direction theory predicts, and the sign flip is how it announces
 itself.
 
+> **This argument was wrong, and is retracted below.** Both covariates are eliminated
+> in step 9, and the marginal ordering that justified the revision turns out to be the
+> macro cycle rather than the refinancing incentive. The section is kept as written
+> because a procedure document that quietly deletes its own mistakes is not a record of
+> anything.
+
 ## The five covariates given up
 
 Recorded in `config.ELIMINATED`, with a test asserting none of them reappears in the
@@ -426,6 +432,110 @@ implicit: banded and entered as a categorical, the U is representable. That is w
 `nmds` would have done, and it is the one place where its approach is straightforwardly
 better than this one — see below.
 
+### 9. Stability — does the coefficient survive a change of sample?
+
+The twelve survivors were fitted, and three of them came out with the **wrong sign**:
+`nfci_lagged`, `policy_rate_gap` and `hpi_growth`. The last is the alarming one, because
+its marginal relationship is among the cleanest in the dataset — 20.61 bp to 3.86 bp,
+monotone, 5.3× — and the fitted model now said rising house prices *shorten* survival.
+
+The obvious suspect was the elimination itself: five covariates had been removed, and
+perhaps the survivors were now carrying what those had absorbed. **That was tested and
+it is not the cause.** On identical rows, the two specifications agree:
+
+| | 17 covariates | 12 covariates |
+|---|---|---|
+| `nfci_lagged` | +0.0139 | +0.0839 |
+| `policy_rate_gap` | +0.0796 | +0.0849 |
+| `hpi_growth` | +3.3200 | +3.4021 |
+
+The only other difference between the two runs was the **sample**: one was fitted on
+everything, the other on everything up to 2024-12 — 6.3% less exposure. And when 6% of
+a sample flips three signs, the problem is not the 6%.
+
+#### What the effect sizes show
+
+Raw coefficients hide this, because the covariates are on wildly different scales:
+`inflation` has a standard deviation of 0.017 and `cltv_drift` one of 15.2. Ranked by
+**effect of one standard deviation on log survival time**:
+
+| Covariate | 1 sd effect | Under a change of sample |
+|---|---|---|
+| `vix` | **−0.3216** | stable |
+| `cltv_drift` | **−0.2938** | stable |
+| `inflation` | **+0.1305** | stable |
+| `unemp_gap` | **−0.0943** | stable |
+| `hpi_growth` | −0.0917 | **flipped** |
+| `nfci_lagged` | +0.0526 | **flipped** |
+| `policy_rate_gap` | −0.0406 | **flipped** |
+| `rate_gap` | −0.0066 | effectively zero |
+
+**The three that flip are three of the four smallest effects**, and each sits beside a
+larger correlated covariate carrying the same economic information:
+
+| Dimension | Kept | ρ | Flipped |
+|---|---|---|---|
+| Financial stress | `vix` (−0.32) | +0.55 | `nfci_lagged` (+0.05) |
+| House prices | `cltv_drift` (−0.29) | −0.31 | `hpi_growth` (−0.09) |
+| Interest rates | `rate_gap` (−0.007) | −0.79 | `policy_rate_gap` (−0.04) |
+
+On the house-price pair this is literal rather than statistical: **`cltv_drift` is
+constructed from the house price index.** The information enters the model twice, and
+the second entry is a residual whose sign is noise.
+
+#### The rule
+
+> A covariate whose **standardised effect is small** and which sits beside a **larger
+> correlated covariate carrying the same economic information** is not identified. Its
+> sign is noise, and it will move when the sample does.
+
+This is not the sign constraint, and it is worth being clear why not. A sign constraint
+asks whether a coefficient points the right way; this asks whether it points anywhere at
+all. Applied here it *explains* the earlier sign failures rather than chasing them: a
+covariate-by-covariate elimination on a jointly identified block keeps rotating the
+basis, and each refit produces a different set of wrong signs.
+
+Neither correlation at 0.8 nor VIF at 10 catches it. `nfci_lagged` against `vix` is
+ρ = 0.55, well inside both thresholds, and the covariate is still not identified —
+because identification depends on the effect size relative to the shared variation, not
+on the shared variation alone.
+
+#### The specification this leaves
+
+**One covariate per economic dimension**: housing (`cltv_drift`), labour (`unemp_gap`),
+financial stress (`vix`), prices (`inflation`). Four, from the thirteen that were built.
+
+Fitted on both samples, it holds:
+
+| Covariate | Training (≤2024-12) | Whole population | Change |
+|---|---|---|---|
+| `fico_s` | +0.3838 | +0.3899 | 1.6% |
+| `orig_ltv` | −0.0155 | −0.0157 | 1.3% |
+| `dti` | −0.0186 | −0.0186 | **0%** |
+| `term_years` | −0.0383 | −0.0378 | 1.3% |
+| `cltv_drift` | −0.0154 | −0.0161 | 4.5% |
+| `unemp_gap` | −0.0377 | −0.0386 | 2.4% |
+| `vix` | −0.0288 | −0.0287 | **0.3%** |
+| `inflation` | +5.0810 | +5.0072 | 1.5% |
+
+No sign changes and nothing moving more than 4.5%, against `hpi_growth` going from
++0.75 to −1.31 on the same two samples one specification earlier. Every standardised
+effect now sits between 0.09 and 0.47: there is no residual covariate left whose sign
+could be noise.
+
+#### The retraction
+
+The argument made in *"Two priors that were wrong, and the revision"* above is
+**withdrawn**. `rate_gap`'s conditional effect is −0.0066 per standard deviation, which
+is zero; the 4.8× marginal ordering that was offered as independent evidence is the
+macro cycle, the same thing that produced the spurious hump in the marginal hazard. The
+mechanism — that a fixed-rate book has no payment channel — may well be true and is not
+what the data was showing.
+
+Recorded rather than edited away, and mirrored in the code beside where the revision
+used to live. The lesson generalises: **a marginal relationship is evidence that a
+covariate is correlated with the outcome, never that it is identified in a model.**
+
 ## Would `nmds` have done the same?
 
 Four of the five, yes. The other decisions diverge, and it is worth being precise about
@@ -434,6 +544,7 @@ which.
 | Decision | `nmds` | Here |
 |---|---|---|
 | `credit_spread` eliminated on a violated sign | **Yes** — `elimination_type="invalid_coefficient"` | Same |
+| `hpi_growth`, `nfci_lagged`, `policy_rate_gap` eliminated on stability | **No** — it has no stability step; it would have eliminated them on sign and then refit into the next set of wrong signs | Eliminated on the standardised-effect rule |
 | `term_spread` eliminated | **No** — it has no expected sign, so nothing catches it | Marginal/conditional reversal |
 | `equity_return`, `sentiment` eliminated | **On sign**, if it had a prior for equity indices — its univariate screen is p > 0.05, which they pass at p = 0 | On absent marginal content |
 | `starts_growth` as a linear term | **Would not arise** — `nmds` coarse-classes into bands, so the U is representable | Eliminated; banding is the way back |
