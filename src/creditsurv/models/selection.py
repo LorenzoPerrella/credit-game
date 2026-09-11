@@ -274,6 +274,32 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
     "unemp_gap": -1,  # unemployment above origination fails sooner
     "nfci_lagged": -1,  # tighter financial conditions fail sooner
     "mi_percent": +1,  # insured loans are underwritten against a stricter standard
+    # Macro candidates. Only where theory actually commits to a direction: a
+    # covariate listed here with no clear prior would be eliminated for disagreeing
+    # with a guess, which is worse than not testing it.
+    "policy_rate_gap": -1,  # rates above those the loan was written at fail sooner
+    "credit_spread": -1,  # wider corporate spreads are a stressed economy
+    "vix": -1,  # so is high implied volatility
+    "hpi_growth": +1,  # rising house prices build equity
+    "equity_return": +1,  # household wealth
+    "sentiment": +1,  # confidence
+    "starts_growth": +1,  # a strong housing market
+    "rate_gap": +1,  # rates below those the loan was written at: refinancing is open
+}
+
+#: Covariates deliberately left out of ``EXPECTED_SIGNS``, with the reason. Listed so
+#: the omission reads as a decision rather than an oversight.
+#:
+#: ``rate_gap`` is the near miss. The sign above is the dominant channel -- rates
+#: below the note rate mean refinancing is available and the payment burden is
+#: easier -- but the opposite channel is real: the borrowers who *cannot* refinance
+#: when everyone else can are adversely selected, and they are the ones left in the
+#: book. The constraint is kept because the first channel dominates in the
+#: literature, and this note is here because it is a prior, not a finding.
+AMBIGUOUS_SIGNS: Final[dict[str, str]] = {
+    "term_spread": "a steep curve is both cheap short funding and an expected slowdown",
+    "inflation": "erodes the real debt, squeezes the real income",
+    "dti": "kept as negative, but it is measured at origination and never updated",
 }
 
 

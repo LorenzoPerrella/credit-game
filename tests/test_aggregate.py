@@ -359,10 +359,11 @@ def test_the_default_formula_only_names_covariates_the_cells_carry() -> None:
         TIME_VARYING_CONTINUOUS,
     )
     from creditsurv.data.aggregate import DEFAULT_SPEC
+    from creditsurv.features import MACRO_DERIVED
 
     in_key = set(DEFAULT_SPEC.continuous) | set(DEFAULT_SPEC.categorical)
     #: Rebuilt by cells_to_episodes from the vintage, the age and the macro path.
-    derived = {"cltv_drift", "unemp_gap", "nfci_lagged"}
+    derived = set(MACRO_DERIVED)
 
     modelled = set(STATIC_CONTINUOUS) | set(TIME_VARYING_CONTINUOUS) | set(ORDINAL)
     modelled |= set(CATEGORICAL_REFERENCE)

@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 import pandas as pd
 
+from creditsurv.features import MACRO_DERIVED, add_macro_family
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -346,10 +348,8 @@ def cells_to_episodes(
 
     Macro covariates are recomputed here from vintage and age, which is why they were
     kept out of the grouping key: ``period = vintage + age``, so nothing was lost by
-    leaving them out and the cardinality was spared. Only the two that depend on
-    nothing else are rebuilt -- unemployment gap and financial conditions. Anything
-    needing a loan-level quantity that is not in the key, such as the refinancing
-    incentive, would have to have that quantity added to the specification first.
+    leaving them out and the cardinality was spared. See
+    :func:`creditsurv.features.add_macro_family` for the family and why it is free.
     """
     if cells.empty:
         message = "No cells to expand."
@@ -370,31 +370,7 @@ def cells_to_episodes(
     # A period ordinal in months since year zero, so age can simply be added.
     observation = orig_month + episodes[AGE_START].astype(int)
 
-    lagged = macro.shift(lag_months)
-    macro_index = pd.PeriodIndex(macro.index)
-    macro_month = macro_index.year * 12 + (macro_index.month - 1)
-    unemployment = pd.Series(lagged["unemployment_rate"].to_numpy(), index=macro_month)
-    conditions = pd.Series(lagged["nfci"].to_numpy(), index=macro_month)
-
-    episodes["unemp_gap"] = (
-        observation.map(unemployment).to_numpy() - orig_month.map(unemployment).to_numpy()
-    )
-    episodes["nfci_lagged"] = observation.map(conditions).to_numpy()
-
-    # Mark-to-market leverage, from the national house price index. Derived here
-    # rather than carried in the grouping key because it is a function of orig_ltv
-    # and the macro path, both of which the key already holds -- carrying it was
-    # doubling the cell count for information already there.
-    #
-    # The index rather than Freddie's own per-loan ELTV, which would be better if it
-    # were usable: its coverage runs from 0.8% of the 1999 vintage to 94% of 2021, so
-    # a model built on it would estimate a different quantity in every decade.
-    if "orig_ltv" in episodes.columns:
-        prices = pd.Series(macro["hpi"].to_numpy(), index=macro_month)
-        at_origination = orig_month.map(prices).to_numpy()
-        now = observation.map(prices).to_numpy()
-        original = episodes["orig_ltv"].to_numpy(dtype=float)
-        episodes["cltv_drift"] = original * at_origination / now - original
+    add_macro_family(episodes, macro, orig_month, observation, lag_months)
 
     # Calendar columns, so a split can be taken on time without recomputing them.
     # The episode is dated at its start: a band spans several months and has to be
@@ -410,4 +386,5 @@ def cells_to_episodes(
     episodes[UPPER_BOUND] = np.where(defaulted, stop, np.inf)
     episodes[EXACT_OBSERVATION] = False
 
-    return episodes.dropna(subset=["unemp_gap", "nfci_lagged"]).reset_index(drop=True)
+    required = [name for name in MACRO_DERIVED if name in episodes.columns]
+    return episodes.dropna(subset=required).reset_index(drop=True)

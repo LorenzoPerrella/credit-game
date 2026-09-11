@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from creditsurv.config import MACRO_LAG_MONTHS
 from creditsurv.data.freddiemac import (
     ORIGINATION_COLUMNS,
     PERFORMANCE_COLUMNS,
@@ -193,7 +194,13 @@ def _originations(
     what keeps the archive fixture to a handful of vintage files instead of one per
     year since 1999.
     """
-    usable = macro.index[6:] if window_months is None else macro.index[-window_months:]
+    # Far enough in that every macro-derived covariate can be built: the family
+    # reaches MACRO_LAG_MONTHS + 12 months back for a year-on-year change on a lagged
+    # series, and a row it cannot be built for is dropped. Drawing earlier than this
+    # silently removes the opening months of the earliest loans while keeping the
+    # rest of them, which is left truncation the likelihood is never told about.
+    opening = MACRO_LAG_MONTHS + 12 + 3
+    usable = macro.index[opening:] if window_months is None else macro.index[-window_months:]
     orig_period = pd.PeriodIndex(rng.choice(usable, size=n_loans), freq="M")
 
     correlation = np.array([[1.00, -0.45, -0.35], [-0.45, 1.00, 0.30], [-0.35, 0.30, 1.00]])

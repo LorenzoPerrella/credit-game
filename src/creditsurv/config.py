@@ -83,6 +83,7 @@ class Frequency(StrEnum):
     around missing observations, and the aggregation rule depends on it.
     """
 
+    DAILY = "daily"
     WEEKLY = "weekly"
     MONTHLY = "monthly"
     QUARTERLY = "quarterly"
@@ -124,7 +125,88 @@ MACRO_SERIES: Final[tuple[SeriesSpec, ...]] = (
         frequency=Frequency.WEEKLY,
         description="Chicago Fed National Financial Conditions Index.",
     ),
+    # Everything below is free, in the sense that matters here. The cell count is the
+    # product of the band counts of whatever enters the aggregation key -- and a macro
+    # series never does. Every covariate derived from one is a function of the
+    # vintage quarter and the loan age, both of which the key already holds, so it is
+    # recomputed after the collapse at no cost in cardinality at all.
+    #
+    # That asymmetry is worth stating plainly: adding a loan characteristic to the
+    # model can multiply the table by five, and adding a macro series cannot change
+    # its size by a single row. Which is why the macro side is generous and the loan
+    # side is not.
+    SeriesSpec(
+        series_id="MORTGAGE15US",
+        column="mortgage_rate_15y",
+        frequency=Frequency.WEEKLY,
+        description="15-year fixed rate mortgage average, percent.",
+    ),
+    SeriesSpec(
+        series_id="FEDFUNDS",
+        column="policy_rate",
+        frequency=Frequency.MONTHLY,
+        description="Effective federal funds rate, percent.",
+    ),
+    SeriesSpec(
+        series_id="DGS10",
+        column="treasury_10y",
+        frequency=Frequency.DAILY,
+        description="10-year Treasury constant maturity yield, percent.",
+    ),
+    SeriesSpec(
+        series_id="T10Y2Y",
+        column="term_spread",
+        frequency=Frequency.DAILY,
+        description="10-year minus 2-year Treasury spread, percentage points.",
+    ),
+    SeriesSpec(
+        series_id="BAA10Y",
+        column="credit_spread",
+        frequency=Frequency.DAILY,
+        description="Moody's Baa corporate yield over the 10-year Treasury.",
+    ),
+    SeriesSpec(
+        series_id="CPIAUCSL",
+        column="cpi",
+        frequency=Frequency.MONTHLY,
+        description="Consumer price index, all urban consumers, seasonally adjusted.",
+    ),
+    SeriesSpec(
+        series_id="NASDAQCOM",
+        column="equity_index",
+        frequency=Frequency.DAILY,
+        description="Nasdaq Composite index.",
+    ),
+    SeriesSpec(
+        series_id="VIXCLS",
+        column="vix",
+        frequency=Frequency.DAILY,
+        description="CBOE volatility index.",
+    ),
+    SeriesSpec(
+        series_id="UMCSENT",
+        column="sentiment",
+        frequency=Frequency.MONTHLY,
+        description="University of Michigan consumer sentiment index.",
+    ),
+    SeriesSpec(
+        series_id="HOUST",
+        column="housing_starts",
+        frequency=Frequency.MONTHLY,
+        description="Privately owned housing units started, thousands, annual rate.",
+    ),
 )
+
+#: ``SP500`` and ``DJIA`` are unusable here: FRED keeps only ten years of them, so
+#: both start in 2016 and would leave seventeen vintages with no equity covariate at
+#: all. ``NASDAQCOM`` reaches back to 1999 and is the substitute. ``TDSP``, the
+#: household debt service ratio, is the most directly relevant series of the lot and
+#: is excluded for the same reason: it begins in 2005.
+EXCLUDED_SERIES: Final[dict[str, str]] = {
+    "SP500": "FRED retains ten years only; starts 2016",
+    "DJIA": "FRED retains ten years only; starts 2016",
+    "TDSP": "starts 2005, leaving six vintages uncovered",
+}
 
 #: Series used only to sanity-check observed default rates against a published aggregate.
 #: Never a model covariate: it is an outcome, not a driver.
@@ -139,8 +221,18 @@ REFERENCE_SERIES: Final[tuple[SeriesSpec, ...]] = (
     ),
 )
 
-#: Earliest observation to request. 1999 matches the Freddie Mac dataset start.
-MACRO_START: Final = "1999-01-01"
+#: Earliest observation to request.
+#:
+#: Two years before the loan data, not alongside it. A covariate lagged three months
+#: and measured as a year-on-year change reaches fifteen months back, so a panel
+#: starting in January 1999 would have no such covariate until April 2000 -- and the
+#: rows would be *dropped*, silently removing the first fifteen months of every loan
+#: in the earliest vintages while keeping the rest of them.
+#:
+#: That is left truncation the likelihood is never told about, which is precisely
+#: what ``validate_episodes`` refuses on a loan-level panel. Reaching further back
+#: for the macro series costs nothing and removes the problem at its source.
+MACRO_START: Final = "1997-01-01"
 
 #: Months by which every macro covariate is lagged before entering the model.
 #: Guards against using information that was not yet published at the time.
@@ -187,6 +279,57 @@ TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
     "cltv_drift",
     "unemp_gap",
     "nfci_lagged",
+    "rate_gap",
+    "hpi_growth",
+)
+
+#: Every macro-derived covariate available, including the ones the default model does
+#: not use. This is the set variable selection runs on; ``TIME_VARYING_CONTINUOUS``
+#: holds what survived it.
+#:
+#: They are deliberately collinear -- five interest-rate series will not all live
+#: through a VIF pass -- and that is the point of having a selection procedure rather
+#: than a list of opinions. Adding them costs nothing: a macro covariate is a function
+#: of the vintage quarter and the loan age, both already in the aggregation key, so
+#: none of them adds a single cell. The elimination priority below decides who goes
+#: first, and it is fixed here, before any result is looked at.
+MACRO_CANDIDATES: Final[tuple[str, ...]] = (
+    "cltv_drift",
+    "unemp_gap",
+    "nfci_lagged",
+    "rate_gap",
+    "hpi_growth",
+    "policy_rate_gap",
+    "term_spread",
+    "credit_spread",
+    "inflation",
+    "equity_return",
+    "vix",
+    "sentiment",
+    "starts_growth",
+)
+
+#: Order in which collinear macro covariates are given up, most expendable first.
+#:
+#: Fixed in advance, the way `nmds` fixes its own scale before running the selection,
+#: because a priority chosen after seeing the VIF table is not a priority -- it is a
+#: preference for whichever answer came out. The principle: keep what is specific to
+#: mortgage credit, give up what is a general business-cycle proxy, and among
+#: equivalents keep the series with the longest clean history.
+MACRO_ELIMINATION_PRIORITY: Final[tuple[str, ...]] = (
+    "equity_return",
+    "vix",
+    "sentiment",
+    "term_spread",
+    "inflation",
+    "starts_growth",
+    "policy_rate_gap",
+    "credit_spread",
+    "hpi_growth",
+    "rate_gap",
+    "nfci_lagged",
+    "unemp_gap",
+    "cltv_drift",
 )
 
 #: Categorical covariates mapped to their treatment-coding reference level.

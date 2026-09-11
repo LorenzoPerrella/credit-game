@@ -24,7 +24,7 @@ the two carry almost independent information.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import numpy as np
 import pandas as pd
@@ -35,18 +35,35 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 #: Published in arrears and revised, so lagged before entering any covariate.
-LAGGED_SERIES: tuple[str, ...] = ("unemployment_rate", "hpi", "nfci")
+LAGGED_SERIES: tuple[str, ...] = (
+    "unemployment_rate",
+    "hpi",
+    "nfci",
+    "cpi",
+    "sentiment",
+    "housing_starts",
+)
 
 #: Published in real time and never revised, so used contemporaneously.
-CONTEMPORANEOUS_SERIES: tuple[str, ...] = ("mortgage_rate_30y",)
+CONTEMPORANEOUS_SERIES: tuple[str, ...] = (
+    "mortgage_rate_30y",
+    "mortgage_rate_15y",
+    "treasury_10y",
+    "term_spread",
+    "credit_spread",
+    "equity_index",
+    "vix",
+)
 
-#: Covariates this module adds to a loan-month panel.
+#: Covariates this module adds to a loan-month panel, and which must all be present
+#: for a row to be usable. ``refi_incentive`` and ``indexed_cltv`` are built only where
+#: the columns they read exist, so they are checked by presence rather than listed.
 DERIVED_COLUMNS: tuple[str, ...] = (
-    "indexed_cltv",
     "cltv_drift",
     "unemp_gap",
-    "refi_incentive",
     "nfci_lagged",
+    "rate_gap",
+    "hpi_growth",
 )
 
 
@@ -87,29 +104,37 @@ def add_macro_covariates(
     Rows whose covariates cannot be built -- typically the earliest vintages, where
     the lagged macro history does not reach back far enough -- are dropped rather
     than imputed.
+
+    The whole macro family comes from :func:`add_macro_family`, which is also what
+    the aggregated path calls. One definition, one implementation: a covariate built
+    two ways is a covariate that will eventually be built two *different* ways, and
+    the backtest is exactly where that would go unnoticed.
     """
-    lagged = lag_macro(macro, lag_months=lag_months)
-
-    hpi_at_origination = _lookup(panel["orig_period"], lagged["hpi"])
-    hpi_now = _lookup(panel["period"], lagged["hpi"])
-    unemployment_at_origination = _lookup(panel["orig_period"], lagged["unemployment_rate"])
-    unemployment_now = _lookup(panel["period"], lagged["unemployment_rate"])
-
     enriched = panel.copy()
+    orig_month = _month_ordinal(panel["orig_period"])
+    observation = _month_ordinal(panel["period"])
+    add_macro_family(enriched, macro, orig_month, observation, lag_months)
+
     if "orig_ltv" in panel.columns:
-        # Mark-to-market loan-to-value: the original ratio re-expressed at today's
-        # house prices. Prices up, the ratio falls and the borrower has more equity.
-        enriched["indexed_cltv"] = panel["orig_ltv"] * hpi_at_origination / hpi_now
-        enriched["cltv_drift"] = enriched["indexed_cltv"] - panel["orig_ltv"]
-    enriched["unemp_gap"] = unemployment_now - unemployment_at_origination
+        # Kept for inspection rather than modelling: the level and the movement are
+        # what the model reads, and this is their sum.
+        enriched["indexed_cltv"] = panel["orig_ltv"] + enriched["cltv_drift"]
     if "note_rate" in panel.columns:
+        # The full refinancing incentive, available only where the note rate is --
+        # which is the loan-level path. The aggregated one carries rate_gap, the part
+        # of this that varies over the life of the loan.
         enriched["refi_incentive"] = panel["note_rate"] - _lookup(
             panel["period"], macro["mortgage_rate_30y"]
         )
-    enriched["nfci_lagged"] = _lookup(panel["period"], lagged["nfci"])
 
     built = [name for name in DERIVED_COLUMNS if name in enriched.columns]
     return enriched.dropna(subset=built).reset_index(drop=True)
+
+
+def _month_ordinal(periods: pd.Series) -> pd.Series:
+    """Months since year zero, so a loan age can simply be added to a calendar month."""
+    index = pd.PeriodIndex(periods)
+    return pd.Series(index.year * 12 + (index.month - 1), index=periods.index)
 
 
 def assert_no_lookahead(
@@ -169,6 +194,21 @@ BIN_EDGES: dict[str, tuple[float, ...]] = {
     "unemp_gap": (-10.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 12.0),
     "refi_incentive": (-6.0, -1.0, 0.0, 0.5, 1.0, 2.0, 6.0),
     "nfci_lagged": (-2.0, -0.6, -0.4, -0.2, 0.0, 0.5, 1.0, 5.0),
+    # Macro candidates. Edges are on the units the series is quoted in -- percentage
+    # points for rates and spreads, fractions for year-on-year changes -- so a band
+    # can be read without a conversion table. They are starting points: `profile
+    # --covariate <name>` proposes quantile cut points from the data, and where the
+    # two disagree the data wins.
+    "rate_gap": (-6.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 6.0),
+    "hpi_growth": (-0.5, -0.10, -0.05, 0.0, 0.05, 0.10, 0.15, 0.5),
+    "policy_rate_gap": (-8.0, -3.0, -1.0, 0.0, 1.0, 3.0, 8.0),
+    "term_spread": (-3.0, -0.5, 0.0, 0.5, 1.0, 2.0, 4.0),
+    "credit_spread": (0.0, 1.5, 2.0, 2.5, 3.0, 4.0, 7.0),
+    "inflation": (-0.05, 0.0, 0.02, 0.03, 0.05, 0.10),
+    "equity_return": (-0.7, -0.2, 0.0, 0.1, 0.2, 0.4, 1.5),
+    "vix": (8.0, 14.0, 18.0, 22.0, 28.0, 40.0, 90.0),
+    "sentiment": (50.0, 65.0, 75.0, 85.0, 95.0, 115.0),
+    "starts_growth": (-0.7, -0.3, -0.1, 0.0, 0.1, 0.3, 1.5),
 }
 
 #: Suffix for the representative value of a covariate's band.
@@ -230,3 +270,140 @@ def binned_formula(formula: str, edges: dict[str, tuple[float, ...]] | None = No
             rewritten,
         )
     return rewritten
+
+
+#: Macro series published in real time and never revised, so read contemporaneously
+#: rather than lagged. Market quotes: a borrower comparing their note rate with
+#: today's does not wait three months to do it, and a Treasury yield is not restated.
+CONTEMPORANEOUS_MACRO: Final[tuple[str, ...]] = CONTEMPORANEOUS_SERIES
+
+
+#: Covariates :func:`add_macro_family` builds. Every one is a function of the
+#: vintage quarter and the loan age, so none of them enters the aggregation key and
+#: none of them costs a single cell.
+MACRO_DERIVED: Final[tuple[str, ...]] = (
+    "cltv_drift",
+    "unemp_gap",
+    "nfci_lagged",
+    "rate_gap",
+    "hpi_growth",
+    "policy_rate_gap",
+    "term_spread",
+    "credit_spread",
+    "inflation",
+    "equity_return",
+    "vix",
+    "sentiment",
+    "starts_growth",
+)
+
+
+def add_macro_family(
+    episodes: pd.DataFrame,
+    macro: pd.DataFrame,
+    orig_month: pd.Series,
+    observation: pd.Series,
+    lag_months: int,
+) -> None:
+    """Rebuild every macro-derived covariate, in place.
+
+    Each is a function of the vintage quarter and the loan age, which the cell key
+    already carries, so the whole family is free: adding a macro series cannot change
+    the size of the cell table by one row, while adding a loan characteristic to the
+    key can multiply it. That asymmetry is why the macro side of the specification is
+    generous and the loan side is not.
+
+    Three shapes appear, and the distinction is not cosmetic:
+
+    * **a gap since origination** -- unemployment, the policy rate, the market
+      mortgage rate. Zero at origination by construction, so it carries the
+      *movement* and leaves the level to the origination covariates, which is what
+      keeps the pair from being collinear.
+    * **a level at the observation date** -- financial conditions, the term and
+      credit spreads, volatility, sentiment. The state of the world the loan is
+      living in, regardless of what it was written into.
+    * **a year-on-year change** -- house prices, inflation, equities, housing
+      starts. A twelve-month window rather than a one-month one because the monthly
+      change in these is mostly noise.
+
+    Nothing is selected here. These are candidates, and they are deliberately
+    collinear -- five interest-rate series will not survive together. Pruning is the
+    job of the correlation, VIF and backward-elimination passes in
+    :mod:`creditsurv.models.selection`, which is the place the decision is recorded.
+    """
+    lagged = macro.shift(lag_months)
+    for column in CONTEMPORANEOUS_MACRO:
+        if column in macro.columns:
+            lagged[column] = macro[column]
+
+    index = pd.PeriodIndex(macro.index)
+    month = index.year * 12 + (index.month - 1)
+    available = set(macro.columns)
+
+    def at(column: str, when: pd.Series, *, offset: int = 0) -> np.ndarray:
+        """A macro column read at ``when``, optionally shifted back ``offset`` months."""
+        series = pd.Series(lagged[column].to_numpy(), index=month)
+        return np.asarray((when - offset).map(series).to_numpy(), dtype=float)
+
+    def level(column: str) -> np.ndarray:
+        """The series as it stands at the observation date."""
+        return at(column, observation)
+
+    def gap(column: str) -> np.ndarray:
+        """How far a series has moved since the loan was written."""
+        moved: np.ndarray = at(column, observation) - at(column, orig_month)
+        return moved
+
+    def growth(column: str) -> np.ndarray:
+        """Year-on-year change, as a fraction."""
+        change: np.ndarray = at(column, observation) / at(column, observation, offset=12) - 1.0
+        return change
+
+    # Built only where the series exists, so a panel assembled from a partial cache
+    # yields the covariates it can rather than raising on the first one it cannot.
+    for name, source, build in (
+        ("unemp_gap", "unemployment_rate", gap),
+        ("policy_rate_gap", "policy_rate", gap),
+        ("nfci_lagged", "nfci", level),
+        ("term_spread", "term_spread", level),
+        ("credit_spread", "credit_spread", level),
+        ("vix", "vix", level),
+        ("sentiment", "sentiment", level),
+        ("hpi_growth", "hpi", growth),
+        ("inflation", "cpi", growth),
+        ("equity_return", "equity_index", growth),
+        ("starts_growth", "housing_starts", growth),
+    ):
+        if source in available:
+            episodes[name] = build(source)
+
+    # The refinancing benchmark is switched by term, repeating what the source data
+    # says rather than what is convenient: a fifteen-year loan is refinanced against
+    # the fifteen-year rate. That is possible only because term_years is in the cell
+    # key -- and until it was, every loan was compared with the thirty-year rate,
+    # which is simply the wrong benchmark for a quarter of the book.
+    #
+    # This is the movement in the market rate since origination, not the full
+    # refinancing incentive: the latter needs the loan's own note rate, which the key
+    # does not carry. The constant part is missing; the part that varies is here.
+    if "mortgage_rate_30y" in available:
+        thirty = -gap("mortgage_rate_30y")
+        if "term_years" in episodes.columns and "mortgage_rate_15y" in available:
+            short = episodes["term_years"].to_numpy(dtype=float) <= 20.0
+            episodes["rate_gap"] = np.where(short, -gap("mortgage_rate_15y"), thirty)
+        else:
+            episodes["rate_gap"] = thirty
+
+    # Mark-to-market leverage, from the national house price index. Derived here
+    # rather than carried in the grouping key because it is a function of orig_ltv
+    # and the macro path, both of which the key already holds -- carrying it was
+    # doubling the cell count for information already there.
+    #
+    # The index rather than Freddie's own per-loan ELTV, which would be better if it
+    # were usable: its coverage runs from 0.8% of the 1999 vintage to 94% of 2021, so
+    # a model built on it would estimate a different quantity in every decade.
+    if "orig_ltv" in episodes.columns and "hpi" in available:
+        original = episodes["orig_ltv"].to_numpy(dtype=float)
+        episodes["cltv_drift"] = (
+            original * at("hpi", orig_month) / at("hpi", observation) - original
+        )

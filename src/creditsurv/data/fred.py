@@ -124,7 +124,11 @@ def to_monthly(observations: pd.Series, frequency: Frequency) -> pd.Series:
     the weeks in it. Monthly and quarterly levels are carried forward, because
     they are point-in-time readings that stay in force until the next release.
     """
-    if frequency is Frequency.WEEKLY:
+    if frequency in (Frequency.DAILY, Frequency.WEEKLY):
+        # Averaged, not sampled: the rate or spread a borrower lives with over a month
+        # is the average of its days, not whichever day happened to fall last. It also
+        # makes the series robust to the market holidays that leave gaps in the daily
+        # ones -- 226 to 303 missing observations each since 1999.
         monthly = observations.resample("MS").mean()
     else:
         monthly = observations.resample("MS").last()
