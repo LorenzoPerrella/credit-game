@@ -92,7 +92,16 @@ uv run creditsurv portfolio      # describe the book before modelling it
 uv run creditsurv profile        # screen the covariates before aggregating
 uv run creditsurv aggregate      # collapse to weighted cells
 uv run creditsurv report         # one fit; writes all three reports
+uv run creditsurv prune-archives # reclaim the 40 GB, after verifying the parquet
 ```
+
+`prune-archives` is the only irreversible step and is deliberately a separate command,
+never a tail appended to the ingest — a parse gone wrong would otherwise take the only
+copy with it. It deletes an archive only when **every** quarter of its year passes three
+checks: the manifest records it finished, both parquet files exist, and their row counts
+still match what the manifest recorded. The third is the one that catches a file
+truncated since, which the existence of a file does not. It shows what would go and asks
+before deleting.
 
 The dataset is **not downloadable programmatically** — free but manual registration
 at [Clarity](https://claritydownload.fmapps.freddiemac.com/CRT/). Nothing in this
@@ -149,6 +158,16 @@ credit score and LTV ordered their own risk cleanly and this one did not.
 coded `T`; from 2009 it vanishes and broker and correspondent absorb it exactly. A
 coding change, not a market one — and only the *time series* shows it. The pooled
 frequencies look unremarkable.
+
+**A coefficient's sign can be noise, and neither correlation nor VIF says so.** Three
+macro covariates came out economically backwards. Removing five others did not cause it
+— tested on identical rows — and nor did anything about the specification: the signs
+flipped when the *sample* changed by 6%. All three were among the four smallest
+standardised effects, and each sat beside a larger correlated covariate carrying the
+same information. One pair was literal: `cltv_drift` is built from the house price
+index, so `hpi_growth` was that index entering a second time as a residual. The model
+now carries **one covariate per economic dimension**, and holds its coefficients to
+within 4.5% across samples that previously flipped them.
 
 **Quarterly episodes once looked no better than monthly.** They compressed identically,
 which made no sense until the cause was clear: a monthly-varying covariate was still

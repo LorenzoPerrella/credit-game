@@ -20,27 +20,20 @@ what it is.
 
 | param | covariate | coef | se(coef) | time_ratio | coef lower 95% | coef upper 95% | p |
 |---|---|---|---|---|---|---|---|
-| lambda_ | Intercept | 8.4136 | 0.9271 | 4507.7462 | 6.5964 | 10.2307 | 1.14e-19 |
-| lambda_ | fico_s | 0.3791 | 0.0535 | 1.4609 | 0.2741 | 0.4840 | 1.45e-12 |
-| lambda_ | orig_ltv | -0.0130 | 0.0034 | 0.9871 | -0.0198 | -0.0063 | 0.0002 |
-| lambda_ | dti | -0.0096 | 0.0041 | 0.9904 | -0.0176 | -0.0016 | 0.0182 |
-| lambda_ | log_orig_upb | -0.0778 | 0.0715 | 0.9251 | -0.2179 | 0.0622 | 0.2761 |
-| lambda_ | orig_spread | -0.0701 | 0.1725 | 0.9323 | -0.4082 | 0.2680 | 0.6846 |
-| lambda_ | cltv_drift | -0.0202 | 0.0032 | 0.9800 | -0.0264 | -0.0140 | 2.06e-10 |
-| lambda_ | unemp_gap | -0.0890 | 0.0154 | 0.9149 | -0.1192 | -0.0587 | 7.97e-09 |
-| lambda_ | refi_incentive | 0.0097 | 0.0312 | 1.0097 | -0.0515 | 0.0709 | 0.7568 |
-| lambda_ | nfci_lagged | -0.2126 | 0.0382 | 0.8085 | -0.2874 | -0.1378 | 2.56e-08 |
-| lambda_ | C(purpose, Treatment('purchase'))[T.refinance_rate_term] | 0.0340 | 0.0728 | 1.0346 | -0.1086 | 0.1767 | 0.6403 |
-| lambda_ | C(purpose, Treatment('purchase'))[T.refinance_cashout] | -0.3520 | 0.0741 | 0.7033 | -0.4972 | -0.2067 | 2.05e-06 |
-| lambda_ | C(occupancy, Treatment('owner_occupied'))[T.second_home] | -0.2125 | 0.1259 | 0.8086 | -0.4593 | 0.0343 | 0.0914 |
-| lambda_ | C(occupancy, Treatment('owner_occupied'))[T.investor] | -0.3453 | 0.0968 | 0.7080 | -0.5350 | -0.1556 | 0.0004 |
-| lambda_ | C(channel, Treatment('retail'))[T.broker] | -0.1475 | 0.0782 | 0.8629 | -0.3008 | 0.0059 | 0.0594 |
-| lambda_ | C(channel, Treatment('retail'))[T.correspondent] | -0.0535 | 0.0708 | 0.9479 | -0.1923 | 0.0853 | 0.4502 |
-| lambda_ | C(region, Treatment('South'))[T.West] | -0.1130 | 0.0786 | 0.8931 | -0.2671 | 0.0410 | 0.1504 |
-| lambda_ | C(region, Treatment('South'))[T.Midwest] | -0.0970 | 0.0815 | 0.9075 | -0.2567 | 0.0626 | 0.2337 |
-| lambda_ | C(region, Treatment('South'))[T.Northeast] | -0.0700 | 0.0866 | 0.9324 | -0.2398 | 0.0999 | 0.4194 |
-| lambda_ | C(first_time_buyer, Treatment('N'))[T.Y] | -0.0027 | 0.0692 | 0.9974 | -0.1383 | 0.1330 | 0.9694 |
-| rho_ | Intercept | 0.2668 | 0.0363 | 1.3058 | 0.1956 | 0.3379 | 2.01e-13 |
+| lambda_ | Intercept | 9.4181 | 0.0057 | 12308.8798 | 9.4069 | 9.4292 | 0.0000 |
+| lambda_ | fico_s | 0.3838 | 0.0005 | 1.4679 | 0.3828 | 0.3849 | 0.0000 |
+| lambda_ | orig_ltv | -0.0155 | 4e-05 | 0.9846 | -0.0156 | -0.0154 | 0.0000 |
+| lambda_ | dti | -0.0186 | 5.17e-05 | 0.9815 | -0.0187 | -0.0185 | 0.0000 |
+| lambda_ | cltv_drift | -0.0154 | 4.59e-05 | 0.9847 | -0.0155 | -0.0153 | 0.0000 |
+| lambda_ | unemp_gap | -0.0377 | 0.0003 | 0.9630 | -0.0382 | -0.0372 | 0.0000 |
+| lambda_ | vix | -0.0288 | 4.74e-05 | 0.9716 | -0.0289 | -0.0287 | 0.0000 |
+| lambda_ | inflation | 5.0810 | 0.0315 | 160.9311 | 5.0192 | 5.1428 | 0.0000 |
+| lambda_ | term_years | -0.0383 | 0.0001 | 0.9624 | -0.0386 | -0.0381 | 0.0000 |
+| lambda_ | C(purpose, Treatment('purchase'))[T.refinance_cashout] | -0.2144 | 0.0014 | 0.8070 | -0.2171 | -0.2117 | 0.0000 |
+| lambda_ | C(purpose, Treatment('purchase'))[T.refinance_rate_term] | 0.0197 | 0.0014 | 1.0199 | 0.0170 | 0.0225 | 2.51e-44 |
+| lambda_ | C(occupancy, Treatment('owner_occupied'))[T.investor] | -0.0913 | 0.0023 | 0.9127 | -0.0958 | -0.0869 | 0.0000 |
+| lambda_ | C(occupancy, Treatment('owner_occupied'))[T.second_home] | 0.1407 | 0.0032 | 1.1511 | 0.1345 | 0.1469 | 0.0000 |
+| rho_ | Intercept | 0.3335 | 0.0006 | 1.3959 | 0.3324 | 0.3347 | 0.0000 |
 
 ![Coefficient estimates with 95% confidence intervals](figures/coefficients.png)
 
@@ -58,15 +51,12 @@ in percentage points, holding everything else where it is.
 
 | covariate | kind | one_sd | baseline_pd | shocked_pd | change_pp |
 |---|---|---|---|---|---|
-| cltv_drift | time-varying | 15.6050 | 0.0050 | 0.0076 | 0.2535 |
-| fico_s | static | 0.9928 | 0.0050 | 0.0031 | -0.1946 |
-| unemp_gap | time-varying | 2.0728 | 0.0050 | 0.0064 | 0.1359 |
-| orig_ltv | static | 11.9601 | 0.0050 | 0.0056 | 0.0545 |
-| dti | static | 8.2014 | 0.0050 | 0.0056 | 0.0541 |
-| log_orig_upb | static | 0.4188 | 0.0050 | 0.0053 | 0.0217 |
-| orig_spread | static | 0.3435 | 0.0050 | 0.0052 | 0.0160 |
-| refi_incentive | time-varying | 1.4694 | 0.0050 | 0.0049 | -0.0092 |
-| nfci_lagged | time-varying | 0.0080 | 0.0050 | 0.0050 | 0.0011 |
+| fico_s | static | 0.6637 | 0.0014 | 0.0010 | -0.0428 |
+| orig_ltv | static | 17.5618 | 0.0014 | 0.0019 | 0.0426 |
+| dti | static | 9.8075 | 0.0014 | 0.0018 | 0.0415 |
+| cltv_drift | time-varying | 10.2651 | 0.0014 | 0.0018 | 0.0353 |
+| unemp_gap | time-varying | 3.0205 | 0.0014 | 0.0017 | 0.0246 |
+| inflation | static | 0.0095 | 0.0014 | 0.0014 | 0.0000 |
 
 ## PD term structure
 
@@ -82,21 +72,21 @@ the two appear.
 
 | month | survival | cumulative_pd | marginal_pd | hazard |
 |---|---|---|---|---|
-| 1 | 0.9998 | 0.0002 | 0.0002 | 0.0002 |
-| 6 | 0.9979 | 0.0021 | 0.0004 | 0.0004 |
-| 11 | 0.9955 | 0.0045 | 0.0005 | 0.0005 |
-| 16 | 0.9927 | 0.0073 | 0.0006 | 0.0006 |
-| 21 | 0.9896 | 0.0104 | 0.0006 | 0.0006 |
-| 26 | 0.9864 | 0.0136 | 0.0007 | 0.0007 |
-| 31 | 0.9829 | 0.0171 | 0.0007 | 0.0007 |
-| 36 | 0.9793 | 0.0207 | 0.0007 | 0.0007 |
-| 41 | 0.9756 | 0.0244 | 0.0007 | 0.0008 |
-| 46 | 0.9718 | 0.0282 | 0.0008 | 0.0008 |
-| 51 | 0.9679 | 0.0321 | 0.0008 | 0.0008 |
-| 56 | 0.9640 | 0.0360 | 0.0008 | 0.0008 |
+| 1 | 1.0000 | 4.74e-05 | 4.74e-05 | 4.74e-05 |
+| 6 | 0.9994 | 0.0006 | 0.0001 | 0.0001 |
+| 11 | 0.9986 | 0.0014 | 0.0002 | 0.0002 |
+| 16 | 0.9974 | 0.0026 | 0.0003 | 0.0003 |
+| 21 | 0.9960 | 0.0040 | 0.0003 | 0.0003 |
+| 26 | 0.9946 | 0.0054 | 0.0003 | 0.0003 |
+| 31 | 0.9930 | 0.0070 | 0.0003 | 0.0003 |
+| 36 | 0.9913 | 0.0087 | 0.0003 | 0.0003 |
+| 41 | 0.9895 | 0.0105 | 0.0004 | 0.0004 |
+| 46 | 0.9877 | 0.0123 | 0.0004 | 0.0004 |
+| 51 | 0.9858 | 0.0142 | 0.0004 | 0.0004 |
+| 56 | 0.9838 | 0.0162 | 0.0004 | 0.0004 |
 
-- **12-month PD**: 0.0050
-- **lifetime PD (60m)**: 0.0393
+- **12-month PD**: 0.0014
+- **lifetime PD (60m)**: 0.0154
 
 ## Macroeconomic scenarios
 
@@ -114,7 +104,7 @@ date, so the projected macro path was never reached and both scenarios returned
 almost the same answer. The model looked stable when it was simply not being asked
 the question.
 
-**Adverse lifetime PD is 2.73x the baseline.**
+**Adverse lifetime PD is 1.46x the baseline.**
 
 ![Distribution of lifetime PD under each scenario](figures/scenarios.png)
 
@@ -122,14 +112,14 @@ the question.
 
 | statistic | baseline | adverse |
 |---|---|---|
-| count | 800.0000 | 800.0000 |
-| mean | 0.0207 | 0.0564 |
-| std | 0.0247 | 0.0652 |
-| min | 0.0017 | 0.0043 |
-| 25% | 0.0081 | 0.0211 |
-| 50% | 0.0139 | 0.0363 |
-| 75% | 0.0250 | 0.0679 |
-| max | 0.4169 | 0.8463 |
+| count | 500.0000 | 500.0000 |
+| mean | 0.0087 | 0.0128 |
+| std | 0.0089 | 0.0138 |
+| min | 0.0008 | 0.0011 |
+| 25% | 0.0027 | 0.0038 |
+| 50% | 0.0054 | 0.0075 |
+| 75% | 0.0118 | 0.0173 |
+| max | 0.0604 | 0.0838 |
 
 ---
 
@@ -137,4 +127,4 @@ the question.
 
 - `uv run creditsurv report`
 - Distribution: weibull; likelihood: interval_censored
-- Loans scored: 800; horizon: 60 months
+- Book scored: 500 rows standing for 6,016,157 loans; horizon: 60 months
