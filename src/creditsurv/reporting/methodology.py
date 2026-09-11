@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from creditsurv.models.nonparametric import (
     kaplan_meier,
     km_band_contains,
@@ -31,6 +33,32 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from creditsurv.models.aft import FitResult
+
+
+def _pct(band: pd.DataFrame, month: int, column: str) -> str:
+    """One band edge, as a percentage, for the narrowness illustration."""
+    position = int(np.argmin(np.abs(band.index.to_numpy(dtype=float) - month)))
+    return f"{float(band[column].to_numpy()[position]):.4f}"
+
+
+def _band_width(band: pd.DataFrame, month: int) -> float:
+    """Width of the confidence band at one month, in percentage points."""
+    position = int(np.argmin(np.abs(band.index.to_numpy(dtype=float) - month)))
+    return float(band["band_width"].to_numpy()[position] * 100.0)
+
+
+def _median_width(band: pd.DataFrame) -> float:
+    """Median width across the horizon, in percentage points."""
+    return float(band["band_width"].median() * 100.0)
+
+
+def _worst(band: pd.DataFrame) -> float:
+    """Largest absolute gap between the fitted curve and observed survival, in points."""
+    return float(band["deviation"].abs().max() * 100.0)
+
+
+def _mean_deviation(band: pd.DataFrame) -> float:
+    return float(band["deviation"].abs().mean() * 100.0)
 
 
 def _direction(rho: float) -> str:
@@ -280,7 +308,20 @@ The strongest evidence available, because Kaplan-Meier assumes nothing about the
 distribution. A fitted curve straying outside its confidence band is being
 contradicted by the data rather than merely smoothing it.
 
-**{inside} of {len(band)} points fall inside the band.**
+**{inside} of {len(band)} points fall inside the band** -- and on this panel that
+number carries almost no information, which is worth explaining rather than reporting
+as a verdict.
+
+A confidence band narrows as the square root of the sample, and on 48 million loans it
+collapses. At five years this one runs from {_pct(band, 63, "km_lower")} to
+{_pct(band, 63, "km_upper")} -- a width of **{_band_width(band, 63):.4f} percentage
+points**, and the median across the horizon is {_median_width(band):.4f}. Every smooth
+parametric curve is outside a band that narrow, so the in-or-out test answers a question
+nobody is asking at this size.
+
+The quantity that does carry information is how far the curve is from the data: **largest
+deviation {_worst(band):.2f} percentage points of survival, mean {_mean_deviation(band):.2f}**,
+over a horizon of {len(band)} months. That is what the comparison is for.
 
 This check earned its place. An earlier version of the comparison predicted each
 loan's curve from its origination covariates and averaged those, which put only

@@ -172,9 +172,20 @@ def km_band_contains(
 ) -> pd.DataFrame:
     """Compare a predicted curve against the Kaplan-Meier confidence band.
 
-    Returns one row per evaluated time with the band, the prediction and whether it
-    falls inside. Straying outside means the data is contradicting the imposed
-    shape, not merely that the parametric curve is smoother.
+    Returns one row per evaluated time with the band, the prediction, whether it falls
+    inside, and **by how much it misses**.
+
+    The deviation is not decoration. A confidence band narrows as the square root of
+    the sample, and on 48 million loans it collapses: at five years this band runs from
+    0.9497 to 0.9498, a width of **one basis point**. Every smooth parametric curve is
+    outside a band that narrow, so the in-or-out count stops carrying information and
+    starts reading as a catastrophic failure -- it reported 3 of 312 points inside while
+    the curve was tracking observed survival to within a third of a percentage point.
+
+    So the count is kept, because it is the honest answer to the question as asked, and
+    the magnitude is reported beside it, because that is the question worth asking at
+    this sample size: not *is the curve inside the interval* but *how far from the data
+    is it*.
     """
     band = curve.confidence_interval_survival_function_
     lower_name, upper_name = band.columns[0], band.columns[1]
@@ -190,4 +201,7 @@ def km_band_contains(
     aligned["inside"] = (aligned["predicted"] >= aligned["km_lower"] - tolerance) & (
         aligned["predicted"] <= aligned["km_upper"] + tolerance
     )
+    observed = (aligned["km_lower"] + aligned["km_upper"]) / 2.0
+    aligned["deviation"] = aligned["predicted"] - observed
+    aligned["band_width"] = aligned["km_upper"] - aligned["km_lower"]
     return aligned
