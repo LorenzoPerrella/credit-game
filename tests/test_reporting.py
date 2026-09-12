@@ -149,17 +149,21 @@ def test_cli_exposes_every_command() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    for command in ("fetch-macro", "build-data", "fit", "compare", "backtest", "report"):
+    for command in (
+        "fetch-macro",
+        "ingest",
+        "portfolio",
+        "profile",
+        "aggregate",
+        "fit",
+        "compare",
+        "backtest",
+        "report",
+    ):
         assert command in result.stdout
 
 
-def test_build_data_rejects_an_unknown_source() -> None:
-    result = runner.invoke(app, ["build-data", "--source", "nonsense"])
-
-    assert result.exit_code != 0
-
-
-def test_fit_without_a_panel_explains_how_to_build_one(
+def test_fit_without_cells_explains_how_to_build_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A missing artefact should say what to run, not raise a bare path error."""
@@ -168,7 +172,7 @@ def test_fit_without_a_panel_explains_how_to_build_one(
     result = runner.invoke(app, ["fit"])
 
     assert result.exit_code != 0
-    assert "build-data" in str(result.exception)
+    assert "creditsurv aggregate" in str(result.exception)
 
 
 def test_time_varying_covariates_have_a_marginal_effect(
@@ -213,3 +217,45 @@ def test_time_varying_covariates_have_a_marginal_effect(
     for name in ("cltv_drift", "unemp_gap"):
         assert abs(changes[name]) > 1e-6, f"{name} shows no effect"
     assert effects.loc["cltv_drift", "kind"] == "time-varying"
+
+
+def test_a_saved_fit_comes_back_and_a_changed_specification_does_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fit on the whole population is two and a half hours, so losing one matters.
+
+    The run that produced this was killed while writing its reports, throwing away the
+    expensive part and keeping nothing. Saving happens the moment the fit succeeds,
+    before anything downstream can fail -- and the fingerprint has to separate models
+    that differ, or a later run would report on the wrong one.
+    """
+    from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+
+    described = {"as_of": "2024-12", "formula": "fico_s", "rows": 1000}
+    fingerprint = fit_fingerprint(**described)
+    save_fit({"marker": 7}, fingerprint, described)
+
+    assert load_fit(fingerprint) == {"marker": 7}
+    assert fit_fingerprint(**described) == fingerprint, "the fingerprint must be stable"
+
+    for changed in ({"as_of": "2023-12"}, {"formula": "fico_s + dti"}, {"rows": 1001}):
+        other = fit_fingerprint(**{**described, **changed})
+        assert other != fingerprint, f"{changed} must not share a cache entry"
+        assert load_fit(other) is None
+
+
+def test_an_unreadable_cached_fit_is_a_miss_not_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pickle is tied to the lifelines and numpy that wrote it, so an upgrade should
+    cost a refit rather than a traceback."""
+    from creditsurv.data.store import fit_path, load_fit
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    path = fit_path("deadbeefdeadbeef")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"not a pickle")
+
+    assert load_fit("deadbeefdeadbeef") is None

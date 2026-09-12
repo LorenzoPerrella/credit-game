@@ -34,18 +34,28 @@ def value_at(frame: pd.DataFrame, period: str, column: str) -> float:
 
 @pytest.fixture
 def macro() -> pd.DataFrame:
-    """Distinct, strictly increasing values so a shift is unambiguous."""
-    index = pd.period_range("2000-01", "2001-12", freq="M")
+    """Distinct, strictly increasing values so a shift is unambiguous.
+
+    Every series the covariate builder reads, and starting a year before the panel
+    under test: a year-on-year change on a lagged series reaches fifteen months back,
+    and a fixture that stops short of that produces an empty result rather than a
+    wrong one -- which is a confusing way to find out.
+    """
+    index = pd.period_range("1999-01", "2001-12", freq="M")
     steps = np.arange(len(index), dtype=float)
-    return pd.DataFrame(
-        {
-            "unemployment_rate": 4.0 + steps,
-            "hpi": 100.0 + steps,
-            "mortgage_rate_30y": 6.0 + steps,
-            "nfci": steps,
-        },
-        index=index,
-    )
+    columns = {
+        "unemployment_rate": 4.0 + steps,
+        "hpi": 100.0 + steps,
+        "mortgage_rate_30y": 6.0 + steps,
+        "nfci": steps,
+    }
+    # Distinct offsets so a covariate reading the wrong series is visible, and all
+    # strictly increasing so a shift in either direction shows up as a wrong value.
+    for offset, name in enumerate(set(LAGGED_SERIES + CONTEMPORANEOUS_SERIES) - set(columns)):
+        columns[name] = 200.0 + 10.0 * offset + steps
+    for offset, name in enumerate(("policy_rate", "cpi", "sentiment", "housing_starts")):
+        columns.setdefault(name, 300.0 + 10.0 * offset + steps)
+    return pd.DataFrame(columns, index=index)
 
 
 def test_revised_series_are_shifted_by_the_lag(macro: pd.DataFrame) -> None:
@@ -149,10 +159,15 @@ def test_binning_clips_rather_than_drops_outliers() -> None:
 
 
 def test_binning_covers_every_modelled_continuous_covariate() -> None:
-    """A covariate without cut points would silently stay continuous."""
+    """A covariate without cut points would silently stay continuous.
+
+    A subset rather than an equality: cut points also exist for covariates the
+    aggregation does not carry into the cell key, which the loan-level path can still
+    bin. An unused set of edges is harmless; a modelled covariate without any is not.
+    """
     from creditsurv.config import STATIC_CONTINUOUS, TIME_VARYING_CONTINUOUS
 
-    assert set(STATIC_CONTINUOUS) | set(TIME_VARYING_CONTINUOUS) == set(BIN_EDGES)
+    assert set(STATIC_CONTINUOUS) | set(TIME_VARYING_CONTINUOUS) <= set(BIN_EDGES)
 
 
 def test_binned_formula_rewrites_only_continuous_terms() -> None:

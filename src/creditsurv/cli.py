@@ -11,16 +11,14 @@ Commands that need a model fit one.
 
 from __future__ import annotations
 
-# typer resolves annotations at runtime, so Path cannot move into the
-# type-checking block the way ruff would prefer -- the CLI stops working.
-from pathlib import Path  # noqa: TC003
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 
 from creditsurv.config import (
     CATEGORICAL_REFERENCE,
     MACRO_SERIES,
+    ORDINAL,
     STATIC_CONTINUOUS,
     TIME_VARYING_CONTINUOUS,
     default_formula,
@@ -28,9 +26,19 @@ from creditsurv.config import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     import pandas as pd
+
+    from creditsurv.models.aft import FitResult
+
+#: The reporting date every command cuts at, unless one is given. Late on purpose: a
+#: credit model wants every loan-month it can get in training, and the test window only
+#: has to be long enough to judge it. Shared by `fit`, `backtest` and `report` so that
+#: all three mean the same model by the same name.
+DEFAULT_AS_OF = "2024-12"
+
+#: Where `fit --save` and `report` leave the coefficient table, and where the notebooks
+#: read it.
+COEFFICIENTS_FILE = "coefficients.csv"
 
 app = typer.Typer(
     add_completion=False,
@@ -41,7 +49,7 @@ app = typer.Typer(
 
 def default_covariates() -> list[str]:
     """Every column the default formula is allowed to read."""
-    return [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *CATEGORICAL_REFERENCE]
+    return [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL, *CATEGORICAL_REFERENCE]
 
 
 def _echo_table(frame: pd.DataFrame, *, index: bool = False) -> None:
@@ -94,6 +102,167 @@ def _parse_years(spec: str) -> list[int]:
     return [int(spec)]
 
 
+@app.command("prune-archives")
+def prune_archives(
+    years: Annotated[
+        str | None, typer.Option(help="Year or range, e.g. 2006 or 1999-2026.")
+    ] = None,
+    yes: Annotated[bool, typer.Option(help="Skip the confirmation prompt.")] = False,
+) -> None:
+    """Delete the downloaded archives whose parquet is verified complete.
+
+    The one irreversible step in this pipeline, and re-downloading costs hours behind a
+    manual registration -- so it is a separate command and never a tail appended to the
+    ingest, where a parse gone wrong would take the only copy with it.
+
+    An archive is deleted only when **every** quarter of its year passes three separate
+    checks: the manifest records it finished, both parquet files exist, and their row
+    counts still match what the manifest recorded. The third is the one that catches a
+    file truncated or overwritten since, which the existence of a file does not.
+
+    Nothing is deleted without showing what would go and asking. Run it after a
+    complete fit rather than straight after the ingest: that the parquet parses is not
+    the same as that it is usable.
+    """
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.data.ingest import audit_archives
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    audits = audit_archives(_parse_years(years) if years else None)
+    if not audits:
+        typer.echo("No archives found.")
+        return
+
+    _echo_table(pd.DataFrame([audit.describe() for audit in audits]))
+    safe = [audit for audit in audits if audit.safe_to_delete]
+    blocked = [audit for audit in audits if not audit.safe_to_delete]
+
+    for audit in blocked:
+        typer.echo(
+            f"{audit.year}: NOT deleting -- {len(audit.missing)} missing, "
+            f"{len(audit.mismatched)} row counts disagree"
+        )
+
+    if not safe:
+        typer.echo("\nNothing is verified complete. Nothing deleted.")
+        return
+
+    freed = sum(audit.bytes_on_disk for audit in safe) / 1024**3
+    typer.echo(f"\n{len(safe)} archive(s) verified complete, {freed:.1f} GB.")
+    if not yes and not typer.confirm("Delete them? This cannot be undone"):
+        typer.echo("Nothing deleted.")
+        return
+
+    for audit in safe:
+        audit.path.unlink()
+        typer.echo(f"  deleted {audit.path.name}")
+    typer.echo(f"Freed {freed:.1f} GB.")
+
+
+@app.command()
+def portfolio() -> None:
+    """Describe the book: outstanding, new lending, mix, drift, and the macro path.
+
+    Written before any model is fitted. It is the description that makes the
+    modelling legible -- and it is where several problems were found that staring at
+    coefficients would not have surfaced.
+    """
+    import logging
+
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.portfolio import (
+        covariate_evolution,
+        default_rate_by_period,
+        origination_mix,
+        originations_by_period,
+        outstanding_by_period,
+    )
+    from creditsurv.reporting import charts
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    figures = reports_dir() / "figures"
+    figures.mkdir(parents=True, exist_ok=True)
+    macro = load_macro_panel()
+
+    typer.echo("New lending...")
+    lending = originations_by_period()
+    charts.new_lending(lending, figures / "new_lending.png")
+
+    typer.echo("Book outstanding...")
+    outstanding = outstanding_by_period()
+    charts.outstanding_book(outstanding, figures / "outstanding_book.png")
+
+    typer.echo("Origination mix...")
+    charts.origination_mix_over_time(
+        origination_mix("purpose"),
+        figures / "mix_purpose.png",
+        title="New lending by purpose",
+    )
+
+    typer.echo("Underwriting drift...")
+    charts.underwriting_over_time(covariate_evolution(), figures / "underwriting_over_time.png")
+
+    typer.echo("Macro series...")
+    charts.macro_panel(macro, figures / "macro_panel.png")
+
+    typer.echo("Realised default rate...")
+    charts.default_rate_and_unemployment(
+        default_rate_by_period(), macro, figures / "default_vs_unemployment.png"
+    )
+
+    typer.echo(
+        f"\n{int(lending['loans'].sum()):,} loans, "
+        f"${lending['amount'].sum() / 1e12:.2f}tn originated; "
+        f"peak {int(outstanding['contracts'].max()):,} contracts outstanding"
+    )
+    typer.echo(f"Figures written to {figures}")
+
+
+@app.command()
+def profile(
+    covariate: Annotated[str | None, typer.Option(help="Profile one covariate in detail.")] = None,
+) -> None:
+    """Screen the covariates before aggregating.
+
+    This runs first, and the order is the point. Screening before the group-by means
+    the cut points, the merges and the exclusions are decided from what the data
+    looks like; screening after it means they were assumed, and a mis-binned
+    covariate can only be found later by noticing its coefficient came out backwards.
+    """
+    import logging
+
+    from creditsurv.data.aggregate import _CATEGORICAL, _SOURCE
+    from creditsurv.profiling import (
+        is_monotonic,
+        profile_categorical,
+        profile_continuous,
+        propose_cut_points,
+        screen_categoricals,
+    )
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if covariate in _CATEGORICAL:
+        _echo_table(profile_categorical(covariate).round(5))
+        return
+    if covariate in _SOURCE:
+        edges = propose_cut_points(covariate)
+        typer.echo(f"Quantile cut points: {edges}")
+        table = profile_continuous(covariate, edges)
+        _echo_table(table.round(5))
+        typer.echo(f"Monotonic in default rate: {is_monotonic(table)}")
+        return
+    if covariate is not None:
+        message = f"Unknown covariate {covariate!r}."
+        raise typer.BadParameter(message)
+
+    typer.echo("Categorical covariates, whole history:")
+    _echo_table(screen_categoricals().round(5))
+
+
 @app.command()
 def aggregate(
     report_cardinality: Annotated[
@@ -124,31 +293,20 @@ def aggregate(
     typer.echo(f"Saved to {path}")
 
 
-@app.command("build-data")
-def build_data(
-    orig: Annotated[Path, typer.Option(help="orig_YYYYQn.txt from the dataset.")],
-    svcg: Annotated[Path, typer.Option(help="perf_YYYYQn.txt from the dataset.")],
-) -> None:
-    """Build the loan-month panel from Freddie Mac files and save it.
+def _episodes() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The weighted episode panel every model command works from, and the macro path.
 
-    The dataset is not downloadable programmatically -- registration is free but
-    manual -- so the two files are named explicitly rather than guessed at.
+    Aggregated cells rather than a loan-month panel: the book is 2.9 billion
+    loan-months and 15.8 million cells, and only one of those two is a table a
+    fitter can be handed. Expansion is deterministic, so this is the same panel the
+    loan-level path would produce, carrying counts instead of repeated rows.
     """
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.freddiemac import load_sample
-    from creditsurv.data.store import save_panel
-    from creditsurv.features import add_macro_covariates
+    from creditsurv.data.panel import cells_to_episodes
+    from creditsurv.data.store import load_cells
 
     macro = load_macro_panel()
-    # Macro covariates are derived by the same code for every source, so a
-    # difference in results can never come from a difference in feature building.
-    panel = add_macro_covariates(load_sample(orig, svcg), macro)
-    path = save_panel(panel)
-
-    loans = panel["loan_id"].nunique()
-    defaults = int(panel["event"].sum())
-    typer.echo(f"Panel: {len(panel):,} loan-months, {loans:,} loans -> {path}")
-    typer.echo(f"Defaults: {defaults:,} ({defaults / loans:.2%} of loans)")
+    return cells_to_episodes(load_cells(), macro), macro
 
 
 @app.command()
@@ -157,146 +315,192 @@ def fit(
     likelihood: Annotated[
         str, typer.Option(help="interval_censored or right_censored.")
     ] = "interval_censored",
+    as_of: Annotated[
+        str, typer.Option(help="Fit on everything up to this month. Empty for all of it.")
+    ] = DEFAULT_AS_OF,
+    save: Annotated[bool, typer.Option(help="Write the coefficients under docs/reports.")] = True,
 ) -> None:
-    """Fit the model and print its coefficients."""
-    from creditsurv.data.panel import to_interval_censored
-    from creditsurv.data.store import load_panel
+    """Fit the model and print its coefficients.
+
+    ``--as-of`` defaults to the same reporting date the backtest cuts at, so this
+    command and ``report`` produce the **same model** -- which matters because both
+    write the same coefficient file, and two commands quietly disagreeing about which
+    model is "the" model is a good way to publish a table nobody can reproduce. Pass
+    an empty string to fit the whole panel instead.
+
+    The coefficient table is saved by default: a fit on this population is hours, and
+    the notebooks and reports should not each pay for one. It is a generated artefact
+    -- regenerate it, do not edit it.
+    """
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.backtest.splits import cell_split
+    from creditsurv.data.panel import WEIGHT
     from creditsurv.models.aft import Likelihood, coefficient_table, fit_aft
 
-    encoded = to_interval_censored(load_panel())
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # Already encoded: cells_to_episodes writes the interval bounds as it expands,
+    # because the bounds are a function of the cell's age band and its event flag.
+    encoded, _ = _episodes()
+    if as_of:
+        encoded = cell_split(encoded, pd.Period(as_of, freq="M")).train
+        typer.echo(f"Training on {int(encoded[WEIGHT].sum()):,} loan-months up to {as_of}.")
+
     result = fit_aft(
         encoded,
         default_covariates(),
         default_formula(),
         distribution=dist,
         likelihood=Likelihood(likelihood),
+        weights_col=WEIGHT,
     )
     typer.echo(
         f"{result.distribution} / {result.likelihood.value}: "
-        f"{result.n_episodes:,} episodes, {result.n_events:,} defaults, "
+        f"{result.n_episodes:,} cells, {result.n_events:,} defaults, "
         f"AIC {result.aic:,.1f}, {result.elapsed_seconds:.1f}s"
     )
-    _echo_table(coefficient_table(result).round(4), index=True)
+    table = coefficient_table(result)
+    _echo_table(table.round(4), index=True)
+
+    if save:
+        destination = reports_dir() / COEFFICIENTS_FILE
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(destination)
+        typer.echo(f"\nCoefficients written to {destination}")
 
 
 @app.command()
 def compare() -> None:
     """Compare distributional forms and test the shape assumption."""
-    from creditsurv.data.panel import to_interval_censored
-    from creditsurv.data.store import load_panel
+    import logging
+
+    from creditsurv.data.panel import WEIGHT
     from creditsurv.models.selection import (
         distribution_comparison,
         marginal_comparison,
         shape_depends_on_covariates,
     )
 
-    panel = load_panel()
-    encoded = to_interval_censored(panel)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    encoded, _ = _episodes()
     covariates = default_covariates()
     formula = default_formula()
 
     typer.echo("Marginal (univariate) fits:")
-    _echo_table(marginal_comparison(panel).round(2))
+    _echo_table(marginal_comparison(encoded, weights_col=WEIGHT).round(2))
     typer.echo("\nRegression fits on identical episodes:")
-    _echo_table(distribution_comparison(encoded, covariates, formula).round(2))
+    _echo_table(distribution_comparison(encoded, covariates, formula, weights_col=WEIGHT).round(2))
     typer.echo("\nDoes the hazard's shape vary with covariates?")
-    _echo_table(shape_depends_on_covariates(encoded, covariates, formula, "fico_s").round(4))
+    _echo_table(
+        shape_depends_on_covariates(
+            encoded, covariates, formula, "fico_s", weights_col=WEIGHT
+        ).round(4)
+    )
 
 
 @app.command()
 def backtest(
-    as_of: Annotated[str, typer.Option(help="Reporting date, e.g. 2024-12.")] = "2024-12",
-    horizon: Annotated[int, typer.Option(help="Months to predict forward.")] = 24,
-    walk_forward_folds: Annotated[
-        int, typer.Option(help="Repeat at several dates instead of one.")
-    ] = 0,
+    as_of: Annotated[str, typer.Option(help="Reporting date, e.g. 2024-12.")] = DEFAULT_AS_OF,
 ) -> None:
-    """Backtest at a single reporting date, or walk forward across several.
+    """Fit once on everything up to the reporting date, then predict against realised.
 
-    One date by default, and a late one. Everything up to it trains the model, which
-    is the point: a credit model wants every loan-month it can get, and holding back
-    a decade to see the same result at four dates is a poor trade. The walk-forward
-    is still there for when the question is whether a result held across regimes
-    rather than what the model can do.
+    One cut and one fit. There is no second calibration anywhere in this command:
+    what comes after the date is scored by the model that never saw it, and the
+    comparison is expected defaults against the ones that happened.
     """
     import logging
 
     import pandas as pd
 
-    from creditsurv.backtest.runner import macro_mode_gap, run_backtest
-    from creditsurv.backtest.splits import as_of_split, walk_forward
-    from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import cells_to_episodes
-    from creditsurv.data.store import load_cells
+    from creditsurv.backtest.runner import run_backtest
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    macro = load_macro_panel()
-    panel = cells_to_episodes(load_cells(), macro)
-    reporting_date = pd.Period(as_of, freq="M")
+    episodes, _ = _episodes()
 
-    if walk_forward_folds:
-        splits = walk_forward(panel, _reporting_dates(panel, walk_forward_folds))
-    else:
-        splits = [as_of_split(panel, reporting_date)]
-
-    for split in splits:
-        typer.echo(str(split.describe()))
-
-    summary, _ = run_backtest(
-        splits, macro, default_covariates(), default_formula(), horizon_months=horizon
+    split, fitted, result = run_backtest(
+        episodes, pd.Period(as_of, freq="M"), default_covariates(), default_formula()
     )
-    _echo_table(summary.round(4))
-    typer.echo("\nCalibration gap between macro modes:")
-    _echo_table(macro_mode_gap(summary).round(4))
+    typer.echo(str(split.describe()))
+    typer.echo(f"Fitted in {fitted.elapsed_seconds / 60:.1f} minutes on the training half.\n")
 
-
-def _reporting_dates(panel: pd.DataFrame, folds: int) -> Sequence[pd.Period]:
-    """Evenly spaced reporting dates inside the observed window.
-
-    The window is trimmed at both ends: the earliest dates have too little history
-    to fit on, and the latest leave no room to predict forward into.
-    """
-    periods = panel["period"].sort_values().unique()
-    start, stop = int(len(periods) * 0.45), int(len(periods) * 0.9)
-    step = max((stop - start) // max(folds, 1), 1)
-    return [periods[index] for index in range(start, stop, step)][:folds]
+    _echo_table(pd.DataFrame([result.summary()]))
+    typer.echo("\nBy decile of predicted risk:")
+    _echo_table(result.calibration.round(6))
 
 
 @app.command()
 def report(
     horizon: Annotated[int, typer.Option(help="Months for the PD term structure.")] = 60,
-    backtest_horizon: Annotated[int, typer.Option(help="Months to predict forward.")] = 12,
-    folds: Annotated[int, typer.Option(help="Walk-forward reporting dates.")] = 3,
-    loans: Annotated[int, typer.Option(help="Loans to score for the PD report.")] = 500,
+    as_of: Annotated[str, typer.Option(help="Reporting date for the backtest.")] = DEFAULT_AS_OF,
+    loans: Annotated[int, typer.Option(help="Origination profiles to score.")] = 500,
+    extra_fits: Annotated[
+        bool, typer.Option(help="Also compare distributions and test the shape.")
+    ] = True,
+    reuse: Annotated[
+        bool, typer.Option(help="Reuse a cached fit matching this specification exactly.")
+    ] = False,
 ) -> None:
-    """Run the full pipeline and write the reports."""
+    """Run the pipeline and write the reports, from a single fit.
+
+    The model is fitted **once**, on everything up to the reporting date, and that one
+    model is what all three reports describe: the methodology report characterises it,
+    the calibration report prices with it, and the backtest scores it on the months it
+    has never seen. Nothing here refits it.
+
+    That the same model appears in all three is the point. A report describing a model
+    fitted on everything, next to a backtest of a different model fitted on a subset,
+    invites the reader to attribute one's performance to the other.
+
+    ``--no-extra-fits`` drops the two model-selection sections that each cost a further
+    fit, taking the whole run to a single one. The reports then say the sections were
+    skipped rather than omitting them silently.
+    """
+    import logging
+
+    import pandas as pd
+
     from creditsurv.backtest.runner import run_backtest
-    from creditsurv.backtest.splits import walk_forward
-    from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import at_origination, to_interval_censored
-    from creditsurv.data.store import load_panel
-    from creditsurv.models.aft import fit_aft
+    from creditsurv.backtest.splits import cell_split
+    from creditsurv.data.panel import WEIGHT
+    from creditsurv.models.aft import coefficient_table
     from creditsurv.reporting import backtesting, calibration, methodology
 
-    panel = load_panel()
-    macro = load_macro_panel()
-    encoded = to_interval_censored(panel)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    episodes, macro = _episodes()
     covariates = default_covariates()
     formula = default_formula()
     destination = reports_dir()
 
-    typer.echo("Fitting...")
-    fitted = fit_aft(encoded, covariates, formula)
+    reporting_date = pd.Period(as_of, freq="M")
+    split = cell_split(episodes, reporting_date)
+
+    typer.echo(f"Fitting on {int(split.train[WEIGHT].sum()):,} loan-months up to {as_of}...")
+    fitted = cast(
+        "FitResult", _fit_once(split.train, covariates, formula, as_of=as_of, reuse=reuse)
+    )
+
+    coefficients = destination / COEFFICIENTS_FILE
+    coefficients.parent.mkdir(parents=True, exist_ok=True)
+    coefficient_table(fitted).to_csv(coefficients)
 
     typer.echo("Writing methodology report...")
     written = [
-        methodology.generate(panel, encoded, fitted, covariates, formula, reports_dir=destination)
+        methodology.generate(
+            split.train,
+            split.train,
+            fitted,
+            covariates,
+            formula,
+            reports_dir=destination,
+            weights_col=WEIGHT,
+            extra_fits=extra_fits,
+        )
     ]
 
     typer.echo("Writing calibration report...")
-    book = at_origination(panel).head(loans).copy()
-    book["age"] = 0
-    book["period"] = macro.index.max() + 1
+    book = _origination_book(split.train, macro, loans)
     written.append(
         calibration.generate(
             fitted,
@@ -306,22 +510,89 @@ def report(
             [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS],
             reports_dir=destination,
             horizon_months=horizon,
+            weights=book.set_index("loan_id")[WEIGHT],
         )
     )
 
-    typer.echo("Running backtest...")
-    summary, results = run_backtest(
-        walk_forward(panel, _reporting_dates(panel, folds)),
-        macro,
-        covariates,
-        formula,
-        horizon_months=backtest_horizon,
-    )
-    written.append(backtesting.generate(summary, results, reports_dir=destination))
+    typer.echo("Backtesting against what happened...")
+    _, _, result = run_backtest(episodes, reporting_date, covariates, formula, fitted=fitted)
+    written.append(backtesting.generate(split, result, reports_dir=destination))
 
     typer.echo("\nWritten:")
-    for path in written:
+    for path in [*written, coefficients]:
         typer.echo(f"  {path}")
+
+
+def _fit_once(
+    train: pd.DataFrame,
+    covariates: list[str],
+    formula: str,
+    *,
+    as_of: str,
+    reuse: bool,
+) -> object:
+    """Fit the training half, reusing a cached model when one matches exactly.
+
+    A fit on this population is two and a half hours, and the run that discovered that
+    completed one and was then killed while writing its reports -- throwing away the
+    expensive part and keeping nothing. The fit is therefore saved the moment it
+    succeeds, before anything downstream can fail.
+
+    Reuse is **opt-in**. The fingerprint covers the specification and the panel's size,
+    which does not catch a re-aggregation that happens to leave the row count alone, so
+    silently reusing would eventually mean reporting on a model built from data that no
+    longer exists.
+    """
+    from creditsurv.data.panel import WEIGHT
+    from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
+    from creditsurv.models.aft import fit_aft
+
+    described = {
+        "as_of": as_of,
+        "formula": formula,
+        "distribution": "weibull",
+        "weights_col": WEIGHT,
+        "rows": len(train),
+        "loan_months": int(train[WEIGHT].sum()),
+    }
+    fingerprint = fit_fingerprint(**described)
+
+    if reuse:
+        cached = load_fit(fingerprint)
+        if cached is not None:
+            typer.echo(f"  reusing the cached fit {fingerprint}")
+            return cached
+        typer.echo(f"  no cached fit {fingerprint}; fitting")
+
+    fitted = fit_aft(train, covariates, formula, weights_col=WEIGHT)
+    typer.echo(f"  {fitted.elapsed_seconds / 60:.1f} minutes")
+    path = save_fit(fitted, fingerprint, {**described, "minutes": fitted.elapsed_seconds / 60})
+    typer.echo(f"  saved to {path}")
+    return fitted
+
+
+def _origination_book(encoded: pd.DataFrame, macro: pd.DataFrame, size: int) -> pd.DataFrame:
+    """The commonest origination profiles, as a book to be scored from today.
+
+    Calibration asks what the regressors are worth on a book, so the book has to be
+    one that exists. Cells at age zero are exactly the origination profiles the
+    portfolio was written in, and their counts say how much of it each accounts for
+    -- so the largest ``size`` of them, carried with their weights, describe the book
+    far better than the same number of individual loans drawn arbitrarily.
+
+    They are then dated to the present: age zero at the last macro period, which asks
+    what these profiles would be worth if written today rather than replaying the
+    history they were actually written in.
+    """
+    from creditsurv.data.panel import AGE, LOAN_ID, WEIGHT
+
+    book = encoded.loc[encoded[AGE] == 0].nlargest(size, WEIGHT).reset_index(drop=True)
+    book[AGE] = 0
+    book["period"] = macro.index.max() + 1
+    # Named here rather than left to the projection, because the weights have to be
+    # indexed by the same label the scored results come back under.
+    book[LOAN_ID] = [f"row_{index:09d}" for index in range(len(book))]
+    return book
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -8,10 +8,12 @@ import pytest
 
 from creditsurv.data.panel import (
     PanelValidationError,
+    duration_view,
     model_frame,
     to_counting_process,
     to_interval_censored,
     to_loan_level,
+    to_loan_level_weighted,
     validate_episodes,
 )
 
@@ -152,3 +154,56 @@ def test_loan_level_collapses_to_duration_and_status() -> None:
     assert bool(loans.loc[1, "event"]) is True
     assert loans.loc[2, "duration"] == 5.0
     assert bool(loans.loc[2, "event"]) is False
+
+
+def test_weighted_reconstruction_matches_the_loan_level_view() -> None:
+    """The counts recovered from exposures are the loan-level view, exactly.
+
+    Aggregation throws the loan id away, so this identity is the only thing that
+    keeps Kaplan-Meier available on the whole population. If it drifts, every
+    non-parametric benchmark in the project silently starts describing a different
+    book from the one the model is fitted on.
+    """
+    panel = make_panel({1: (3, True), 2: (5, False), 3: (3, False), 4: (7, True)})
+    loans = to_loan_level(panel)
+
+    panel = panel.assign(n=1.0)
+    weighted = to_loan_level_weighted(panel)
+
+    expected = (
+        loans.groupby(["duration", "event"], observed=True)
+        .size()
+        .rename("n")
+        .reset_index()
+        .sort_values("duration")
+        .reset_index(drop=True)
+    )
+    recovered = weighted.sort_values(["duration", "event"]).reset_index(drop=True)
+    expected = expected.sort_values(["duration", "event"]).reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(
+        recovered[["duration", "event", "n"]],
+        expected[["duration", "event", "n"]].astype({"n": float}),
+    )
+
+
+def test_weighted_reconstruction_survives_a_collapsed_panel() -> None:
+    """Collapsing identical loans into counts must not move the curve.
+
+    This is the assumption the whole aggregation rests on: episodes agreeing on
+    everything are exchangeable, so carrying a count says the same thing as
+    carrying the rows.
+    """
+    panel = make_panel(dict.fromkeys(range(1, 21), (4, True)) | {21: (6, False)})
+    one_by_one = to_loan_level_weighted(panel.assign(n=1.0))
+
+    collapsed = (
+        panel.assign(n=1.0).groupby(["age", "event"], observed=True)["n"].sum().reset_index()
+    )
+    pd.testing.assert_frame_equal(one_by_one, to_loan_level_weighted(collapsed))
+
+
+def test_duration_view_takes_both_paths() -> None:
+    panel = make_panel({1: (3, True), 2: (5, False)})
+    assert "n" not in duration_view(panel).columns
+    assert duration_view(panel.assign(n=2.0), weights_col="n")["n"].sum() == 4.0

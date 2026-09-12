@@ -42,7 +42,7 @@ from lifelines import (
 )
 from scipy import stats
 
-from creditsurv.data.panel import EVENT, to_loan_level
+from creditsurv.data.panel import EVENT, duration_view
 from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS, FitResult, Likelihood, fit_aft
 
 if TYPE_CHECKING:
@@ -61,21 +61,47 @@ UNIVARIATE_FITTERS: Final[dict[str, type[ParametricUnivariateFitter]]] = {
 }
 
 
-def marginal_comparison(panel: pd.DataFrame) -> pd.DataFrame:
+def marginal_comparison(panel: pd.DataFrame, *, weights_col: str | None = None) -> pd.DataFrame:
     """Rank univariate families on the loan-level marginal distribution.
 
-    A covariate-free check on the shape of the baseline hazard. It cannot decide
-    the final model -- covariates change which family fits best -- but it is cheap
-    and it catches a badly wrong choice before any regression is attempted.
+    Cheap -- seconds, on a table of a few hundred rows -- and **it does not answer the
+    question it appears to answer.** That is worth stating at length, because the
+    obvious reading of this table is the wrong one.
+
+    The marginal hazard is not the baseline hazard. On this panel it peaks at about
+    forty-eight months of loan age, which looks like a seasoning curve and is not: it
+    is 2008 to 2010. Every vintage meets the crisis at a different loan age, so pooling
+    them smears a calendar event across the age axis and produces a hump belonging to
+    the economy rather than to the loan.
+
+    Slicing the data differently does not fix it, because the problem is structural.
+    Calendar period, origination cohort and loan age satisfy ``period = cohort + age``
+    **identically**, so no two of them can be held fixed while the third varies. Hold
+    the calendar fixed and the ages are different cohorts: at June 2009 the hazard rises
+    to 61 bp at twenty-three months and falls to 8 bp at eighty, and the twenty-three
+    month old loans are the 2007 vintage while the eighty month old ones are 2002. The
+    profile tracks vintage quality exactly as well as it tracks age.
+
+    This is the age-period-cohort identification problem, and the consequence here is
+    that **the shape of the baseline hazard is not identified non-parametrically at
+    all**. It becomes identified only under a restriction, and the restriction this
+    model makes is that calendar time enters through a handful of macroeconomic
+    covariates rather than as a free period effect. Which family fits therefore cannot
+    be separated from which covariates are in the model, and this table -- computed
+    without any -- is answering a different question.
+
+    What it is still good for: catching a family that is wrong by an order of
+    magnitude, and giving the regression comparison something to disagree with.
     """
-    loans = to_loan_level(panel)
+    loans = duration_view(panel, weights_col=weights_col)
     duration = loans["duration"]
     observed = loans[EVENT].astype(bool)
+    weights = None if weights_col is None else loans[weights_col]
 
     rows = []
     for name, factory in UNIVARIATE_FITTERS.items():
         fitter = factory()
-        fitter.fit(duration, event_observed=observed)
+        fitter.fit(duration, event_observed=observed, weights=weights)
         rows.append(
             {
                 "distribution": name,
@@ -98,6 +124,7 @@ def distribution_comparison(
     distributions: Sequence[str] = CONVERGENT_DISTRIBUTIONS,
     likelihood: Likelihood = Likelihood.INTERVAL_CENSORED,
     weights_col: str | None = None,
+    fitted: FitResult | None = None,
 ) -> pd.DataFrame:
     """Compare regression fits on identical episodes.
 
@@ -106,17 +133,24 @@ def distribution_comparison(
     nothing across different panel constructions -- comparing an interval-censored
     episode panel against a loan-level right-censored one by AIC is not a
     comparison at all.
+
+    ``fitted`` supplies a model already estimated on this panel, and is reused instead
+    of refitting its distribution. On a table of this size a fit is hours, so silently
+    recomputing a model the caller already holds is not a small waste.
     """
     rows = []
     for distribution in distributions:
-        result = fit_aft(
-            encoded,
-            covariates,
-            formula,
-            distribution=distribution,
-            likelihood=likelihood,
-            weights_col=weights_col,
-        )
+        if fitted is not None and fitted.distribution == distribution:
+            result = fitted
+        else:
+            result = fit_aft(
+                encoded,
+                covariates,
+                formula,
+                distribution=distribution,
+                likelihood=likelihood,
+                weights_col=weights_col,
+            )
         rows.append(
             {
                 "distribution": distribution,
@@ -130,6 +164,39 @@ def distribution_comparison(
     table = pd.DataFrame(rows).sort_values("aic").reset_index(drop=True)
     table["delta_aic"] = table["aic"] - table["aic"].min()
     return table
+
+
+def exponential_is_rejected(result: FitResult) -> dict[str, float]:
+    """Test the exponential against the Weibull, at no cost, from a fit in hand.
+
+    The exponential is a Weibull with shape one, so it **nests** -- and a nested
+    hypothesis does not need its own fit. Testing it is a Wald test on a parameter the
+    Weibull fit has already estimated, where an AIC comparison would have cost a second
+    full estimation to reach a weaker conclusion.
+
+    lifelines parameterises the shape as ``log rho``, so the constant-hazard hypothesis
+    is exactly ``log rho = 0`` and the test reads straight off the coefficient table.
+    On the whole population it returns ``z = 468``, which is not a close call.
+
+    The wider point is worth keeping: **where families nest, compare them by a test
+    rather than by information criteria**. Only families that do not nest --
+    Weibull against log-normal against log-logistic -- genuinely require a fit each.
+    """
+    if result.distribution != "weibull":
+        message = f"The exponential nests inside the Weibull, not the {result.distribution}."
+        raise ValueError(message)
+
+    params = result.fitter.params_
+    log_rho = float(params.loc[("rho_", "Intercept")])
+    standard_error = float(result.fitter.standard_errors_.loc[("rho_", "Intercept")])
+    statistic = log_rho / standard_error
+    return {
+        "log_rho": log_rho,
+        "rho": float(np.exp(log_rho)),
+        "standard_error": standard_error,
+        "z": statistic,
+        "p_value": float(2.0 * stats.norm.sf(abs(statistic))),
+    }
 
 
 def likelihood_ratio_test(
@@ -154,6 +221,8 @@ def shape_depends_on_covariates(
     *,
     distribution: str = "weibull",
     likelihood: Likelihood = Likelihood.INTERVAL_CENSORED,
+    weights_col: str | None = None,
+    fitted: FitResult | None = None,
 ) -> pd.DataFrame:
     """Test whether the hazard's shape varies with covariates.
 
@@ -166,9 +235,18 @@ def shape_depends_on_covariates(
     It matters for lifetime PD specifically. If the shape genuinely varies, the
     term structure of default differs by loan rather than merely shifting, and a
     single shape misstates the timing of losses even when it gets the total right.
+
+    ``fitted`` is the restricted model, when the caller already has it. It is the
+    default specification by construction -- same panel, same formula, no ancillary --
+    so refitting it is pure duplication.
     """
-    restricted = fit_aft(
-        encoded, covariates, formula, distribution=distribution, likelihood=likelihood
+    restricted = fitted or fit_aft(
+        encoded,
+        covariates,
+        formula,
+        distribution=distribution,
+        likelihood=likelihood,
+        weights_col=weights_col,
     )
     full = fit_aft(
         encoded,
@@ -176,6 +254,7 @@ def shape_depends_on_covariates(
         formula,
         distribution=distribution,
         likelihood=likelihood,
+        weights_col=weights_col,
         ancillary=ancillary_formula,
     )
 
@@ -266,6 +345,32 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
     "unemp_gap": -1,  # unemployment above origination fails sooner
     "nfci_lagged": -1,  # tighter financial conditions fail sooner
     "mi_percent": +1,  # insured loans are underwritten against a stricter standard
+    # Macro candidates. Only where theory actually commits to a direction: a
+    # covariate listed here with no clear prior would be eliminated for disagreeing
+    # with a guess, which is worse than not testing it.
+    "vix": -1,  # high implied volatility is a stressed economy
+    "hpi_growth": +1,  # rising house prices build equity
+    #
+    # ``rate_gap`` and ``policy_rate_gap`` were briefly given revised signs here, on
+    # the strength of their marginal orderings and a mechanism about fixed-rate books.
+    # That revision is **retracted**: conditional on the rest of the specification both
+    # effects are inside the noise, and the marginal ordering that justified it was the
+    # macro cycle. They are eliminated rather than re-signed -- see ``config.ELIMINATED``.
+}
+
+#: Covariates deliberately left out of ``EXPECTED_SIGNS``, with the reason. Listed so
+#: the omission reads as a decision rather than an oversight.
+#:
+#: ``rate_gap`` is the near miss. The sign above is the dominant channel -- rates
+#: below the note rate mean refinancing is available and the payment burden is
+#: easier -- but the opposite channel is real: the borrowers who *cannot* refinance
+#: when everyone else can are adversely selected, and they are the ones left in the
+#: book. The constraint is kept because the first channel dominates in the
+#: literature, and this note is here because it is a prior, not a finding.
+AMBIGUOUS_SIGNS: Final[dict[str, str]] = {
+    "term_spread": "a steep curve is both cheap short funding and an expected slowdown",
+    "inflation": "erodes the real debt, squeezes the real income",
+    "dti": "kept as negative, but it is measured at origination and never updated",
 }
 
 

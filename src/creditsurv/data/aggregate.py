@@ -49,16 +49,56 @@ DEFAULT_DELINQUENCY: Final = 3
 DEFAULT_ZERO_BALANCE: Final = ("02", "03", "09", "15")
 PREPAYMENT_ZERO_BALANCE: Final = "01"
 
-#: Upper edges of the loan-age bands, in months. Episodes become the intervals
-#: between them rather than single months.
+#: Modification flags. ``Y`` is the month the loan was modified, ``P`` every month
+#: after it -- a prior modification.
 #:
-#: Widening with age on purpose. The hazard moves fastest in the first two years and
-#: flattens afterwards, so fine resolution early costs little and buys the shape,
-#: while a single band covering years eight to twelve loses almost nothing. Measured
-#: on 1999Q1: monthly ages give 12.8 million cells, quarterly gives *exactly the
-#: same* -- because the time-varying covariate moves anyway -- and these bands give
-#: 920 thousand. Age was the wrong lever until it was made coarse enough to matter.
-AGE_BANDS: Final[tuple[int, ...]] = (6, 12, 24, 36, 60, 96, 144)
+#: Modification ends observation of the contract, the way prepayment does. It is not
+#: a nicety: **the dataset restarts ``loan_age`` at the modification**, because the
+#: field counts scheduled payments since the loan was originated *or modified*. One
+#: loan in the 2006 vintage runs to age 192 at twenty months delinquent, is modified,
+#: and reappears at age 3 with a clean delinquency status, then climbs again.
+#:
+#: Left alone that does three things, none of them visible in a coefficient:
+#:
+#: * the same loan contributes two episodes at the same age, double-counting its
+#:   likelihood contribution and breaking one-event-per-loan;
+#: * seasoned, previously-distressed months are re-attributed to young ages, where
+#:   they arrive *performing* -- so they dilute exactly the part of the hazard curve
+#:   the model is most sensitive to;
+#: * the affected population is not random. It is 0.4% of the 1999 vintage's loans,
+#:   5.2% of 2006's and 1.9% of 2021's, and every one of them is a loan that got
+#:   into trouble -- which is where nearly all the events are.
+MODIFICATION_FLAGS: Final = ("Y", "P")
+
+#: Months per episode. Loan age is collapsed to multiples of this, so an episode
+#: spans ``(k*step, (k+1)*step]``.
+#:
+#: **Set by how often the covariates move, not by how much it compresses.** The
+#: time-varying covariates come from monthly series -- unemployment, the house price
+#: index, financial conditions -- so an episode that spans more than a month asks the
+#: model to hold constant something the data says changed. Monthly is what the data
+#: supports, so monthly is what this is.
+#:
+#: Measured on 1999Q1, 27.7 million loan-months, with the current specification:
+#:
+#: ===============  ==========  =============  ==================
+#: Episode          Cells       Compression    Whole dataset
+#: ===============  ==========  =============  ==================
+#: **Monthly**        226,229           122x               ~24 M
+#: Quarterly            79,930           347x              ~8.6 M
+#: Half-yearly          42,343           654x              ~4.5 M
+#: ===============  ==========  =============  ==================
+#:
+#: Two earlier versions got this wrong in the same way, by choosing on compression
+#: rather than on the data. The first used bands widening to four years because they
+#: compressed 2,600x -- which asks a model to treat unemployment as constant across
+#: a presidency. The second rested on a measurement taken while a monthly-varying
+#: covariate was still in the grouping key, which made quarterly episodes look no
+#: better than monthly: nothing can collapse on age while a covariate moves
+#: underneath it. With that covariate derived instead of carried, the comparison is
+#: honest, and monthly costs a factor of three against quarterly for a panel that is
+#: tractable either way.
+EPISODE_MONTHS: Final = 1
 
 _STATE_TO_REGION: Final[dict[str, str]] = {}
 for _region, _states in {
@@ -120,13 +160,17 @@ def _region_case() -> str:
 def _state_of_the_book_sql() -> str:
     """The loan-month panel, cleaned and truncated, before any aggregation."""
     default_codes = ", ".join(f"'{code}'" for code in DEFAULT_ZERO_BALANCE)
+    modification_flags = ", ".join(f"'{flag}'" for flag in MODIFICATION_FLAGS)
     return f"""
     WITH perf AS (
         SELECT
             loan_identifier,
             CAST(loan_age AS INTEGER)                                   AS age,
             CAST(period AS INTEGER)                                     AS period_key,
-            TRY_CAST(estimated_loan_to_value AS DOUBLE)                 AS eltv,
+            -- 999 marks "not available" here exactly as it does for LTV and DTI in
+            -- the origination file. Untreated it is an ordinary number: the median
+            -- ELTV of the 2006 vintage is literally 999.
+            NULLIF(TRY_CAST(estimated_loan_to_value AS DOUBLE), 999)     AS eltv,
             -- COALESCE wraps the whole expression, not just the cast. Most rows
             -- have no zero-balance code, so `IN (...)` is NULL there, and
             -- `FALSE OR NULL` is NULL rather than FALSE -- which propagates a
@@ -139,21 +183,35 @@ def _state_of_the_book_sql() -> str:
                 OR COALESCE(zero_balance_code IN ({default_codes}), FALSE),
                 FALSE
             )                                                           AS defaulted,
-            COALESCE(zero_balance_code = '{PREPAYMENT_ZERO_BALANCE}', FALSE) AS prepaid
+            COALESCE(zero_balance_code = '{PREPAYMENT_ZERO_BALANCE}', FALSE) AS prepaid,
+            COALESCE(modification_flag IN ({modification_flags}), FALSE)  AS modified
         FROM read_parquet(?)
         WHERE TRY_CAST(loan_age AS INTEGER) >= 0
     ),
     -- Servicing files keep reporting through foreclosure and loss settlement, so a
     -- defaulted loan carries several flagged rows. Cutting at the first terminating
     -- month is what keeps one event per loan.
+    --
+    -- Ordered by **calendar period**, not by age. Age is not monotone within a loan:
+    -- a modification restarts it, so MIN(age) over the terminating rows can land on a
+    -- post-modification row and the cut then keeps an arbitrary mixture of months
+    -- from before and after. Calendar time is monotone by construction.
     terminal AS (
-        SELECT loan_identifier, MIN(age) AS terminal_age
-        FROM perf WHERE defaulted OR prepaid GROUP BY loan_identifier
+        SELECT
+            loan_identifier,
+            MIN(CASE WHEN defaulted OR prepaid THEN period_key END) AS terminal_period,
+            MIN(CASE WHEN modified THEN period_key END)             AS modified_period
+        FROM perf GROUP BY loan_identifier
     ),
+    -- Default and prepayment happen *during* their month, so that month is kept and
+    -- carries the flag. A modification is different: the flagged row already reports
+    -- the restarted age, so keeping it would file a distressed month at age zero.
+    -- Observation ends the month before.
     truncated AS (
-        SELECT p.*, t.terminal_age
+        SELECT p.*, t.terminal_period
         FROM perf p LEFT JOIN terminal t USING (loan_identifier)
-        WHERE t.terminal_age IS NULL OR p.age <= t.terminal_age
+        WHERE (t.terminal_period IS NULL OR p.period_key <= t.terminal_period)
+          AND (t.modified_period IS NULL OR p.period_key < t.modified_period)
     ),
     orig AS (
         SELECT
@@ -169,18 +227,17 @@ def _state_of_the_book_sql() -> str:
             TRY_CAST(original_interest_rate AS DOUBLE)                  AS note_rate,
             TRY_CAST(original_loan_term AS INTEGER)                     AS orig_term,
             TRY_CAST(mortgage_insurance_percentage AS DOUBLE)           AS mi_percent,
-            TRY_CAST(number_of_borrowers AS INTEGER)                    AS n_borrowers,
-            CASE loan_purpose WHEN 'P' THEN 'purchase'
-                              WHEN 'C' THEN 'refinance_cashout'
-                              ELSE 'refinance_rate_term' END            AS purpose,
-            CASE occupancy_status WHEN 'P' THEN 'owner_occupied'
-                                  WHEN 'S' THEN 'second_home'
-                                  ELSE 'investor' END                   AS occupancy,
-            CASE channel WHEN 'R' THEN 'retail' WHEN 'B' THEN 'broker'
-                         ELSE 'correspondent' END                       AS channel,
-            CASE WHEN first_time_homebuyer_indicator = 'Y' THEN 'Y' ELSE 'N' END
-                                                                        AS first_time_buyer,
+            -- Raw codes, deliberately. The mapping lives in _CATEGORICAL, where the
+            -- choices are documented next to the frequencies that justify them, and
+            -- an ELSE branch here would silently fold a "not available" code into a
+            -- real level before anyone could see it.
+            loan_purpose,
+            occupancy_status,
+            channel,
+            first_time_homebuyer_indicator,
             property_type,
+            number_of_units,
+            number_of_borrowers,
             {_region_case()}
         FROM read_parquet(?)
     )
@@ -188,8 +245,8 @@ def _state_of_the_book_sql() -> str:
         t.age,
         t.period_key,
         t.eltv,
-        COALESCE(t.defaulted AND t.age = t.terminal_age, FALSE)         AS event,
-        COALESCE(t.prepaid AND t.age = t.terminal_age, FALSE)           AS prepaid,
+        COALESCE(t.defaulted AND t.period_key = t.terminal_period, FALSE) AS event,
+        COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE)  AS prepaid,
         o.*
     FROM truncated t JOIN orig o USING (loan_identifier)
     WHERE o.credit_score IS NOT NULL AND o.orig_ltv IS NOT NULL AND o.dti IS NOT NULL
@@ -203,25 +260,86 @@ _SOURCE: Final[dict[str, str]] = {
     "orig_cltv": "orig_cltv",
     "dti": "dti",
     "log_orig_upb": "ln(orig_upb)",
-    # Freddie's own mark-to-market valuation, which is loan-specific. Falling back to
-    # the original ratio where it is missing makes the drift zero rather than null,
-    # which is the right default: no information about movement means no movement.
-    "cltv_drift": "COALESCE(eltv, orig_ltv) - orig_ltv",
+    # Freddie's own mark-to-market valuation. Available as a covariate, but not in
+    # the default specification: coverage runs from 0.8% of the 1999 vintage to 94%
+    # of 2021, so a model using it would be estimating a different quantity in every
+    # decade. The house-price-indexed drift computed in cells_to_episodes covers
+    # every vintage evenly instead.
+    "eltv_drift": "COALESCE(eltv, orig_ltv) - orig_ltv",
     "mi_percent": "mi_percent",
 }
 
 #: Categorical covariates and the SQL that produces them.
+#:
+#: Every mapping here was decided from a distinct-and-count over the raw values across
+#: seven vintages spanning 1999 to 2024, not from the file layout. Four mistakes came
+#: out of doing it that way round rather than assuming:
+#:
+#: * ``9`` and ``99`` are "not available" codes, not categories. Folding them into a
+#:   real level -- which an ``ELSE`` branch does silently -- invents data.
+#: * ``channel`` cannot be used at four levels at all. Until 2008 about half of
+#:   originations are coded ``T`` and broker and correspondent are near zero; from
+#:   2009 ``T`` vanishes and those two absorb it. That is a coding change, not a
+#:   market one, and a model given the four levels reads it as a risk effect. It is
+#:   collapsed to retail against third-party, which is stable across the history.
+#: * ``amortization_type`` and ``interest_only_indicator`` each take exactly **one**
+#:   value across the whole dataset. Dropped rather than modelled.
+#: * ``property_type`` and ``number_of_units`` have long tails below 5%, merged into an
+#:   explicit "other" rather than left as levels with nothing to estimate from.
+#:
+#: Every branch is explicit and there is no ``ELSE``: an unmapped code becomes NULL and
+#: the loan is dropped, which is the honest outcome for a value nobody has looked at.
+#: See docs/variable_selection.md for the frequencies these rest on.
 _CATEGORICAL: Final[dict[str, str]] = {
-    "purpose": "purpose",
-    "occupancy": "occupancy",
-    "channel": "channel",
+    "purpose": (
+        "CASE loan_purpose WHEN 'P' THEN 'purchase' WHEN 'C' THEN 'refinance_cashout' "
+        "WHEN 'N' THEN 'refinance_rate_term' WHEN 'R' THEN 'refinance_rate_term' END"
+    ),
+    "occupancy": (
+        "CASE occupancy_status WHEN 'P' THEN 'owner_occupied' "
+        "WHEN 'S' THEN 'second_home' WHEN 'I' THEN 'investor' END"
+    ),
+    # Retail against everything else, because the finer split is not comparable
+    # across the history. Until 2008 roughly half of originations are coded T,
+    # third-party not otherwise specified, and broker and correspondent are near
+    # zero; from 2009 T vanishes and those two absorb it. That is a change in how
+    # Freddie Mac coded the field, not a change in how loans were sold, and a model
+    # given the four levels would read the coding change as a risk effect. Retail's
+    # own share is stable throughout -- 53.8% in 1999, 57.9% in 2021 -- so the binary
+    # split is the part that means the same thing in every vintage.
+    "channel": (
+        "CASE channel WHEN 'R' THEN 'retail' "
+        "WHEN 'B' THEN 'third_party' WHEN 'C' THEN 'third_party' "
+        "WHEN 'T' THEN 'third_party' END"
+    ),
     "region": "region",
-    "first_time_buyer": "first_time_buyer",
-    "property_type": "property_type",
+    "first_time_buyer": (
+        "CASE first_time_homebuyer_indicator WHEN 'Y' THEN 'Y' WHEN 'N' THEN 'N' END"
+    ),
+    # SF, PU and CO carry 99.3% between them; the rest is a tail of half-percents.
+    "property_type": (
+        "CASE property_type WHEN 'SF' THEN 'single_family' WHEN 'PU' THEN 'planned_unit' "
+        "WHEN 'CO' THEN 'condo' WHEN 'MH' THEN 'other' WHEN 'CP' THEN 'other' END"
+    ),
+    # 98.1% are single-unit; two, three and four are one category together.
+    "units": (
+        "CASE WHEN TRY_CAST(number_of_units AS INTEGER) = 1 THEN '1' "
+        "WHEN TRY_CAST(number_of_units AS INTEGER) BETWEEN 2 AND 4 THEN '2-4' END"
+    ),
     "term_years": "CASE WHEN orig_term <= 190 THEN 15 ELSE 30 END",
     "has_mi": "CASE WHEN mi_percent > 0 THEN 'Y' ELSE 'N' END",
-    "n_borrowers": "CASE WHEN n_borrowers >= 2 THEN 2 ELSE 1 END",
+    "n_borrowers": (
+        "CASE WHEN TRY_CAST(number_of_borrowers AS INTEGER) = 1 THEN '1' "
+        "WHEN TRY_CAST(number_of_borrowers AS INTEGER) BETWEEN 2 AND 5 THEN '2+' END"
+    ),
 }
+
+#: Fields taking exactly one value across the whole dataset. Recorded rather than
+#: quietly omitted, so the next reader does not spend an afternoon adding them back.
+DEGENERATE_FIELDS: Final[tuple[str, ...]] = (
+    "amortization_type",  # FRM, 100%
+    "interest_only_indicator",  # N, 100%
+)
 
 
 @dataclass(frozen=True)
@@ -249,7 +367,7 @@ class CellSpec:
 
     continuous: dict[str, tuple[float, ...]]
     categorical: tuple[str, ...]
-    age_bands: tuple[int, ...] = AGE_BANDS
+    episode_months: int = EPISODE_MONTHS
 
     def validate(self) -> None:
         unknown = set(self.continuous) - set(_SOURCE)
@@ -270,24 +388,29 @@ DEFAULT_SPEC: Final = CellSpec(
         "fico_s": (-2.4, -0.8, 0.0, 0.8, 1.6, 2.4),
         "orig_ltv": (30.0, 70.0, 80.0, 90.0, 100.0),
         "dti": (10.0, 28.0, 36.0, 45.0, 55.0),
-        "cltv_drift": (-60.0, -15.0, -5.0, 5.0, 15.0, 80.0),
     },
+    # cltv_drift is absent on purpose: it is a function of orig_ltv and the macro
+    # path, both recoverable from the key, so carrying it would multiply the
+    # cardinality for information already there.
     categorical=("purpose", "occupancy", "term_years"),
 )
 
 
-def _age_band_expression(bands: tuple[int, ...]) -> str:
-    """Render the age bands as SQL, returning the band's lower edge in months.
+def _age_expression(step: int) -> str:
+    """Loan age collapsed to the start of its episode, in months.
 
     The lower edge rather than an index, so the value keeps the units of loan age and
-    the episode bounds can be read straight off it.
+    the episode bounds read straight off it.
     """
-    clauses = []
-    previous = 0
-    for upper in bands:
-        clauses.append(f"WHEN age < {upper} THEN {previous}")
-        previous = upper
-    return f"CASE {' '.join(clauses)} ELSE {previous} END AS age"
+    return f"CAST(age / {step} AS INTEGER) * {step} AS age"
+
+
+def _not_null_filter(spec: CellSpec) -> str:
+    """WHERE clause dropping rows whose categorical mapping came back NULL."""
+    if not spec.categorical:
+        return ""
+    conditions = " AND ".join(f"{name} IS NOT NULL" for name in spec.categorical)
+    return f"WHERE {conditions}"
 
 
 def _select_columns(spec: CellSpec) -> str:
@@ -301,7 +424,7 @@ def _select_columns(spec: CellSpec) -> str:
         _case_expression(_SOURCE[name], edges, name) for name, edges in spec.continuous.items()
     ]
     columns += [f"{_CATEGORICAL[name]} AS {name}" for name in spec.categorical]
-    columns.append(_age_band_expression(spec.age_bands))
+    columns.append(_age_expression(spec.episode_months))
     columns.append("event")
     return ",\n            ".join(columns)
 
@@ -354,6 +477,11 @@ def _cells_for_quarter(
     )
     SELECT '{vintage}' AS vintage, *, COUNT(*) AS n
     FROM classed
+    -- A categorical that mapped to NULL is a code nobody has looked at. The loan is
+    -- dropped rather than aggregated into a NULL level, for the same reason a loan
+    -- with no credit score is dropped: it cannot be modelled, and imputing the
+    -- category would invent the thing being measured.
+    {_not_null_filter(spec)}
     GROUP BY ALL
     """
     frame: pd.DataFrame = connection.execute(query, [perf_path, orig_path]).df()

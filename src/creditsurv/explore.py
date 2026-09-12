@@ -230,14 +230,59 @@ def survival_by_stratum(
     return grouped.reset_index(drop=True)
 
 
-def curves_cross(curves: pd.DataFrame, *, tolerance: float = 1e-9) -> bool:
+#: Loan-months a stratum must still have at an age for that age to count in the
+#: crossing test. A thirty-year book has ages nobody reached: at the far tail a
+#: stratum's exposure falls to single digits, where a survival estimate is noise and
+#: two curves cross and re-cross freely.
+#:
+#: Without the floor the test returned "they cross" for **every** stratum of this book,
+#: on tails of 2, 4 and 109 loan-months -- a check that always fires answers nothing,
+#: and this one exists to be able to refuse the single-survival-function commitment.
+MIN_EXPOSURE_FOR_CROSSING: Final = 10_000
+
+
+#: How far apart two survival curves must be for their order to mean anything, in
+#: survival units. A tenth of a percentage point.
+#:
+#: The default was 1e-9, which treats any difference at all as an ordering. On this book
+#: that reported a crossing for every stratum, and every one of them sat at **two or
+#: three months of loan age with a gap of 0.00000 to 0.0002** -- because a default needs
+#: ninety days of delinquency, so before month three every curve is at 1.0 by
+#: construction and they differ only by rounding.
+CROSSING_TOLERANCE: Final = 0.001
+
+
+def curves_cross(
+    curves: pd.DataFrame,
+    *,
+    tolerance: float = CROSSING_TOLERANCE,
+    min_exposure: float = MIN_EXPOSURE_FOR_CROSSING,
+) -> bool:
     """Whether any two strata's survival curves change their order.
 
-    The check behind :func:`survival_by_stratum`. If the ranking of two strata flips
-    at any age, no single scale factor maps one onto the other.
+    The check behind :func:`survival_by_stratum`. If the ranking of two strata flips at
+    any age, no single scale factor maps one onto the other -- and the project's
+    commitment to a single survival function would have to be revisited.
+
+    Two floors, for two different failures, and the check was useless without either:
+
+    * **Exposure.** A thirty-year book has ages nobody reached. At the far tail a
+      stratum falls to single-digit loan-months, where a survival estimate is noise.
+    * **Materiality.** Before month three no loan can default at all -- ninety days of
+      delinquency does not fit -- so every curve is at 1.0 there and they differ by
+      rounding. A tolerance of 1e-9 called that a crossing.
+
+    Between them they leave the check able to fire on a difference that would actually
+    matter, which is the point: this is the test that can refuse the project's
+    commitment to a single survival function, and a test that always fires refuses
+    nothing.
     """
+    if "exposure" in curves.columns:
+        thin = curves.loc[curves["exposure"] < min_exposure, "age"].unique()
+        curves = curves[~curves["age"].isin(thin)]
+
     wide = curves.pivot(index="age", columns="stratum", values="survival").dropna()
-    if wide.shape[1] < 2:
+    if wide.shape[1] < 2 or wide.empty:
         return False
 
     names = list(wide.columns)

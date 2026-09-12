@@ -4,65 +4,81 @@ Lifetime PD (probability of default) modelling with **parametric multivariate
 survival models**, **time-varying covariates** and **interval censoring**, built on
 [lifelines](https://lifelines.readthedocs.io).
 
-Macroeconomic data is real, pulled live from FRED. The loan book is simulated,
-because no loan-level survival panel is public without registration — see
-[Data honesty](#data-honesty).
+Fitted on the **Freddie Mac Single-Family Loan-Level Dataset**: 48.8 million loans,
+2.88 billion loan-months, 1999 to 2026. Macroeconomic covariates from FRED. No
+sampling — the whole population.
 
 ---
 
 ## The idea
 
 `lifelines` presents three things as mutually exclusive. The documentation steers
-time-varying covariates towards `CoxTimeVaryingFitter`, which is semi-parametric,
-and presents `fit_interval_censoring` as a one-row-per-subject method.
+time-varying covariates towards `CoxTimeVaryingFitter`, which is semi-parametric, and
+presents `fit_interval_censoring` as a one-row-per-subject method.
 
 They combine. On an episode-split panel, passing the interval bounds together with
 `entry_col` produces **exactly** the discrete-time likelihood with time-varying
 covariates, in a fully parametric model. For an episode covering loan age
-`(a, a+1]`:
+`(a, b]`:
 
-| Case | `entry` | `lower_bound` | `upper_bound` | Contribution |
+| Case | `entry` | `lower` | `upper` | Contribution |
 |---|---|---|---|---|
-| Survived the month | `a` | `a+1` | `inf` | `log S(a+1) + H(a) = log[S(a+1)/S(a)]` |
-| Defaulted that month | `a` | `a` | `a+1` | `log[S(a) − S(a+1)] + H(a) = log[1 − S(a+1)/S(a)]` |
+| Survived the interval | `a` | `b` | `inf` | `log S(b) + H(a) = log[S(b)/S(a)]` |
+| Defaulted in it | `a` | `a` | `b` | `log[S(a) − S(b)] + H(a) = log[1 − S(b)/S(a)]` |
 
-The left-truncation term contributes `+H(a)`, so the product over episodes
-telescopes to the discrete-observation likelihood. Both rows carry
-`event = False`: lifelines uses that flag to mean *the event time is known
-exactly*, and monthly reporting tells you the month, never the day. Genuine
-interval knowledge is a censored row with finite bounds; right censoring is the
-same construct with an infinite upper bound.
+The left-truncation term contributes `+H(a) = −log S(a)`, which is what makes each
+contribution **conditional on surviving to `a`** — survival at `b` given survival at
+`a`. The product over episodes telescopes into the discrete-observation likelihood.
 
-**Why parametric matters here.** Lifetime PD needs to extrapolate past the
-observation window, respond to macroeconomic scenarios, and produce a smooth term
-structure. A Cox model gives none of the three.
+Both rows carry `event = False`: lifelines uses that flag to mean the event time is
+known *exactly*, and monthly reporting gives the month, never the day. Genuine
+interval knowledge is a censored row with finite bounds; right censoring is the same
+construct with an infinite upper bound.
+
+**Why parametric matters here.** Lifetime PD needs to extrapolate past the observation
+window, respond to macroeconomic scenarios, and produce a smooth term structure. A Cox
+model gives none of the three.
 
 ---
 
-## Results
-
-Fitted on 10,000 loans and 429,945 loan-months against real FRED history.
-
-![Fitted survival against Kaplan-Meier](docs/reports/figures/survival_vs_km.png)
+## The scale problem, and how it is solved
 
 | | |
 |---|---|
-| Fitted curve inside the Kaplan-Meier 95% band | **60 of 60 points** |
-| Distribution selected | Weibull, ahead of log-logistic by **ΔAIC 86.5** |
-| Shape varies with covariates? | No — LR test p = 0.76 |
-| 12-month PD | 0.50% |
-| Lifetime PD (60 months) | 3.93% |
-| Adverse scenario | **2.73×** baseline lifetime PD |
-| Backtest discrimination | Concordance **0.66–0.79** (Gini 0.32–0.58) over four folds |
-| Backtest calibration | Actual/expected **1.02–1.37** |
+| Archives | 40 GB, 28 vintage years |
+| Loan-months | **2,876,284,955** |
+| After ingest | 17 GB of parquet |
+| After aggregation | **15.8 M weighted cells** |
+| Compression | **159×** |
 
-The strongest covariates, as change in 12-month PD per one standard deviation:
-mark-to-market leverage **+0.25pp**, credit score **−0.19pp**, unemployment gap
-**+0.14pp** — the ordering mortgage credit expects.
+Episodes that agree on every covariate and on their position in time are
+exchangeable, so they collapse into one row carrying a count, and the likelihood
+treats that count as a frequency weight. At this scale that is not an optimisation
+but the only thing that makes the problem tractable.
 
-**Full reports:** [methodology](docs/reports/methodology.md) ·
-[calibration](docs/reports/calibration.md) · [backtesting](docs/reports/backtesting.md) ·
-[data dictionary](docs/data_dictionary.md)
+**Episodes are monthly**, set by how often the covariates move rather than by how much
+they compress: the time-varying covariates come from monthly series, so an episode
+spanning more than a month asks the model to hold constant something the data says
+changed. See [`docs/data_preparation.md`](docs/data_preparation.md) for the
+measurements behind that.
+
+---
+
+## Reading order
+
+| Document | What it covers |
+|---|---|
+| [**The portfolio**](docs/portfolio.md) | What the book looks like: outstanding, new lending, mix, drift, macro |
+| [Data dictionary](docs/data_dictionary.md) | The record layout, layer by layer |
+| [Data preparation](docs/data_preparation.md) | 40 GB of archives to a fittable table |
+| [**Variable selection**](docs/variable_selection.md) | Which covariates survive, which were given up, and what `nmds` would have done |
+| [Methodology](docs/reports/methodology.md) | Generated: fit quality, distributional form, against Kaplan-Meier |
+| [Calibration](docs/reports/calibration.md) | Generated: what each regressor is worth, in PD |
+| [Backtesting](docs/reports/backtesting.md) | Generated: predicted against realised, after 2024 |
+
+Notebooks: [`01_portfolio.ipynb`](notebooks/01_portfolio.ipynb) carries the evidence;
+the statistics themselves live in the package, tested, so a notebook reads like a
+report rather than an implementation.
 
 ---
 
@@ -70,113 +86,120 @@ mark-to-market leverage **+0.25pp**, credit score **−0.19pp**, unemployment ga
 
 ```bash
 uv sync
-uv run creditsurv fetch-macro                          # real FRED data, no API key
-uv run creditsurv build-data --n-loans 10000 --seed 42
-uv run creditsurv fit
-uv run creditsurv compare                              # distribution selection
-uv run creditsurv backtest --folds 4 --horizon 24
-uv run creditsurv report                               # writes docs/reports/
+uv run creditsurv fetch-macro    # real FRED data, no API key
+uv run creditsurv ingest         # 40 GB of archives to parquet, ~30 min, idempotent
+uv run creditsurv portfolio      # describe the book before modelling it
+uv run creditsurv profile        # screen the covariates before aggregating
+uv run creditsurv aggregate      # collapse to weighted cells
+uv run creditsurv report         # one fit; writes all three reports
+uv run creditsurv prune-archives # reclaim the 40 GB, after verifying the parquet
 ```
 
-Python ≥3.11 (lifelines requires it); `uv` manages the toolchain.
+`prune-archives` is the only irreversible step and is deliberately a separate command,
+never a tail appended to the ingest — a parse gone wrong would otherwise take the only
+copy with it. It deletes an archive only when **every** quarter of its year passes three
+checks: the manifest records it finished, both parquet files exist, and their row counts
+still match what the manifest recorded. The third is the one that catches a file
+truncated since, which the existence of a file does not. It shows what would go and asks
+before deleting.
+
+The dataset is **not downloadable programmatically** — free but manual registration
+at [Clarity](https://claritydownload.fmapps.freddiemac.com/CRT/). Nothing in this
+repository touches the network for it.
 
 ---
 
-## Layout
+## One fit
+
+Every number in this repository comes from **a single fitted model**, calibrated on
+every loan-month up to **2024-12** and never refitted.
+
+That is a deliberate constraint, and it shapes the design. The methodology report
+characterises that model, the calibration report prices with it, and the backtest
+scores it on 2025 and 2026 — months it has never seen. A methodology report describing
+a model fitted on everything, sitting next to a backtest of a *different* model fitted
+on a subset, invites the reader to attribute one's performance to the other.
+
+It is also enforced rather than trusted. `run_backtest` takes the fitted model as an
+argument and **refuses** one whose training size does not match the split, because a
+model fitted on the whole panel would score its own training data and return a
+flattering number with nothing visibly wrong.
+
+The backtest is correspondingly plain: expected defaults against realised ones, in
+total, by month, and by decile of predicted risk. No projection, no refit, no folds.
+An earlier version refitted at four reporting dates under two macroeconomic
+assumptions — eight fits for one report, on a panel where **a fit is five hours.**
+
+## Order of operations
+
+Screening comes **before** aggregation, following `nmds`:
 
 ```
-src/creditsurv/
-├── config.py            variables, series, formula — one source of truth
-├── data/
-│   ├── fred.py          FRED connector, parquet cache, monthly resampling
-│   ├── synthetic.py     loan panel driven by real macro; DGP parameters kept
-│   ├── panel.py         canonical schema, episode splitting, interval encoding
-│   └── store.py         panel persistence
-├── features.py          macro covariates, publication lags, coarse classing
-├── models/
-│   ├── aft.py           parametric AFT, both likelihoods, grouped estimation
-│   ├── selection.py     distribution choice and fit quality
-│   ├── nonparametric.py Kaplan-Meier and Turnbull benchmarks
-│   └── lifetime_pd.py   PD term structure and macro scenarios
-├── backtest/            splits, metrics, runner
-├── reporting/           charts and generated reports
-└── cli.py
+ingest → screen → decide the specification → aggregate → select → fit
 ```
+
+This pipeline had it backwards at first — binning and grouping from a specification
+chosen in advance, screening afterwards — and the cost was concrete: by the time the
+screening ran, the bands were baked into millions of cells, and a mis-binned covariate
+could only be found by noticing its coefficient had the wrong sign.
 
 ---
 
-## Data honesty
-
-**The macroeconomic series are real** — unemployment, the Case-Shiller house price
-index, the 30-year mortgage rate and the Chicago Fed financial conditions index,
-pulled from FRED's public CSV endpoint with no API key.
-
-**The loan book is simulated.** This is a deliberate choice, not a shortcut. No
-loan-level survival panel is publicly available without registration. Freddie Mac's
-Single-Family Loan-Level Dataset is the right data and sits behind a Clarity
-registration. The open alternatives do not work: the Zenodo Lending Club dataset is
-a *granting* dataset with a binary flag and no event time, and OpenIntro's is a
-single quarterly snapshot. Neither can support a lifetime PD model.
-
-Simulating buys something real. Because the generating process is known — and is
-deliberately *the exact estimand the likelihood maximises* — the repository can
-assert that the estimator **recovers the true parameters**. A coefficient missing
-its confidence interval then indicates a bug, not a misspecified model.
-
-It also produces the financial crisis without being told to. Default rates by
-vintage come out at 11–16% for 2005–2008 against 2–5% for benign years, peaking in
-2007 — the real pattern, falling out of actual house-price and unemployment history.
-
----
-
-## Things that did not work
+## Things the data taught us
 
 Recorded because a repository that only shows what worked is not much use.
 
-**The generalized gamma nesting test.** The intended centrepiece of model
-selection: it nests the exponential, Weibull, gamma, log-normal and inverse-Weibull
-families, so one parameter *tests* the family rather than ranking candidates by
-AIC. `GeneralizedGammaRegressionFitter` does not converge on this panel under any
-remedy tried. The univariate version nominally converges but returns a singular
-Hessian — NaN standard errors, and λ = 4.04 where the truth is 1. An unusable test
-is worse than no test; selection rests on four weaker but sound layers instead.
+**`999` is a missing-value sentinel in the performance file too.** The median
+estimated LTV of the 2006 vintage is literally 999, so mark-to-market leverage came
+out as `999 − 75` for most of the panel. Caught by the default-rate-by-band table:
+credit score and LTV ordered their own risk cleanly and this one did not.
 
-**`LogNormalAFTFitter` does not converge** on this panel structure, across sample
-sizes, with and without a penalizer, under two optimisers, with truncation on and
-off, and with durations rescaled. Weibull and log-logistic fit the identical rows.
-The cause was not established — my first hypothesis was wrong — so the behaviour is
-recorded without a mechanism and pinned by a strict `xfail`.
+**`channel` cannot be used at four levels.** Until 2008 about half of originations are
+coded `T`; from 2009 it vanishes and broker and correspondent absorb it exactly. A
+coding change, not a market one — and only the *time series* shows it. The pooled
+frequencies look unremarkable.
 
-**Grouped estimation buys nothing at this dimensionality.** Collapsing identical
-episodes into weighted cells is standard practice, so it was implemented and then
-measured: 12.7× compression on three binned covariates, and **1.00× on the full
-nine**. The cell space grows multiplicatively — 573 billion combinations against
-215,000 rows. Coarse classing is kept on its own merits, not as a performance
-measure. The equivalence test remains, because being able to show the aggregation
-is lossless is worth more than the speed-up it fails to deliver.
+**A coefficient's sign can be noise, and neither correlation nor VIF says so.** Three
+macro covariates came out economically backwards. Removing five others did not cause it
+— tested on identical rows — and nor did anything about the specification: the signs
+flipped when the *sample* changed by 6%. All three were among the four smallest
+standardised effects, and each sat beside a larger correlated covariate carrying the
+same information. One pair was literal: `cltv_drift` is built from the house price
+index, so `hpi_growth` was that index entering a second time as a residual. The model
+now carries **one covariate per economic dimension**, and holds its coefficients to
+within 4.5% across samples that previously flipped them.
 
-**Freezing time-varying covariates** was the recurring bug, in three places. It is
-silent, because `cltv_drift` and `unemp_gap` are zero at origination *by
-construction*, so freezing them yields a well-behaved curve that assumes house
-prices never move. It overstated five-year survival by eight points against
-Kaplan-Meier, and left an adverse scenario at 1.04× baseline instead of 1.80×.
+**Quarterly episodes once looked no better than monthly.** They compressed identically,
+which made no sense until the cause was clear: a monthly-varying covariate was still
+in the grouping key, and nothing can collapse on age while a covariate moves
+underneath it.
+
+**DuckDB wrote 20 GB of spill into the working tree** before anyone noticed, from
+grouping all quarters at once. Every loan lives in exactly one quarter's files —
+verified, not assumed — so quarters are aggregated one at a time.
+
+**Two fields have exactly one value** across the whole dataset (`amortization_type`,
+`interest_only_indicator`). They are listed rather than quietly dropped.
 
 ---
 
 ## Limitations
 
-- **Prepayment is treated as independent censoring.** It is really a competing
-  risk — a loan that prepays can never default, and the two share drivers. This
-  biases lifetime PD **upward**. Single-risk is a scope decision.
-- **FRED serves revisions, not vintages.** Values are as currently restated, not as
-  first published, so macro covariates carry mild look-ahead. Point-in-time data
-  would need ALFRED. The publication lags partially compensate; they do not
-  eliminate it.
-- **The unconditional backtest uses a random walk.** We have no vintage-dated macro
-  forecasts, so it approximates rather than reconstructs what a forecaster would
-  have said.
-- **Coefficients describe the generating process**, not the US mortgage market.
+- **Prepayment is treated as independent censoring.** It is really a competing risk,
+  which biases lifetime PD **upward**. Single-risk is a scope decision.
+- **FRED serves revisions, not vintages**, so macro covariates carry mild look-ahead.
+  Point-in-time data would need ALFRED; the publication lags partially compensate.
+- **ELTV is not used**, despite being the better measure: coverage runs from 0.8% of
+  the 1999 vintage to 94% of 2021, so a model built on it would estimate a different
+  quantity in every decade. The house-price-indexed drift covers every vintage evenly.
 - **No LGD or EAD**, so no expected loss. PD only.
+- **The backtest grants the model the economy.** It is scored on the macro path that
+  actually occurred, which is what *predicted against realised* means and which a real
+  deployment would not have had. Read as the performance of the whole system it would
+  overstate what the system can do.
+- **Five macro covariates were given up**, and two expected signs turned out to be
+  wrong. Both are set out in [variable selection](docs/variable_selection.md), with the
+  measured evidence and a comparison against what `nmds` would have decided.
 
 ---
 
@@ -185,14 +208,13 @@ Kaplan-Meier, and left an adverse scenario at 1.04× baseline instead of 1.80×.
 ```bash
 uv run ruff check . && uv run ruff format --check .
 uv run mypy                        # strict
-uv run pytest -m "not network"     # 128 tests
-uv run pytest -m network           # live FRED
+uv run pytest -m "not network"
 ```
 
-CI runs lint, format, strict type checking, tests and a packaging build on Python
-3.11 and 3.12. Two nightly jobs run the live FRED check and the full pipeline end
-to end. ruff does not type-check — it enforces that annotations exist; mypy
-verifies they are correct.
+CI runs lint, format, strict type checking, tests and a packaging build on Python 3.11
+and 3.12, with nightly jobs for the live FRED check and the end-to-end pipeline. ruff
+does not type-check — it enforces that annotations exist; mypy verifies they are
+correct.
 
 ## Licence
 

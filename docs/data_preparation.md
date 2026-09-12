@@ -25,9 +25,25 @@ intolerable. The pipeline is therefore three stages, and **the full panel is nev
 materialised at any of them**.
 
 ```
-zip annidati  ──[1 ingest]──>  parquet  ──[2 aggregate]──>  celle pesate  ──>  fit
-   245 GB                      ~10 GB                       ~10⁶ righe
+zip  ──[1 ingest]──>  parquet  ──[2 profile]──>  decisions  ──[3 aggregate]──>  cells  ──>  fit
+245 GB                 17 GB                        spec                      15.9·10⁶
 ```
+
+**The screening comes before the group-by, and the order is the point.** This
+pipeline had it backwards at first: binning and grouping were done together from a
+specification chosen in advance, and the screening ran afterwards — by which time the
+bands were baked into two million cells, and a mis-binned covariate could only be
+found by noticing its coefficient had come out with the wrong sign. Which is exactly
+how the ELTV sentinel was eventually found.
+
+`nmds` runs the other way round:
+
+```
+load → frequency screening → class merging → GROUP BY
+```
+
+and its screening covers the whole history, filtered by population rather than by
+date. This pipeline now does the same.
 
 ## Stage 1 — Ingest (`creditsurv ingest`)
 
@@ -87,9 +103,27 @@ thousand.
 | `classic_fico` | 9999 |
 | `original_dti` | 999 |
 | `original_ltv`, `original_cltv` | 999 |
+| `estimated_loan_to_value` | 999 |
+
+The last one was missed on the first pass, and the consequence is worth recording.
+`estimated_loan_to_value` is in the *performance* file, and only the origination
+file's sentinels had been handled. The median ELTV of the 2006 vintage is literally
+999, so mark-to-market leverage came out as `999 − 75 = 924` for most of the panel;
+sixty percent of exposure landed in one band and the coefficient came out with the
+wrong sign. The exploratory default-rate-by-band table is what exposed it: `fico_s`
+and `orig_ltv` were cleanly monotonic and this one was not.
 
 A loan missing a covariate is **dropped, not imputed**: imputing an underwriting
 characteristic invents the very thing being measured.
+
+### Categorical codes are mapped from what is in the field, not from the layout
+
+Every `CASE` in `_CATEGORICAL` lists its branches explicitly and has **no `ELSE`**, so
+a code nobody has looked at becomes NULL and the loan is dropped rather than being
+absorbed into whichever level happens to be last. The mappings were decided from a
+distinct-and-count across seven vintages; see
+[variable_selection.md](variable_selection.md) for the frequencies and the four
+corrections that came out of it.
 
 ### Event definition
 
@@ -119,6 +153,62 @@ recovered as `period − age`. The dataset has **no origination date** — only 
 payment date, which falls one or two months later depending on the servicer — so
 deriving seasoning from it would put a portfolio out by a month in a way that varies
 loan by loan. Negative ages, which the dataset does emit, are dropped.
+
+⚠️ **`loan_age` is not monotone within a loan.** It counts scheduled payments since
+the loan was originated *or modified*, so a modification restarts it. Loan
+`F06Q10092168` runs to age 192 at twenty months delinquent, is modified, and
+reappears the next month at age 3 with a clean delinquency status.
+
+Truncating each loan at the smallest terminating *age* — which is what this pipeline
+did — therefore cuts at the wrong row as soon as a loan has been modified. Measured on
+2006Q1:
+
+| | before | after |
+|---|---|---|
+| Loan-months | 18,130,622 | 17,877,294 |
+| Defaults | 40,512 | **41,153** |
+| Duplicated `(loan, age)` | 473,697 | 415 |
+
+So 2.6% of the panel was one loan counted twice at the same age, and 641 real
+defaults — 1.6% of them — were being cut off. The 253,000 loan-months removed were
+previously-distressed months re-filed at young ages, arriving *performing*, diluting
+exactly the part of the hazard curve the model is most sensitive to. It affects 0.4%
+of the 1999 vintage's loans, 5.2% of 2006's and 1.9% of 2021's — and not at random,
+since a modified loan is by definition one that got into trouble.
+
+Two changes: truncation orders by **calendar period**, which is monotone by
+construction, and a **modification ends observation** the way a prepayment does, the
+month before the flagged row rather than on it. 415 duplicated pairs survive in
+2006Q1, from loans with a repeated age and no modification flag; deduplicating them
+costs a sort over the whole panel, ten times the aggregation's runtime, and is not
+worth it at 0.002%.
+
+## Stage 2b — Screening (`creditsurv profile`)
+
+`src/creditsurv/profiling.py`. Runs on the ingested parquet, quarter by quarter,
+across the **whole history** — 2.9 billion loan-months is too much to hold but not
+too much to count.
+
+| What it reports | Rule |
+|---|---|
+| Exposure share per categorical level | below **5%** → merge, following `nmds` |
+| Largest level's share | ≥ **99%** → degenerate, drop |
+| Default rate per level and per band | read for **monotonicity** |
+| Quantiles of a continuous covariate | candidate cut points |
+
+**Monotonicity is the check that earns its place.** A covariate whose default rate
+rises and falls across its own bands is either mis-binned or is measuring something
+other than what its name says. On this data `fico_s` runs cleanly from 469 to 16
+basis points across its bands, a factor of 29, and `orig_ltv` likewise — and
+`cltv_drift` did not, which is what exposed the untreated sentinel.
+
+**Quantiles are a starting point, not an answer.** Data-driven cuts fit the sample
+they were taken from, so the ones actually used come from credit conventions. What
+the quantiles are for is showing where the mass sits: on `orig_ltv` the 60th and 80th
+percentiles both come back as **80**, because that is the threshold above which
+mortgage insurance is required and originations pile up against it. A band boundary
+placed there would split an enormous mass at exactly the wrong point, and it is worth
+knowing that before choosing rather than after.
 
 ## Stage 3 — Coarse classing and aggregation
 
@@ -163,46 +253,65 @@ over hundreds of millions of loan identifiers; DuckDB spilled **20 GB into the
 working tree** before it was stopped. The connection now also points its temporary
 directory outside the repository.
 
-### Age bands, and the measurement that chose them
+### Episodes are monthly
 
-Episodes are the intervals between age bands rather than single months. The bands
-widen with age on purpose: the hazard moves fastest in the first two years and
-flattens afterwards, so fine resolution early costs little and buys the shape, while
-a single band covering years eight to twelve loses almost nothing.
+`EPISODE_MONTHS = 1`, and the reason is not compression.
 
-`AGE_BANDS = (6, 12, 24, 36, 60, 96, 144)`
+**The width is set by how often the covariates move.** The time-varying covariates
+come from monthly series — unemployment, the house price index, financial conditions
+— so an episode spanning a quarter asks the model to hold constant something the data
+says changed three times. Monthly is what the data supports, so monthly is what this
+is. The width is then read back off the spacing of the distinct ages rather than
+passed in, so a cell table can never disagree with the width it was built with.
 
-This was chosen by measurement, on 1999Q1 (27.7 million loan-months):
+The final collapse, measured on the whole dataset:
 
-| Specification | Cells | Compression |
-|---|---|---|
-| 9 continuous + 9 categorical, **monthly** ages | 12,752,331 | 2.2× |
-| same, **quarterly** ages | 12,752,331 | **2.2×** |
-| same, **banded** ages | 919,634 | 30.1× |
-| 4 coarse continuous + 3 categorical, banded | **14,221** | **1,948×** |
+| | |
+|---|---|
+| Loan-months in | **2,515,340,009** |
+| Cells out | **15,858,492** |
+| Compression | **159×** |
 
-Two things in that table are worth reading twice.
+The one cost is fit time, and it is real: see [the methodology
+report](reports/methodology.md) for what a fit on this table takes.
 
-**Quarterly ages compress exactly as badly as monthly ones.** The obvious lever does
-nothing, because a time-varying covariate changes band anyway — collapsing on age
-alone buys nothing while another key still moves. Only bands wide enough to swallow
-the long flat tail of the hazard help.
+Wider bands were tried, and the measurement that ruled them out is worth recording
+because it was nearly misread. On 1999Q1, monthly and quarterly episodes produced
+**identical** cell counts — 12,752,331 each — which looks like proof that collapsing
+on age buys nothing. It was an artefact: `cltv_drift` was still in the grouping key at
+the time, and nothing can collapse on age while a covariate moves underneath it. With
+the derived covariates taken out of the key the same quarter gives 226,000 cells
+monthly against 80,000 quarterly — a real 2.8× — bought by holding a monthly covariate
+constant for three months, which is not a trade worth making.
 
 **The specification *is* the cardinality.** Cell count is the product of every
-covariate's band count, so the choice of covariates decides whether the result fits
-at all. Aggregating on everything available and selecting variables afterwards is the
+covariate's band count, so the choice of covariates decides whether the result fits at
+all. Aggregating on everything available and selecting variables afterwards is the
 wrong order, and produced a table of roughly a billion cells on the first attempt.
-Variable selection comes first; the aggregation is parameterised by `CellSpec` so
-that its output can follow.
+The aggregation is parameterised by `CellSpec` so that its output can follow the
+selection rather than precede it.
 
-On the full dataset the default specification collapses a 65-million-row quarter into
-about 23,000 cells — roughly 2,800× — for something near 2 million cells in total.
+### Why the macro side is free and the loan side is not
 
-**The macro series are deliberately absent from the key.** Since
-`period = orig_period + age`, unemployment, house prices and financial conditions are
-a deterministic function of two columns already in the key, so they are recomputed on
-the aggregate at no cost in cardinality. Putting them in the key would multiply it by
-the number of distinct months and destroy the collapse entirely.
+**No macro series is in the key, and none can be.** Since
+`period = orig_period + age`, every macro-derived covariate is a deterministic
+function of two columns the key already holds, so all thirteen of them are recomputed
+on the aggregate **at no cost in cardinality whatsoever**. Putting one in the key
+would multiply it by the number of distinct months and destroy the collapse.
+
+That asymmetry decides the shape of the whole specification:
+
+| Adding | Cost |
+|---|---|
+| One macro series | **zero cells** |
+| `channel`, `region`, `first_time_buyer` (2 × 4 × 2 levels) | up to **16×** the table |
+| One continuous covariate at 5 bands | up to **5×** the table |
+
+Which is why the macro side carries fourteen series and thirteen candidate
+covariates, and the loan side carries six. The loan characteristics left out —
+`log_orig_upb`, `orig_spread`, `channel`, `region`, `first_time_buyer` — were not
+dropped on their merits, and `docs/variable_selection.md` records what each would
+cost against what it might be worth.
 
 ### The weight is a count, never an amount
 
@@ -212,7 +321,8 @@ obligor. It also breaks inference: lifelines derives standard errors by treating
 weights as replication counts, and warns that non-integer weights bias them.
 
 `fit_aft` rejects non-integer weights for this reason. If exposure should influence
-the model, `log_orig_upb` is already a covariate.
+the model, that is what a covariate is for — `log_orig_upb` is binned and ready in
+`BIN_EDGES`, and waiting only on the cardinality budget to admit it to the key.
 
 ### A note on when this technique pays
 

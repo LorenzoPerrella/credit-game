@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from creditsurv.config import MACRO_LAG_MONTHS
 from creditsurv.data.freddiemac import (
     ORIGINATION_COLUMNS,
     PERFORMANCE_COLUMNS,
@@ -53,6 +54,10 @@ _CATEGORICAL_MIX: dict[str, dict[str, float]] = {
     "channel": {"retail": 0.55, "broker": 0.18, "correspondent": 0.27},
     "region": {"South": 0.38, "West": 0.24, "Midwest": 0.21, "Northeast": 0.17},
     "first_time_buyer": {"N": 0.76, "Y": 0.24},
+    # Roughly the real mix. A constant term would leave the covariate degenerate,
+    # and its coefficient then arrives with an infinite standard error that also
+    # swallows the intercept's -- which looks like a fitting failure and is not.
+    "term": {"360": 0.79, "180": 0.21},
 }
 
 
@@ -132,6 +137,7 @@ def performance_row(
     delinquency: str = "0",
     zero_balance: str = "",
     upb: str = "200000",
+    modification: str = "",
 ) -> str:
     """One line of ``perf_YYYYQn.txt``.
 
@@ -148,6 +154,7 @@ def performance_row(
         loan_age=age,
         zero_balance_code=zero_balance,
         current_actual_upb=upb,
+        modification_flag=modification,
     )
     return "|".join(values[name] for name in PERFORMANCE_COLUMNS)
 
@@ -175,13 +182,25 @@ def _draw_categorical(name: str, size: int, rng: Generator) -> np.ndarray:
     return rng.choice(levels, size=size, p=weights / weights.sum())
 
 
-def _originations(n_loans: int, macro: pd.DataFrame, rng: Generator) -> pd.DataFrame:
+def _originations(
+    n_loans: int, macro: pd.DataFrame, rng: Generator, *, window_months: int | None = None
+) -> pd.DataFrame:
     """Draw loans with correlated credit quality.
 
     A Gaussian copula ties weak scores to high leverage and high debt burden, so the
     covariates are collinear enough for selection to be a real exercise.
+
+    ``window_months`` confines originations to the tail of the macro panel, which is
+    what keeps the archive fixture to a handful of vintage files instead of one per
+    year since 1999.
     """
-    usable = macro.index[6:]
+    # Far enough in that every macro-derived covariate can be built: the family
+    # reaches MACRO_LAG_MONTHS + 12 months back for a year-on-year change on a lagged
+    # series, and a row it cannot be built for is dropped. Drawing earlier than this
+    # silently removes the opening months of the earliest loans while keeping the
+    # rest of them, which is left truncation the likelihood is never told about.
+    opening = MACRO_LAG_MONTHS + 12 + 3
+    usable = macro.index[opening:] if window_months is None else macro.index[-window_months:]
     orig_period = pd.PeriodIndex(rng.choice(usable, size=n_loans), freq="M")
 
     correlation = np.array([[1.00, -0.45, -0.35], [-0.45, 1.00, 0.30], [-0.35, 0.30, 1.00]])
@@ -233,6 +252,7 @@ def simulate_book(
     params: TrueParams = DEFAULT_PARAMS,
     max_age_months: int = MAX_AGE_MONTHS,
     with_prepayment: bool = False,
+    window_months: int | None = None,
 ) -> tuple[Path, Path, TrueParams]:
     """Simulate a book from ``params`` and write it in the dataset's own format.
 
@@ -241,8 +261,29 @@ def simulate_book(
     distribution far more slowly.
     """
     rng = np.random.default_rng(seed)
-    loans = _originations(n_loans, macro, rng)
+    loans = _originations(n_loans, macro, rng, window_months=window_months)
+    loans, panel, params = _simulate_from(
+        loans,
+        macro,
+        rng,
+        params=params,
+        max_age_months=max_age_months,
+        with_prepayment=with_prepayment,
+    )
+    orig_path, perf_path = write_files(directory, *_render(loans, panel))
+    return orig_path, perf_path, params
 
+
+def _simulate_from(
+    loans: pd.DataFrame,
+    macro: pd.DataFrame,
+    rng: Generator,
+    *,
+    params: TrueParams = DEFAULT_PARAMS,
+    max_age_months: int = MAX_AGE_MONTHS,
+    with_prepayment: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, TrueParams]:
+    """Expand a drawn book into loan-months and draw the outcomes."""
     ages = np.arange(max_age_months, dtype=np.int64)
     panel = loans.loc[loans.index.repeat(max_age_months)].reset_index(drop=True)
     panel["age"] = np.tile(ages, len(loans))
@@ -271,13 +312,11 @@ def simulate_book(
     mapped = panel["loan_id"].map(terminal_age)
     panel = panel[mapped.isna() | (panel["age"] <= mapped)].reset_index(drop=True)
 
-    return _write_book(directory, loans, panel, params)
+    return loans, panel, params
 
 
-def _write_book(
-    directory: Path, loans: pd.DataFrame, panel: pd.DataFrame, params: TrueParams
-) -> tuple[Path, Path, TrueParams]:
-    """Render a simulated book as the two pipe-delimited files."""
+def _render(loans: pd.DataFrame, panel: pd.DataFrame) -> tuple[list[str], list[str]]:
+    """Render a simulated book as the two files' worth of pipe-delimited rows."""
     kept = set(panel["loan_id"])
     origination = [
         origination_row(
@@ -293,6 +332,7 @@ def _write_book(
             state=_REGION_STATE[str(row.region)],
             first_time=str(row.first_time_buyer),
             first_payment=str(row.orig_period).replace("-", ""),
+            term=str(row.term),
         )
         for row in loans.itertuples(index=False)
         if row.loan_id in kept
@@ -311,9 +351,7 @@ def _write_book(
         )
         for row in panel.itertuples(index=False)
     ]
-
-    orig_path, perf_path = write_files(directory, origination, performance)
-    return orig_path, perf_path, params
+    return origination, performance
 
 
 def build_panel(
@@ -358,3 +396,41 @@ def write_archives(
             outer.write(inner_bytes, f"historical_data_{tag}.zip")
             inner_bytes.unlink()
     return outer_path
+
+
+def write_book_archives(
+    root: Path,
+    macro: pd.DataFrame,
+    *,
+    n_loans: int = 1500,
+    seed: int = 5,
+    window_months: int = 96,
+    **kwargs: object,
+) -> list[Path]:
+    """Simulate a book and file it the way the real download is filed.
+
+    The dataset partitions loans by their **origination quarter** -- one archive per
+    year, one inner archive per quarter, and a loan appears in exactly one of them.
+    That is not a filing detail: the aggregation reads the vintage off the file name
+    rather than the record, and processes one quarter at a time on the strength of
+    the loans not intersecting. A fixture that dumped every loan into one file would
+    exercise none of it, and the end-to-end pipeline would pass without ever running
+    the code paths it exists to check.
+    """
+    rng = np.random.default_rng(seed)
+    loans = _originations(n_loans, macro, rng, window_months=window_months)
+    _, panel, _ = _simulate_from(loans, macro, rng, **kwargs)  # type: ignore[arg-type]
+
+    quarters = pd.PeriodIndex(loans["orig_period"]).asfreq("Q")
+    written: list[Path] = []
+    for year in sorted({period.year for period in quarters}):
+        by_quarter: dict[int, tuple[list[str], list[str]]] = {}
+        for quarter in range(1, 5):
+            selected = loans.loc[(quarters.year == year) & (quarters.quarter == quarter)]
+            if selected.empty:
+                continue
+            rows = panel[panel["loan_id"].isin(set(selected["loan_id"]))]
+            by_quarter[quarter] = _render(selected, rows)
+        if by_quarter:
+            written.append(write_archives(root, year, by_quarter))
+    return written

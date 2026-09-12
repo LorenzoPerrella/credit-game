@@ -99,19 +99,36 @@ jobs:
 
       # Deliberately small: this asks whether the commands still compose, not
       # whether the estimates are good. The test suite answers the second.
+      #
+      # The book is generated because the real dataset cannot be downloaded
+      # programmatically -- registration is free but manual -- and it is written into
+      # the same nested archives the download has, so ingest and the per-quarter
+      # aggregation run for real rather than being skipped.
       - name: Run the pipeline
         run: |
           uv run creditsurv fetch-macro
-          uv run creditsurv build-data --n-loans 600 --seed 7
+          uv run python scripts/smoke_book.py
+          uv run creditsurv ingest
+          uv run creditsurv profile
+          uv run creditsurv aggregate
+          uv run creditsurv portfolio
           uv run creditsurv fit
-          uv run creditsurv report --loans 100 --folds 2 --horizon 24
+          uv run creditsurv backtest --as-of 2024-06
+          uv run creditsurv report --as-of 2024-06 --loans 200 --horizon 24
 
       - name: Check the reports were written
         run: |
           for name in methodology calibration backtesting; do
             test -s "docs/reports/$name.md" || { echo "missing docs/reports/$name.md"; exit 1; }
           done
-          test -d docs/reports/figures && test "$(ls -1 docs/reports/figures | wc -l)" -ge 4
+          # Named rather than counted: a count passes while the figure the run was
+          # supposed to produce is the one missing, because the others are committed.
+          for name in survival_vs_km coefficients term_structure scenarios \
+                      calibration backtest_over_time new_lending outstanding_book \
+                      macro_panel; do
+            test -s "docs/reports/figures/$name.png" || {
+              echo "missing docs/reports/figures/$name.png"; exit 1; }
+          done
 
       - name: Upload reports
         uses: actions/upload-artifact@v7

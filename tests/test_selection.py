@@ -283,3 +283,34 @@ def test_univariate_screening_ranks_by_significance(encoded: pd.DataFrame) -> No
     assert list(table.columns) >= ["covariate", "coef", "p", "aic", "keep"]
     assert table["p"].is_monotonic_increasing
     assert table["keep"].any()
+
+
+def test_the_exponential_is_tested_without_a_second_fit(
+    panel: pd.DataFrame,
+) -> None:
+    """The exponential nests inside the Weibull, so it costs a Wald test, not a fit.
+
+    Where families nest, an information criterion is both more expensive and weaker
+    than the test that is available.
+    """
+    from creditsurv.models.selection import exponential_is_rejected
+
+    fitted = fit_aft(to_interval_censored(panel), COVARIATES, FORMULA)
+    verdict = exponential_is_rejected(fitted)
+
+    assert verdict["rho"] == pytest.approx(np.exp(verdict["log_rho"]))
+    assert verdict["z"] == pytest.approx(verdict["log_rho"] / verdict["standard_error"])
+    # The fixture draws from a Weibull with a rising hazard, so a constant one is wrong.
+    assert verdict["p_value"] < 0.05
+
+
+def test_the_exponential_test_refuses_the_wrong_family() -> None:
+    """It nests inside the Weibull and nowhere else, so asking of another family is
+    a mistake rather than an approximation."""
+    from creditsurv.models.selection import exponential_is_rejected
+
+    class _Stub:
+        distribution = "loglogistic"
+
+    with pytest.raises(ValueError, match="nests inside the Weibull"):
+        exponential_is_rejected(_Stub())  # type: ignore[arg-type]

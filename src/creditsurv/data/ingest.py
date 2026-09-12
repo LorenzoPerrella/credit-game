@@ -40,7 +40,7 @@ from creditsurv.config import data_dir
 from creditsurv.data.freddiemac import ORIGINATION_COLUMNS, PERFORMANCE_COLUMNS
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
 _LOGGER: Final = logging.getLogger(__name__)
 
@@ -299,3 +299,77 @@ def ingest(
                 counts["perf"],
             )
     return manifest
+
+
+@dataclass(frozen=True)
+class ArchiveAudit:
+    """What a vintage archive's quarters look like against the manifest and the parquet."""
+
+    year: int
+    path: Path
+    quarters: tuple[str, ...]
+    missing: tuple[str, ...]
+    mismatched: tuple[str, ...]
+    bytes_on_disk: int
+
+    @property
+    def safe_to_delete(self) -> bool:
+        return not self.missing and not self.mismatched and bool(self.quarters)
+
+    def describe(self) -> dict[str, object]:
+        return {
+            "year": self.year,
+            "quarters": len(self.quarters),
+            "missing": ", ".join(self.missing) or "-",
+            "mismatched": ", ".join(self.mismatched) or "-",
+            "gigabytes": round(self.bytes_on_disk / 1024**3, 2),
+            "safe": self.safe_to_delete,
+        }
+
+
+def audit_archives(years: Sequence[int] | None = None) -> list[ArchiveAudit]:
+    """Check, archive by archive, that nothing would be lost by deleting it.
+
+    Deleting the archives is the only irreversible step in this pipeline, and
+    re-downloading them takes hours behind a manual registration. So the check is not
+    "is there a parquet file" -- a half-written one is also a file -- but three separate
+    conditions, each of which has to hold for every quarter of the year:
+
+    * the manifest records the quarter as finished, which only happens after it closed;
+    * the parquet files exist, both origination and performance;
+    * **their row counts still match what the manifest recorded** when they were
+      written. That is the one that catches a file truncated or overwritten since.
+
+    Recounting reads the parquet footers rather than the data, so the whole audit is
+    seconds even across 2.9 billion rows.
+    """
+
+    manifest = load_manifest()
+    selected = years or discover_years()
+    audits = []
+
+    for year in selected:
+        path = archive_dir() / f"historical_data_{year}.zip"
+        if not path.exists():
+            continue
+        tags = [tag for tag in sorted(manifest) if tag.startswith(str(year))]
+        missing, mismatched = [], []
+        for tag in tags:
+            for kind in ("orig", "perf"):
+                parquet = interim_dir() / kind / f"{tag}.parquet"
+                if not parquet.exists():
+                    missing.append(f"{tag}/{kind}")
+                    continue
+                if pq.ParquetFile(parquet).metadata.num_rows != manifest[tag][kind]:
+                    mismatched.append(f"{tag}/{kind}")
+        audits.append(
+            ArchiveAudit(
+                year=year,
+                path=path,
+                quarters=tuple(tags),
+                missing=tuple(missing),
+                mismatched=tuple(mismatched),
+                bytes_on_disk=path.stat().st_size,
+            )
+        )
+    return audits

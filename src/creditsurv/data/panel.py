@@ -1,7 +1,7 @@
 """Canonical panel schema, episode splitting and the interval-censoring encoding.
 
-Both data sources -- the synthetic generator and the Freddie Mac loader -- produce
-the same canonical loan-month panel, so everything downstream is written once.
+The Freddie Mac loader and the aggregated cells both resolve to the same canonical
+episode schema, so everything downstream is written once.
 
 The encoding in :func:`to_interval_censored` is the heart of the project. lifelines
 documents interval censoring as a one-row-per-subject method and steers
@@ -34,6 +34,8 @@ from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import pandas as pd
+
+from creditsurv.features import MACRO_DERIVED, add_macro_family
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -239,10 +241,91 @@ def to_loan_level(panel: pd.DataFrame) -> pd.DataFrame:
     return loans.reset_index()
 
 
+def to_loan_level_weighted(
+    episodes: pd.DataFrame, *, weight: str = WEIGHT, age: str = AGE, event: str = EVENT
+) -> pd.DataFrame:
+    """Recover the loan-level duration distribution from a weighted episode panel.
+
+    Aggregation destroys the loan id -- a cell is a count of loan-months, not a
+    subject -- so :func:`to_loan_level` cannot run. The duration distribution is
+    still recoverable, and exactly rather than approximately, from the counts at
+    risk at each age.
+
+    Write ``R(a)`` for the loan-months observed at age ``a`` and ``d(a)`` for those
+    ending in default. A loan at risk at ``a`` either defaults, leaves the window
+    (prepayment or the end of the observation period, both censoring), or is at risk
+    again at ``a + 1``. So::
+
+        censored(a) = R(a) - d(a) - R(a + 1)
+
+    which is the identity Kaplan-Meier is built on, read backwards. The result is
+    one row per (age, outcome) carrying a count, and feeding it to a fitter with
+    ``weights`` gives the same curve the loan-level panel would have, on the whole
+    population rather than a sample of it.
+
+    Durations follow :func:`to_loan_level`: a loan last observed at age ``a`` has
+    duration ``a + 1``.
+    """
+    exposure = episodes[weight].to_numpy(dtype=float)
+    working = pd.DataFrame(
+        {
+            age: episodes[age].to_numpy(dtype=int),
+            "at_risk": exposure,
+            "defaults": exposure * episodes[event].to_numpy(dtype=bool),
+        }
+    )
+    counts = working.groupby(age, observed=True)[["at_risk", "defaults"]].sum()
+    counts = counts.reindex(range(int(counts.index.max()) + 1), fill_value=0.0)
+
+    at_risk = counts["at_risk"].to_numpy(dtype=float)
+    defaults = counts["defaults"].to_numpy(dtype=float)
+    # The last age has no successor: everything still at risk there is censored.
+    survivors = np.append(at_risk[1:], 0.0)
+    # A panel with gaps -- a loan absent for a month and back the next -- would make
+    # this negative. Freddie Mac reports contiguously, so clipping is a guard rather
+    # than a correction, but a silent negative weight would poison the fit.
+    censored = np.maximum(at_risk - defaults - survivors, 0.0)
+
+    duration = counts.index.to_numpy(dtype=float) + 1.0
+    frame = pd.DataFrame(
+        {
+            "duration": np.concatenate([duration, duration]),
+            event: np.concatenate([np.ones(len(duration), bool), np.zeros(len(duration), bool)]),
+            weight: np.concatenate([defaults, censored]),
+        }
+    )
+    return frame[frame[weight] > 0].sort_values("duration").reset_index(drop=True)
+
+
+def duration_view(panel: pd.DataFrame, *, weights_col: str | None = None) -> pd.DataFrame:
+    """One row per subject, or per (duration, outcome) when subjects are weighted.
+
+    The single entry point for every estimator whose unit is the loan rather than
+    the loan-month. Passing ``weights_col`` says the panel is aggregated, and the
+    returned frame carries that column for the fitter's ``weights`` argument;
+    omitting it takes the loan-level path. Callers then differ by one keyword
+    instead of by a branch each.
+    """
+    if weights_col is None:
+        loans = to_loan_level(panel)
+        return loans.loc[:, ["duration", EVENT]]
+    return to_loan_level_weighted(panel, weight=weights_col)
+
+
 #: Longest loan age an episode can run to, in months. A thirty-year mortgage is 360,
 #: and the final open-ended age band has to close somewhere for the likelihood to
 #: evaluate.
 MAX_AGE_MONTHS: Final = 360
+
+
+def _months_to_periods(months: pd.Series) -> pd.PeriodIndex:
+    """Month ordinals since year zero, back to a monthly PeriodIndex.
+
+    Built from labels rather than through ``PeriodIndex(year=..., month=...)``, whose
+    keyword form is deprecated in pandas and absent from its type stubs.
+    """
+    labels = (months // 12).astype(str) + "-" + (months % 12 + 1).astype(str).str.zfill(2)
+    return pd.PeriodIndex(labels, freq="M")
 
 
 def cells_to_episodes(
@@ -250,55 +333,51 @@ def cells_to_episodes(
     macro: pd.DataFrame,
     *,
     lag_months: int = 3,
-    max_age: int = MAX_AGE_MONTHS,
 ) -> pd.DataFrame:
     """Turn aggregated cells into weighted episodes the fitter can read.
 
-    Cells carry a loan age *band* rather than a month, so episodes are the intervals
-    between band edges rather than single months. The encoding is unchanged — that is
-    the point of stating it in terms of bounds rather than months in the first place:
-    a survivor contributes ``log[S(stop)/S(start)]`` and a default
-    ``log[1 - S(stop)/S(start)]`` whatever the width of the interval.
+    Cells carry the start of a fixed-width episode rather than a single month, so an
+    episode spans ``(start, start + step]``. The encoding is unchanged — that is the
+    point of stating it in terms of bounds rather than months: a survivor contributes
+    ``log[S(stop)/S(start)]`` and a default ``log[1 - S(stop)/S(start)]`` whatever the
+    width of the interval, which is the same conditional-survival construction a
+    monthly panel uses.
 
-    Band edges are read off the data rather than passed in. The ``age`` column holds
-    each band's lower edge, so the distinct values *are* the edges, and deriving them
-    means a cell table can never disagree with the bands it was built with.
+    The width is read off the data rather than passed in, so a cell table can never
+    disagree with the width it was built with.
 
     Macro covariates are recomputed here from vintage and age, which is why they were
     kept out of the grouping key: ``period = vintage + age``, so nothing was lost by
-    leaving them out and the cardinality was spared. Only the two that depend on
-    nothing else are rebuilt -- unemployment gap and financial conditions. Anything
-    needing a loan-level quantity that is not in the key, such as the refinancing
-    incentive, would have to have that quantity added to the specification first.
+    leaving them out and the cardinality was spared. See
+    :func:`creditsurv.features.add_macro_family` for the family and why it is free.
     """
     if cells.empty:
         message = "No cells to expand."
         raise PanelValidationError(message)
 
     episodes = cells.copy()
-    edges = sorted(int(edge) for edge in episodes[AGE].unique())
-    # Each band runs to the next edge; the last one runs to the horizon.
-    upper_of = dict(pairwise(edges))
-    upper_of[edges[-1]] = max_age
+    # Episodes are fixed width, so the stop is the start plus the step. The step is
+    # read off the data -- the spacing of the distinct ages -- so a cell table can
+    # never disagree with the width it was built with.
+    ages = sorted(int(age) for age in episodes[AGE].unique())
+    step = min((b - a) for a, b in pairwise(ages)) if len(ages) > 1 else 1
 
     episodes[AGE_START] = episodes[AGE].astype(float)
-    episodes[AGE_STOP] = episodes[AGE].map(upper_of).astype(float)
+    episodes[AGE_STOP] = episodes[AGE_START] + float(step)
 
     quarter = episodes["vintage"].str.extract(r"(\d{4})Q(\d)")
     orig_month = quarter[0].astype(int) * 12 + (quarter[1].astype(int) - 1) * 3
     # A period ordinal in months since year zero, so age can simply be added.
     observation = orig_month + episodes[AGE_START].astype(int)
 
-    lagged = macro.shift(lag_months)
-    macro_index = pd.PeriodIndex(macro.index)
-    macro_month = macro_index.year * 12 + (macro_index.month - 1)
-    unemployment = pd.Series(lagged["unemployment_rate"].to_numpy(), index=macro_month)
-    conditions = pd.Series(lagged["nfci"].to_numpy(), index=macro_month)
+    add_macro_family(episodes, macro, orig_month, observation, lag_months)
 
-    episodes["unemp_gap"] = (
-        observation.map(unemployment).to_numpy() - orig_month.map(unemployment).to_numpy()
-    )
-    episodes["nfci_lagged"] = observation.map(conditions).to_numpy()
+    # Calendar columns, so a split can be taken on time without recomputing them.
+    # The episode is dated at its start: a band spans several months and has to be
+    # attributed to one of them, and the start is the only choice that cannot place
+    # an episode after a reporting date its loan was still performing at.
+    episodes["orig_period"] = _months_to_periods(orig_month)
+    episodes["period"] = _months_to_periods(observation)
 
     defaulted = episodes[EVENT].to_numpy(dtype=bool)
     start = episodes[AGE_START].to_numpy(dtype=float)
@@ -307,4 +386,5 @@ def cells_to_episodes(
     episodes[UPPER_BOUND] = np.where(defaulted, stop, np.inf)
     episodes[EXACT_OBSERVATION] = False
 
-    return episodes.dropna(subset=["unemp_gap", "nfci_lagged"]).reset_index(drop=True)
+    required = [name for name in MACRO_DERIVED if name in episodes.columns]
+    return episodes.dropna(subset=required).reset_index(drop=True)

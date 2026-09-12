@@ -201,3 +201,44 @@ def test_survival_is_a_decreasing_probability() -> None:
 
     assert curves["survival"].is_monotonic_decreasing
     assert ((curves["survival"] >= 0) & (curves["survival"] <= 1)).all()
+
+
+def test_a_crossing_in_a_thin_tail_is_not_a_crossing() -> None:
+    """A thirty-year book has ages nobody reached, and a survival estimate on a handful
+    of loan-months is noise.
+
+    Without the exposure floor this test returned "they cross" for every stratum of the
+    real book, on tails of 2, 4 and 109 loan-months. A check that always fires answers
+    nothing -- and this one exists to be able to refuse the single-survival-function
+    commitment.
+    """
+    from creditsurv.explore import curves_cross
+
+    # Cleanly separated where there is exposure; reversed where there is almost none.
+    curves = pd.DataFrame(
+        {
+            "stratum": ["a", "b"] * 4,
+            "age": [0, 0, 1, 1, 2, 2, 3, 3],
+            "survival": [0.99, 0.97, 0.98, 0.95, 0.97, 0.93, 0.50, 0.80],
+            "exposure": [1e6, 1e6, 1e6, 1e6, 1e6, 1e6, 3.0, 2.0],
+        }
+    )
+
+    assert not curves_cross(curves), "a reversal on three loan-months is not evidence"
+    assert curves_cross(curves, min_exposure=1.0), "with no floor, it counts"
+
+
+def test_a_real_crossing_is_still_caught() -> None:
+    """The floor must not make the check unable to fire."""
+    from creditsurv.explore import curves_cross
+
+    curves = pd.DataFrame(
+        {
+            "stratum": ["a", "b"] * 3,
+            "age": [0, 0, 1, 1, 2, 2],
+            "survival": [0.99, 0.97, 0.98, 0.98, 0.90, 0.96],
+            "exposure": [1e6] * 6,
+        }
+    )
+
+    assert curves_cross(curves)
