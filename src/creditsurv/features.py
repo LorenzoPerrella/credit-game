@@ -304,6 +304,7 @@ def add_macro_family(
     orig_month: pd.Series,
     observation: pd.Series,
     lag_months: int,
+    names: Sequence[str] | None = None,
 ) -> None:
     """Rebuild every macro-derived covariate, in place.
 
@@ -330,7 +331,17 @@ def add_macro_family(
     collinear -- five interest-rate series will not survive together. Pruning is the
     job of the correlation, VIF and backward-elimination passes in
     :mod:`creditsurv.models.selection`, which is the place the decision is recorded.
+
+    ``names`` restricts the family to what the caller will read. Building all of it
+    costs nine unused ``float64`` columns on the largest frame the pipeline holds, and
+    at the cell counts an exact calendar key implies that is the difference between
+    fitting and not.
     """
+    wanted = None if names is None else set(names)
+
+    def requested(name: str) -> bool:
+        return wanted is None or name in wanted
+
     lagged = macro.shift(lag_months)
     for column in CONTEMPORANEOUS_MACRO:
         if column in macro.columns:
@@ -344,6 +355,15 @@ def add_macro_family(
         """A macro column read at ``when``, optionally shifted back ``offset`` months."""
         series = pd.Series(lagged[column].to_numpy(), index=month)
         return np.asarray((when - offset).map(series).to_numpy(), dtype=float)
+
+    def store(name: str, values: np.ndarray) -> None:
+        """Keep a covariate at single precision.
+
+        These are rebuilt from macro indices published to three or four significant
+        figures, so the seventh decimal of a float64 carries no information -- only
+        bytes, on the frame where bytes decide whether the fit runs.
+        """
+        episodes[name] = values.astype(np.float32)
 
     def level(column: str) -> np.ndarray:
         """The series as it stands at the observation date."""
@@ -374,8 +394,8 @@ def add_macro_family(
         ("equity_return", "equity_index", growth),
         ("starts_growth", "housing_starts", growth),
     ):
-        if source in available:
-            episodes[name] = build(source)
+        if source in available and requested(name):
+            store(name, build(source))
 
     # The refinancing benchmark is switched by term, repeating what the source data
     # says rather than what is convenient: a fifteen-year loan is refinanced against
@@ -386,13 +406,13 @@ def add_macro_family(
     # This is the movement in the market rate since origination, not the full
     # refinancing incentive: the latter needs the loan's own note rate, which the key
     # does not carry. The constant part is missing; the part that varies is here.
-    if "mortgage_rate_30y" in available:
+    if "mortgage_rate_30y" in available and requested("rate_gap"):
         thirty = -gap("mortgage_rate_30y")
         if "term_years" in episodes.columns and "mortgage_rate_15y" in available:
             short = episodes["term_years"].to_numpy(dtype=float) <= 20.0
-            episodes["rate_gap"] = np.where(short, -gap("mortgage_rate_15y"), thirty)
+            store("rate_gap", np.where(short, -gap("mortgage_rate_15y"), thirty))
         else:
-            episodes["rate_gap"] = thirty
+            store("rate_gap", thirty)
 
     # Mark-to-market leverage, from the national house price index. Derived here
     # rather than carried in the grouping key because it is a function of orig_ltv
@@ -402,8 +422,6 @@ def add_macro_family(
     # The index rather than Freddie's own per-loan ELTV, which would be better if it
     # were usable: its coverage runs from 0.8% of the 1999 vintage to 94% of 2021, so
     # a model built on it would estimate a different quantity in every decade.
-    if "orig_ltv" in episodes.columns and "hpi" in available:
+    if "orig_ltv" in episodes.columns and "hpi" in available and requested("cltv_drift"):
         original = episodes["orig_ltv"].to_numpy(dtype=float)
-        episodes["cltv_drift"] = (
-            original * at("hpi", orig_month) / at("hpi", observation) - original
-        )
+        store("cltv_drift", original * at("hpi", orig_month) / at("hpi", observation) - original)

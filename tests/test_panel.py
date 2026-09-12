@@ -8,6 +8,7 @@ import pytest
 
 from creditsurv.data.panel import (
     PanelValidationError,
+    cells_to_episodes,
     duration_view,
     model_frame,
     to_counting_process,
@@ -207,3 +208,76 @@ def test_duration_view_takes_both_paths() -> None:
     panel = make_panel({1: (3, True), 2: (5, False)})
     assert "n" not in duration_view(panel).columns
     assert duration_view(panel.assign(n=2.0), weights_col="n")["n"].sum() == 4.0
+
+
+def test_the_episode_frame_is_built_narrow(macro: pd.DataFrame) -> None:
+    """This frame is the largest object the pipeline holds, and its size decides
+    whether an exact calendar key is affordable at all.
+
+    It reached 5.9 GB on the production table, of which 44% was three categorical
+    columns stored as Python strings. Narrowing is not tidiness: at the cell counts an
+    exact key implies, it is the difference between fitting and not.
+    """
+    cells = pd.DataFrame(
+        {
+            "orig_month": [2006 * 12] * 6,
+            "purpose": ["purchase", "refinance_cashout"] * 3,
+            "fico_s": [0.4] * 6,
+            "orig_ltv": [85.0] * 6,
+            "age": [0, 1, 2, 3, 4, 5],
+            "event": [False] * 5 + [True],
+            "n": [100] * 6,
+        }
+    )
+
+    everything = cells_to_episodes(cells, macro)
+    narrow = cells_to_episodes(cells, macro, covariates=["cltv_drift", "unemp_gap"])
+
+    assert isinstance(everything["purpose"].dtype, pd.CategoricalDtype)
+    assert everything["cltv_drift"].dtype == np.float32
+    assert "sentiment" in everything.columns
+    assert "sentiment" not in narrow.columns, "an unrequested covariate must not be built"
+    assert narrow.memory_usage(deep=True).sum() < everything.memory_usage(deep=True).sum()
+
+
+def test_an_infinite_upper_bound_survives_single_precision(macro: pd.DataFrame) -> None:
+    """Censored rows carry an infinite upper bound, and float32 has no room for the
+    hazard of it silently becoming finite -- which would turn every censored row into
+    an observed default."""
+    cells = pd.DataFrame(
+        {
+            "orig_month": [2006 * 12] * 4,
+            "fico_s": [0.4] * 4,
+            "orig_ltv": [85.0] * 4,
+            "age": [0, 1, 2, 3],
+            "event": [False, False, False, True],
+            "n": [10] * 4,
+        }
+    )
+
+    episodes = cells_to_episodes(cells, macro)
+
+    censored = episodes[~episodes["event"].astype(bool)]
+    assert np.isinf(censored["upper_bound"]).all()
+    assert np.isfinite(episodes.loc[episodes["event"].astype(bool), "upper_bound"]).all()
+
+
+def test_a_quarterly_cell_table_is_read_but_warns(macro: pd.DataFrame) -> None:
+    """Reconstructing the month from the quarter runs about two months early, which
+    is a defect rather than a convention -- so an older table is still readable and
+    says so."""
+    cells = pd.DataFrame(
+        {
+            "vintage": ["2006Q1"] * 4,
+            "fico_s": [0.4] * 4,
+            "orig_ltv": [85.0] * 4,
+            "age": [0, 1, 2, 3],
+            "event": [False, False, False, True],
+            "n": [10] * 4,
+        }
+    )
+
+    with pytest.warns(UserWarning, match="two months early"):
+        episodes = cells_to_episodes(cells, macro)
+
+    assert len(episodes) == 4

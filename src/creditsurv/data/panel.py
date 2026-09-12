@@ -29,6 +29,7 @@ an infinite upper bound.
 
 from __future__ import annotations
 
+import warnings
 from itertools import pairwise
 from typing import TYPE_CHECKING, Final
 
@@ -333,6 +334,7 @@ def cells_to_episodes(
     macro: pd.DataFrame,
     *,
     lag_months: int = 3,
+    covariates: Sequence[str] | None = None,
 ) -> pd.DataFrame:
     """Turn aggregated cells into weighted episodes the fitter can read.
 
@@ -346,31 +348,42 @@ def cells_to_episodes(
     The width is read off the data rather than passed in, so a cell table can never
     disagree with the width it was built with.
 
-    Macro covariates are recomputed here from vintage and age, which is why they were
-    kept out of the grouping key: ``period = vintage + age``, so nothing was lost by
-    leaving them out and the cardinality was spared. See
+    Macro covariates are recomputed here from the origination month and the age, which
+    is why they were kept out of the grouping key: ``period = orig_month + age``, so
+    nothing was lost by leaving them out and the cardinality was spared. See
     :func:`creditsurv.features.add_macro_family` for the family and why it is free.
+
+    ``covariates`` narrows the macro family to what the caller will actually read.
+    Building all thirteen costs nine unused ``float64`` columns, and this frame is the
+    largest object the pipeline holds: on the production table it reached 5.9 GB, of
+    which **44% was three categorical columns stored as Python strings**. At the cell
+    counts an exact calendar key implies that is the difference between fitting and
+    not, so the frame is built narrow rather than trimmed afterwards.
     """
     if cells.empty:
         message = "No cells to expand."
         raise PanelValidationError(message)
 
     episodes = cells.copy()
+    for column in episodes.columns:
+        if episodes[column].dtype == object:
+            episodes[column] = episodes[column].astype("category")
+
     # Episodes are fixed width, so the stop is the start plus the step. The step is
     # read off the data -- the spacing of the distinct ages -- so a cell table can
     # never disagree with the width it was built with.
     ages = sorted(int(age) for age in episodes[AGE].unique())
     step = min((b - a) for a, b in pairwise(ages)) if len(ages) > 1 else 1
 
-    episodes[AGE_START] = episodes[AGE].astype(float)
-    episodes[AGE_STOP] = episodes[AGE_START] + float(step)
+    start_ages = episodes[AGE].to_numpy(dtype=np.float32)
+    episodes[AGE_START] = start_ages
+    episodes[AGE_STOP] = start_ages + np.float32(step)
 
-    quarter = episodes["vintage"].str.extract(r"(\d{4})Q(\d)")
-    orig_month = quarter[0].astype(int) * 12 + (quarter[1].astype(int) - 1) * 3
+    orig_month = origination_months(episodes)
     # A period ordinal in months since year zero, so age can simply be added.
-    observation = orig_month + episodes[AGE_START].astype(int)
+    observation = orig_month + episodes[AGE].astype(int)
 
-    add_macro_family(episodes, macro, orig_month, observation, lag_months)
+    add_macro_family(episodes, macro, orig_month, observation, lag_months, names=covariates)
 
     # Calendar columns, so a split can be taken on time without recomputing them.
     # The episode is dated at its start: a band spans several months and has to be
@@ -380,11 +393,42 @@ def cells_to_episodes(
     episodes["period"] = _months_to_periods(observation)
 
     defaulted = episodes[EVENT].to_numpy(dtype=bool)
-    start = episodes[AGE_START].to_numpy(dtype=float)
-    stop = episodes[AGE_STOP].to_numpy(dtype=float)
+    start = episodes[AGE_START].to_numpy(dtype=np.float32)
+    stop = episodes[AGE_STOP].to_numpy(dtype=np.float32)
     episodes[LOWER_BOUND] = np.where(defaulted, start, stop)
-    episodes[UPPER_BOUND] = np.where(defaulted, stop, np.inf)
+    # Infinity has no float32 hazard: the upper bound stays float64 because lifelines
+    # compares it against one, and an overflow here would silently become a finite
+    # bound, turning every censored row into an observed default.
+    episodes[UPPER_BOUND] = np.where(defaulted, stop.astype(float), np.inf)
     episodes[EXACT_OBSERVATION] = False
 
     required = [name for name in MACRO_DERIVED if name in episodes.columns]
     return episodes.dropna(subset=required).reset_index(drop=True)
+
+
+def origination_months(cells: pd.DataFrame) -> pd.Series:
+    """The origination month of each cell, as an ordinal in months since year zero.
+
+    Two key shapes are accepted, and which one a table carries is the difference
+    between a correct calendar and one two months early:
+
+    * ``orig_month`` -- the month itself, which is what the aggregation now emits;
+    * ``vintage`` -- the origination *quarter*, which it used to. Reconstructing the
+      month from it takes the quarter's first month, and loans are not all written in
+      it: the mean offset is **+2.15 months**, so every macro covariate is read that
+      much late and the backtest boundary sits two months inside the training half.
+
+    The quarterly branch is kept so an older cell table can still be read, and it warns
+    rather than pretending the two are equivalent.
+    """
+    if "orig_month" in cells.columns:
+        return cells["orig_month"].astype(int)
+
+    warnings.warn(
+        "This cell table is keyed by origination quarter, so the observation month is "
+        "reconstructed from the quarter's first month and runs about two months early. "
+        "Re-run `creditsurv aggregate` to key it by origination month.",
+        stacklevel=2,
+    )
+    quarter = cells["vintage"].astype(str).str.extract(r"(\d{4})Q(\d)")
+    return quarter[0].astype(int) * 12 + (quarter[1].astype(int) - 1) * 3
