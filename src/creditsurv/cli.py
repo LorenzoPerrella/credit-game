@@ -449,6 +449,7 @@ def compare(moratorium: MoratoriumOption = "exclude") -> None:
         distribution_comparison,
         marginal_comparison,
         shape_depends_on_covariates,
+        shape_formula,
     )
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -463,7 +464,11 @@ def compare(moratorium: MoratoriumOption = "exclude") -> None:
     typer.echo("\nDoes the hazard's shape vary with covariates?")
     _echo_table(
         shape_depends_on_covariates(
-            encoded, covariates, formula, "fico_s", weights_col=WEIGHT
+            encoded,
+            covariates,
+            formula,
+            shape_formula(covariates, CATEGORICAL_REFERENCE)[1],
+            weights_col=WEIGHT,
         ).round(4)
     )
 

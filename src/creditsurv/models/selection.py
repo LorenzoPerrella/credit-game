@@ -215,6 +215,27 @@ def likelihood_ratio_test(
     return float(statistic), p_value
 
 
+#: The covariate the shape test lets into the shape parameter. ``occupancy`` is the one
+#: stratum whose survival curves cross -- investor loans default faster early and slower
+#: late, 0.9522 against 0.9533 surviving at 60 months and 0.9258 against 0.9246 at 91 --
+#: and no scale factor maps one such curve onto the other, so it is where a shape that
+#: varies has something to find. The report used to relax the first covariate of the
+#: specification, ``fico_s``, and so answered a question nobody had asked.
+SHAPE_COVARIATE: Final = "occupancy"
+
+
+def shape_formula(covariates: Sequence[str], references: dict[str, str]) -> tuple[str, str]:
+    """The covariate the shape test relaxes, and the ancillary formula that relaxes it.
+
+    ``SHAPE_COVARIATE``, against its treatment reference, when the specification has it;
+    the first covariate otherwise, so that a specification without it is still tested.
+    """
+    name = SHAPE_COVARIATE if SHAPE_COVARIATE in covariates else covariates[0]
+    if name in references:
+        return name, f"C({name}, Treatment('{references[name]}'))"
+    return name, name
+
+
 def shape_depends_on_covariates(
     encoded: pd.DataFrame,
     covariates: Sequence[str],

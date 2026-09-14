@@ -12,16 +12,19 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from creditsurv.config import CATEGORICAL_REFERENCE
 from creditsurv.models.nonparametric import (
     kaplan_meier,
     km_band_contains,
     predicted_survival_curve,
 )
 from creditsurv.models.selection import (
+    SHAPE_COVARIATE,
     distribution_comparison,
     exponential_is_rejected,
     marginal_comparison,
     shape_depends_on_covariates,
+    shape_formula,
 )
 from creditsurv.reporting import charts
 from creditsurv.reporting.builder import Report, provenance
@@ -273,12 +276,19 @@ loan-level right-censored one by AIC is not a comparison at all.
     else:
         report.table(regression, decimals=2)
 
+    relaxed, ancillary = shape_formula(covariates, CATEGORICAL_REFERENCE)
     shape = (
         shape_depends_on_covariates(
-            encoded, covariates, formula, covariates[0], weights_col=weights_col, fitted=fitted
+            encoded, covariates, formula, ancillary, weights_col=weights_col, fitted=fitted
         )
         if extra_fits
         else None
+    )
+    why = (
+        ", the one covariate whose survival curves cross: investor loans default faster "
+        "early and slower late, which no scale factor can represent"
+        if relaxed == SHAPE_COVARIATE
+        else ""
     )
     report.heading("4. Does the hazard's shape vary with covariates?", level=3).text(
         f"""
@@ -290,7 +300,7 @@ It matters for lifetime PD specifically: if the shape genuinely varies, the term
 structure differs by loan rather than merely shifting, and a single shape misstates
 the timing of losses even when it gets the total right.
 
-Tested on `{covariates[0]}`:
+Tested on `{relaxed}`{why}:
 """
     )
     if shape is None:

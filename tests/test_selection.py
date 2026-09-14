@@ -29,6 +29,7 @@ from creditsurv.models.selection import (
     likelihood_ratio_test,
     marginal_comparison,
     shape_depends_on_covariates,
+    shape_formula,
     stepwise_vif,
     univariate_screening,
     variance_inflation,
@@ -93,6 +94,23 @@ def test_shape_test_does_not_reject_a_constant_shape(encoded: pd.DataFrame) -> N
 
     assert result.iloc[0]["p_value"] > 0.05
     assert result.iloc[0]["added_parameters"] == 1
+
+
+def test_the_shape_test_takes_a_categorical_into_the_shape(encoded: pd.DataFrame) -> None:
+    """What ``report --extra-fits`` now runs: ``occupancy`` in the shape parameter, against
+    its reference, through the block engine. Three levels, so two shape parameters, and the
+    larger model can never fit worse than the one nested in it."""
+    covariates = [*COVARIATES, "occupancy"]
+    references = {"occupancy": "owner_occupied"}
+    formula = f"{FORMULA} + C(occupancy, Treatment('owner_occupied'))"
+    relaxed, ancillary = shape_formula(covariates, references)
+
+    result = shape_depends_on_covariates(encoded, covariates, formula, ancillary)
+
+    assert relaxed == "occupancy"
+    assert encoded["occupancy"].nunique() == 3
+    assert result.iloc[0]["added_parameters"] == 2
+    assert result.iloc[0]["full_log_likelihood"] >= result.iloc[0]["restricted_log_likelihood"]
 
 
 def test_likelihood_ratio_test_rejects_a_degenerate_comparison() -> None:
@@ -357,3 +375,16 @@ def test_factors_read_back_from_a_saved_correlation_are_the_ones_the_rows_give()
     table = inflation_from_covariance(saved).set_index("covariate")["vif"]
 
     np.testing.assert_allclose(table.loc[rows.index], rows, rtol=1e-8)
+
+
+def test_the_shape_test_relaxes_the_covariate_whose_curves_cross() -> None:
+    """S3: the report relaxed the first covariate, ``fico_s``, while the stratum whose curves
+    cross -- the assumption the test exists for -- was ``occupancy``."""
+    covariates = ["fico_s", "cltv_drift", "purpose", "occupancy"]
+    references = {"purpose": "purchase", "occupancy": "owner_occupied"}
+
+    assert shape_formula(covariates, references) == (
+        "occupancy",
+        "C(occupancy, Treatment('owner_occupied'))",
+    )
+    assert shape_formula(["fico_s", "purpose"], {"purpose": "purchase"}) == ("fico_s", "fico_s")
