@@ -266,6 +266,43 @@ def to_loan_level(panel: pd.DataFrame) -> pd.DataFrame:
     return loans.reset_index()
 
 
+#: Share of loan-months arriving after age zero above which the reconstruction warns.
+#: The validation measured 4,605,963 on the whole book, under 0.2%, which moves nothing.
+#: A portfolio bought seasoned would be mostly late entry, and its curve would be wrong
+#: with nothing else to say so.
+LATE_ENTRY_TOLERANCE: Final = 0.01
+
+
+def _at_risk_by_age(
+    episodes: pd.DataFrame, *, weight: str, age: str, event: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Loan-months at risk and defaulting at each age, from zero to the oldest."""
+    ages = episodes[age].to_numpy(dtype=int)
+    exposure = episodes[weight].to_numpy(dtype=float)
+    defaulted = exposure * episodes[event].to_numpy(dtype=bool)
+    at_risk: np.ndarray = np.bincount(ages, weights=exposure)
+    defaults: np.ndarray = np.bincount(ages, weights=defaulted, minlength=len(at_risk))
+    return at_risk, defaults
+
+
+def net_entries(
+    episodes: pd.DataFrame, *, weight: str = WEIGHT, age: str = AGE, event: str = EVENT
+) -> pd.Series:
+    """Loan-months at risk at an age that were not at risk at the age before.
+
+    ``R(a + 1) - [R(a) - d(a)]`` where it is positive, indexed by the age of arrival. A
+    closed cohort has none: what is at risk next month is what was at risk this month,
+    less what defaulted or left. This panel is not closed -- the validation found up to
+    63% of the 1999 vintage first reported above age zero -- and only the net flow is
+    visible: a month in which some loans leave and others arrive shows the difference.
+    """
+    at_risk, defaults = _at_risk_by_age(episodes, weight=weight, age=age, event=event)
+    arriving = np.maximum(at_risk[1:] - (at_risk[:-1] - defaults[:-1]), 0.0)
+    ages = np.arange(1, len(at_risk))
+    present = arriving > 0
+    return pd.Series(arriving[present], index=ages[present], name="net_entries")
+
+
 def to_loan_level_weighted(
     episodes: pd.DataFrame, *, weight: str = WEIGHT, age: str = AGE, event: str = EVENT
 ) -> pd.DataFrame:
@@ -273,8 +310,10 @@ def to_loan_level_weighted(
 
     Aggregation destroys the loan id -- a cell is a count of loan-months, not a
     subject -- so :func:`to_loan_level` cannot run. The duration distribution is
-    still recoverable, and exactly rather than approximately, from the counts at
-    risk at each age.
+    still recoverable from the counts at risk at each age: exactly, for loans observed
+    from origination. A loan first observed later cannot be placed in a duration
+    distribution at all; it is absorbed, :func:`net_entries` measures how much, and a
+    warning says so above ``LATE_ENTRY_TOLERANCE``.
 
     Write ``R(a)`` for the loan-months observed at age ``a`` and ``d(a)`` for those
     ending in default. A loan at risk at ``a`` either defaults, leaves the window
@@ -291,27 +330,28 @@ def to_loan_level_weighted(
     Durations follow :func:`to_loan_level`: a loan last observed at age ``a`` has
     duration ``a + 1``.
     """
-    exposure = episodes[weight].to_numpy(dtype=float)
-    working = pd.DataFrame(
-        {
-            age: episodes[age].to_numpy(dtype=int),
-            "at_risk": exposure,
-            "defaults": exposure * episodes[event].to_numpy(dtype=bool),
-        }
-    )
-    counts = working.groupby(age, observed=True)[["at_risk", "defaults"]].sum()
-    counts = counts.reindex(range(int(counts.index.max()) + 1), fill_value=0.0)
-
-    at_risk = counts["at_risk"].to_numpy(dtype=float)
-    defaults = counts["defaults"].to_numpy(dtype=float)
+    at_risk, defaults = _at_risk_by_age(episodes, weight=weight, age=age, event=event)
     # The last age has no successor: everything still at risk there is censored.
     survivors = np.append(at_risk[1:], 0.0)
-    # A panel with gaps -- a loan absent for a month and back the next -- would make
-    # this negative. Freddie Mac reports contiguously, so clipping is a guard rather
-    # than a correction, but a silent negative weight would poison the fit.
-    censored = np.maximum(at_risk - defaults - survivors, 0.0)
+    leaving = at_risk - defaults - survivors
+    # Negative where more loan-months are at risk at a + 1 than survived a: loans entering
+    # the panel late. A duration distribution cannot say a loan was absent at the start,
+    # so they are absorbed -- counted as at risk from origination, which dilutes the
+    # hazard before they arrive -- because a negative weight would poison the fit. The
+    # first version clipped silently, believing Freddie Mac reports every loan
+    # contiguously from origination; the validation measured 4,605,963 loan-months
+    # absorbed that way. It still clips, and now says how much.
+    absorbed = float(np.maximum(-leaving, 0.0).sum())
+    share = absorbed / float(at_risk.sum())
+    if share > LATE_ENTRY_TOLERANCE:
+        warnings.warn(
+            f"{absorbed:,.0f} loan-months ({share:.2%}) enter the panel after age zero and "
+            "are counted as at risk from origination, which understates the early hazard.",
+            stacklevel=2,
+        )
+    censored = np.maximum(leaving, 0.0)
 
-    duration = counts.index.to_numpy(dtype=float) + 1.0
+    duration = np.arange(len(at_risk), dtype=float) + 1.0
     frame = pd.DataFrame(
         {
             "duration": np.concatenate([duration, duration]),

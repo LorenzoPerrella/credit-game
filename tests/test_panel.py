@@ -358,3 +358,22 @@ def test_month_ordinals_become_the_periods_their_labels_name() -> None:
 
     expected = pd.PeriodIndex(["1999-01", "2006-12", "2026-03"], freq="M")
     assert _months_to_periods(months).equals(expected)
+
+
+def test_loans_entering_late_are_measured_not_silently_absorbed() -> None:
+    """A loan first seen at age two cannot be placed in a duration distribution.
+
+    It is absorbed as if at risk from origination, which dilutes the early hazard. The
+    first version did that silently, believing the panel is reported contiguously from
+    origination; the validation measured 4,605,963 loan-months absorbed that way.
+    """
+    from creditsurv.data.panel import net_entries
+
+    contiguous = make_panel({1: (4, False), 2: (4, True)})
+    late = pd.DataFrame({"loan_id": 3, "age": [2, 3], "event": False, "covariate": 1.5})
+    panel = pd.concat([contiguous, late], ignore_index=True).assign(n=1.0)
+
+    assert net_entries(panel).to_dict() == {2: 1.0}
+    assert net_entries(contiguous.assign(n=1.0)).empty
+    with pytest.warns(UserWarning, match="after age zero"):
+        to_loan_level_weighted(panel)
