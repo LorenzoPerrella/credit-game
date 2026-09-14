@@ -156,9 +156,11 @@ Three exclusions are deliberate and matter more than the inclusions:
             "**Origination vintage** is reserved for the out-of-time split. As a "
             "covariate it absorbs exactly the macroeconomic effects the model exists "
             "to estimate.",
-            "**Contemporaneous revised macro** is excluded; every revised series is "
-            "lagged three months. Look-ahead is invisible in results -- a model that "
-            "quietly reads next quarter's unemployment looks excellent and is worthless.",
+            "**Contemporaneous macro** is excluded: every series is lagged three months, "
+            "revised ones because they are published late and market quotes because a "
+            "loan ninety days delinquent in a month missed its payments in the three "
+            "before it. Look-ahead is invisible in results -- a model that quietly reads "
+            "next quarter's unemployment looks excellent and is worthless.",
             "**Current delinquency status** is excluded as a mediator, not a "
             "predictor. Including it inflates every metric while destroying the "
             "model's actual use, which is predicting lifetime PD from origination.",
