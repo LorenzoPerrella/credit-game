@@ -108,16 +108,22 @@ invent macro observations that never existed, which then leak into every covaria
 built on them. The panel ends at the last month for which *every* series has a real
 observation, and logs what it discarded. On a current run it ends **2026-06**.
 
-### Publication lags are applied per series, not uniformly
+### Every series is lagged three months, for one of two reasons
 
-| Treatment | Series | Why |
+| Lag | Series | Why |
 |---|---|---|
-| **Lagged 3 months** | `unemployment_rate`, `hpi`, `nfci`, `cpi`, `sentiment`, `housing_starts` | Published in arrears and later revised |
-| **Contemporaneous** | both mortgage rates, `treasury_10y`, `term_spread`, `credit_spread`, `equity_index`, `vix` | Market quotes, known in real time, never revised |
+| **Publication** | `unemployment_rate`, `hpi`, `nfci`, `cpi`, `sentiment`, `housing_starts` | Published in arrears and later revised: the value for month *t* is not known in *t* |
+| **Transmission** | both mortgage rates, `treasury_10y`, `term_spread`, `credit_spread`, `equity_index`, `vix`, `policy_rate` | Quoted in real time and never revised, and still unable to cause a default in the month they are quoted |
 
-A blanket lag would be simpler and would misstate what was knowable. A borrower
-comparing their note rate with today's market rate does not wait three months to do
-it, and a Treasury yield is not restated.
+Market quotes used to be read contemporaneously, on the argument that they are known in
+real time. That is an argument about **availability**. The event is ninety days of missed
+payments: a loan delinquent in month *t* missed its payments in *t−3*, *t−2* and *t−1*,
+so nothing observed in *t* can be what caused it. The backtest showed the cost. Predicted
+default spiked in April 2025 and March 2026, the two VIX peaks of the test window, with
+actual over expected at 0.47 and 0.59, while realised default did not move.
+
+The lag reaches every market series, not only the one that was noticed. `policy_rate` had
+been in neither list, and so was never lagged at all.
 
 ---
 
@@ -324,7 +330,7 @@ information.
 |---|---|
 | Origination vintage as a covariate | Reserved for the time split. As a covariate it absorbs the macro effects the model exists to estimate. |
 | Current delinquency status | A mediator, not a predictor. Including it inflates every metric while destroying the model's use. |
-| Contemporaneous revised macro | Look-ahead. Every revised series is lagged. |
+| Contemporaneous macro | Look-ahead, and no mechanism: a default in *t* was caused before *t*. Every series is lagged three months. |
 | `amortization_type`, `interest_only_indicator` | Exactly **one** value each across the whole dataset. |
 | All loss and proceeds columns | Populated only for defaults, and they need LGD, which is out of scope. |
 

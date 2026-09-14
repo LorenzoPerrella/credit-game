@@ -103,6 +103,7 @@ thousand.
 | `classic_fico` | 9999 |
 | `original_dti` | 999 |
 | `original_ltv`, `original_cltv` | 999 |
+| `mortgage_insurance_percentage` | 999 |
 | `estimated_loan_to_value` | 999 |
 
 The last one was missed on the first pass, and the consequence is worth recording.
@@ -129,13 +130,45 @@ corrections that came out of it.
 
 | Outcome | Condition |
 |---|---|
-| **Default** | `current_loan_delinquency_status` ≥ 3 (90+ days) **or** `zero_balance_code` in {02 third-party sale, 03 short sale, 09 REO, 15 note sale} |
-| **Prepayment** | `zero_balance_code` = 01 — treated as censoring |
+| **Default** | `current_loan_delinquency_status` ≥ 3 (90+ days) **or** `zero_balance_code` in {02 third-party sale, 03 short sale, 09 REO, 15 note sale} — unless the month is a moratorium |
+| **Prepayment and other exits** | `zero_balance_code` in {01 prepaid, 16 reperforming loan sale, 96 removal} — censoring |
+| **End of observation** | a modification, and under `censor` a moratorium — the month before the flagged row |
 
 `current_loan_delinquency_status` is **alphanumeric**: `RA` marks an REO acquisition
 and `XX` an unknown status. Casting to a number turns both into null, which compares
 false and so reads as *performing* — correct for `XX`, wrong for `RA`. The
 zero-balance code is therefore checked alongside it, not instead of it.
+
+### A moratorium is not a default
+
+The CARES Act required servicers to report loans in forbearance as delinquent, and
+disaster relief works the same way. Such a loan passes the 90-day test without its
+borrower having failed to pay anything, and the validation found moratoria behind **17%
+of the default events**, 99% of which returned to performing. Three fields tell them
+apart, and none of them was being kept at ingest:
+
+| Field | Marker |
+|---|---|
+| `delinquency_due_to_disaster` | `Y` |
+| `borrower_assistance_plan` | `F`, forbearance |
+| `payment_deferral_flag` | `P`, `C` |
+
+`T` and `R` in the assistance plan are loss mitigation, trial and repayment plans for a
+borrower who did fall behind, and are not moratoria. On the 2019Q3 vintage **87%** of the
+rows at 90+ days carry one of the three markers.
+
+What a marker means is `MoratoriumPolicy`, and the two defensible answers keep different
+things:
+
+| Policy | The accommodated month | The months after it |
+|---|---|---|
+| `exclude` | not an event | the loan stays at risk, and a later genuine default counts |
+| `censor` | ends observation | lost, with any default among them |
+| `ignore` | an event, as before | kept for comparison only |
+
+Each policy writes its own table, `cells_<policy>.parquet`. `creditsurv moratorium` fits
+and backtests the same specification on both, so the choice rests on what it does to the
+model; see [the moratorium report](reports/moratorium.md).
 
 ### Truncation at the first terminating month
 
@@ -183,6 +216,25 @@ month before the flagged row rather than on it. 415 duplicated pairs survive in
 costs a sort over the whole panel, ten times the aggregation's runtime, and is not
 worth it at 0.002%.
 
+### Loans enter late, and the likelihood is told
+
+A loan is not always first reported at age zero: up to **63% of the 1999 vintage** is
+first observed above it. The episode likelihood conditions every loan-month on survival
+to its own start, so a late entrant contributes only the months it was seen. That is left
+truncation, handled rather than ignored.
+
+It rests on an assumption worth stating, because nothing checks it: **the age at which a
+loan enters is independent of when it defaults**, given its covariates. Entry selected on
+risk -- loans reported only once they were in trouble, or only if they survived -- would
+bias the hazard at young ages, and this data cannot say whether that happened.
+
+The late entrants used to be absorbed silently in one place: the loan-level duration
+distribution rebuilt from the cells for the Kaplan-Meier comparison, which cannot
+represent a loan absent at the start and clipped the difference, on the belief that the
+panel is reported contiguously from origination. The validation measured 4,605,963
+loan-months absorbed that way. `net_entries` now measures them, and a warning names them
+once they pass 1% of the panel.
+
 ## Stage 2b — Screening (`creditsurv profile`)
 
 `src/creditsurv/profiling.py`. Runs on the ingested parquet, quarter by quarter,
@@ -222,23 +274,35 @@ cells is a minute.
 
 ### Cut points
 
-Chosen from credit conventions rather than fitted to the sample. Loan-to-value breaks
-sit at 80, 85, 90 and 95 because that is where mortgage insurance and pricing tiers
-actually change; debt-to-income breaks at 36 and 43 because those are long-standing
-underwriting thresholds. Data-driven cuts would fit this sample better and would have
-to be refitted, and re-justified, on every new one.
+Chosen from credit conventions rather than fitted to the sample. Data-driven cuts would
+fit this sample better and would have to be refitted, and re-justified, on every new one.
+
+Two sets exist, and they used to disagree. `BIN_EDGES` in `src/creditsurv/features.py` is
+the fine classing the exploration reads; `PRODUCTION_EDGES` in
+`src/creditsurv/data/aggregate.py` is what the cells are built from, and a test holds it
+to a **subset** of the first -- coarser, because every band multiplies the table:
+
+| Covariate | Production breaks |
+|---|---|
+| `fico_s`, (score − 700) / 50 | −2.4, −0.8, 0, 0.8, 1.2, 2.4 |
+| `orig_ltv` | 30, 70, 80, 90, 100 |
+| `dti` | 10, 28, 36, 43, 55 |
+
+This document once justified a DTI break at 43 while the model cut at 45, and described
+LTV breaks at 85 and 95 that no cell had. The 80 break is the one the economics turns on,
+since mortgage insurance is required above it and originations pile up against it, and 43
+is the qualified-mortgage limit.
 
 Each band takes its **midpoint** as its value, so a binned covariate keeps the scale
 of the one it replaces and its coefficient stays comparable with an unbinned fit.
-Cut points live in `BIN_EDGES` in `src/creditsurv/features.py`.
 
 ### The grouping key
 
 ```
 key    = coarse-classed continuous covariates
-       × categorical covariates
-       × vintage quarter
-       × loan age band
+       × categorical covariates: purpose, occupancy, term, has_mi, first_time_buyer
+       × origination month
+       × loan age
        × event
 weight = COUNT(*) AS n
 ```
@@ -247,6 +311,18 @@ Quarters are aggregated **one at a time**. Every loan appears in exactly one
 quarter's files — verified rather than assumed: the identifiers of 1999Q1 and 1999Q2
 do not intersect at all — so a quarter can be collapsed on its own and the results
 concatenated, which keeps memory flat.
+
+**The origination month, not the quarter.** The key used to carry the vintage quarter,
+and every macro covariate was then read as if the loan had been written in the quarter's
+first month. Loans are not all written in it -- the mean offset is +2.15 months -- so every
+macro series was read two months late, and cells near the backtest date were filed on the
+wrong side of it: some 21 million loan-months of look-ahead that `assert_no_lookahead`
+could not see, because it checked the shifted month. The exact month costs 3.51× the
+cells, measured on nine quarters.
+
+Text keys come back from DuckDB as Python strings. Each quarter's are made categorical as
+it arrives, and the levels are unified before the quarters are stacked, because pandas
+turns a categorical column back into strings when two pieces disagree on its levels.
 
 The alternative was tried first. Grouping all quarters at once builds one hash table
 over hundreds of millions of loan identifiers; DuckDB spilled **20 GB into the
@@ -266,11 +342,14 @@ passed in, so a cell table can never disagree with the width it was built with.
 
 The final collapse, measured on the whole dataset:
 
-| | |
-|---|---|
-| Loan-months in | **2,515,340,009** |
-| Cells out | **15,858,492** |
-| Compression | **159×** |
+| | `exclude` | `censor` |
+|---|---|---|
+| Loan-months in | **2,535,194,125** | **2,507,132,461** |
+| Cells out | **63,639,116** | **63,139,859** |
+| Compression | **40×** | **40×** |
+
+The quarter-keyed table was 15,858,492 cells, four times fewer, for the reasons given
+under the grouping key.
 
 The one cost is fit time, and it is real: see [the methodology
 report](reports/methodology.md) for what a fit on this table takes.
@@ -304,14 +383,20 @@ That asymmetry decides the shape of the whole specification:
 | Adding | Cost |
 |---|---|
 | One macro series | **zero cells** |
-| `channel`, `region`, `first_time_buyer` (2 × 4 × 2 levels) | up to **16×** the table |
+| `has_mi` and `first_time_buyer` | **1.19×** the table, measured |
+| The origination month in place of the quarter | **3.51×**, measured |
 | One continuous covariate at 5 bands | up to **5×** the table |
 
-Which is why the macro side carries fourteen series and thirteen candidate
-covariates, and the loan side carries six. The loan characteristics left out —
-`log_orig_upb`, `orig_spread`, `channel`, `region`, `first_time_buyer` — were not
-dropped on their merits, and `docs/variable_selection.md` records what each would
-cost against what it might be worth.
+The middle rows replace a figure nobody had measured. `channel`, `region` and
+`first_time_buyer` were once kept out of the key as "up to sixteen times the table", the
+product of their level counts, which is a ceiling and not a cost, since most combinations
+of levels never occur together. Measured on nine quarters, `has_mi` and
+`first_time_buyer` together cost 1.19×, and they are in the key.
+
+That is still why the macro side carries fifteen candidate covariates and the loan side
+eight. The loan characteristics left out -- `log_orig_upb`, `orig_spread`, `channel`,
+`region` -- were not dropped on their merits, and `docs/variable_selection.md` records
+what each would cost against what it might be worth.
 
 ### The weight is a count, never an amount
 
@@ -335,12 +420,25 @@ At 1.75 billion rows the ratio inverts. The measurement was correct for the regi
 was taken in, and wrong as a generalisation — which is the usual failure mode of a
 measurement taken once.
 
+### What the exact key costs downstream
+
+Four times the cells is not four times the work; it is another machine's worth of memory.
+A stock lifelines fit holds about 680 bytes a training row, 45-50 GB for this table, so
+fits run through `creditsurv.models.blocks` a block at a time, and the panel is never
+held beside its training and test halves. [CLAUDE.md](../CLAUDE.md) keeps the rules that
+follow from it.
+
 ## Reproducing
 
 ```bash
 uv run creditsurv fetch-macro
-uv run creditsurv ingest                          # ~30 min, idempotent
+uv run creditsurv ingest                            # ~30 min, idempotent
 uv run creditsurv aggregate --report-cardinality
+uv run creditsurv aggregate --moratorium exclude    # 11.3 GB at peak
+uv run creditsurv aggregate --moratorium censor
+uv run creditsurv moratorium                        # both treatments, fitted and backtested
+uv run creditsurv select                            # the specification; days, resumable
+uv run creditsurv report --extra-fits
 ```
 
 `data/` is not committed. Everything under it is reproducible from the commands
