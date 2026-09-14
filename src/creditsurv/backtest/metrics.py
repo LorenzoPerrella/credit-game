@@ -17,7 +17,7 @@ asks the equivalent question of the data that does exist, and is reported in its
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import pandas as pd
@@ -278,3 +278,25 @@ def actual_versus_expected(
         grouped["expected"] > 0, grouped["events"] / grouped["expected"], np.nan
     )
     return grouped
+
+
+#: A month of the test window holding less than this share of the median month's exposure
+#: is one the data release barely covers.
+THIN_MONTH_SHARE: Final = 0.10
+
+
+def covered_months(
+    over_time: pd.DataFrame, *, share: float = THIN_MONTH_SHARE
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The months of the test window the data covers, and the ones it barely does.
+
+    The last months of a release are reported for a sliver of the book: in the published
+    backtest March 2026 carried 51,341 loan-months and April 8, against about twelve million
+    in a full month. Their realised rates are noise -- April's was zero -- and drawn beside the
+    rest they read as the model diverging. A month below ``share`` of the median month's
+    exposure is set aside and named, never dropped silently; the totals keep it, since at
+    that weight it moves nothing.
+    """
+    floor = share * float(over_time["exposure"].median())
+    thin = over_time["exposure"] < floor
+    return over_time.loc[~thin].reset_index(drop=True), over_time.loc[thin].reset_index(drop=True)

@@ -15,6 +15,7 @@ import pytest
 
 from creditsurv.backtest.metrics import (
     actual_versus_expected,
+    covered_months,
     population_stability_index,
     stability_report,
     weighted_calibration,
@@ -422,3 +423,19 @@ def test_group_totals_are_the_totals_a_group_by_gives() -> None:
     columns = ["expected", "events", "exposure"]
     reference = frame.groupby("group", observed=True)[columns].sum().reset_index()
     pd.testing.assert_frame_equal(table[["group", *columns]], reference, rtol=1e-12)
+
+
+def test_months_the_release_barely_covers_are_set_aside_by_name() -> None:
+    """The published backtest plunged to zero in its last month, on 8 loan-months of
+    exposure, and read as the model diverging. Such months leave the picture, named."""
+    table = pd.DataFrame(
+        {
+            "group": pd.PeriodIndex(["2026-01", "2026-02", "2026-03", "2026-04"], freq="M"),
+            "exposure": [12_000_000.0, 3_900_000.0, 51_341.0, 8.0],
+        }
+    )
+
+    covered, thin = covered_months(table)
+
+    assert list(covered["group"].astype(str)) == ["2026-01", "2026-02"]
+    assert list(thin["group"].astype(str)) == ["2026-03", "2026-04"]

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from creditsurv.backtest.metrics import covered_months
 from creditsurv.backtest.runner import ACCEPTANCE
 from creditsurv.reporting import charts
 from creditsurv.reporting.builder import Report, provenance
@@ -104,10 +105,21 @@ cross-section by decile cannot show.
         ).table(result.in_sample_by_year, decimals=4)
 
     if not result.over_time.empty:
-        figure = charts.backtest_over_time(result.over_time, figures / "backtest_over_time.png")
+        covered, thin = covered_months(result.over_time)
+        figure = charts.backtest_over_time(covered, figures / "backtest_over_time.png")
         report.figure(figure, "Predicted and realised default rate through the test window")
+        if not thin.empty:
+            left_out = ", ".join(
+                f"{month} ({int(exposure):,} loan-months)"
+                for month, exposure in zip(thin["group"], thin["exposure"], strict=True)
+            )
+            report.text(
+                f"Left out of the picture, not of the totals: {left_out}. The data release "
+                "covers these months for a sliver of the book, and a realised rate on that "
+                "little exposure is noise rather than evidence."
+            )
         report.table(
-            result.over_time.iloc[:: max(len(result.over_time) // 12, 1)],
+            covered.iloc[:: max(len(covered) // 12, 1)],
             caption="By month of observation",
             decimals=6,
         )
