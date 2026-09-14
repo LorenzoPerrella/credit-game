@@ -31,6 +31,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
+import pandas as pd
 from lifelines import LogLogisticAFTFitter, LogNormalAFTFitter, WeibullAFTFitter
 
 from creditsurv.data.panel import (
@@ -40,14 +41,14 @@ from creditsurv.data.panel import (
     EXACT_OBSERVATION,
     LOWER_BOUND,
     UPPER_BOUND,
-    model_frame,
+    model_blocks,
     right_censored_frame,
 )
+from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, fit_interval_censoring_in_blocks
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    import pandas as pd
     from lifelines.fitters import ParametericAFTRegressionFitter
 
 
@@ -153,6 +154,8 @@ def fit_aft(
     weights_col: str | None = None,
     ancillary: str | bool | None = None,
     show_progress: bool = False,
+    block_rows: int = DEFAULT_BLOCK_ROWS,
+    initial_point: np.ndarray | None = None,
 ) -> FitResult:
     """Fit a parametric AFT model to an encoded episode panel.
 
@@ -167,6 +170,11 @@ def fit_aft(
     ``show_progress`` prints the optimiser's iterations. On a table of this size a fit
     is tens of minutes, and the difference between "converging slowly" and "not
     converging" is worth being able to see without waiting for the answer.
+
+    The interval-censored likelihood is evaluated ``block_rows`` rows at a time, by
+    :mod:`creditsurv.models.blocks`, and gives the fit lifelines gives. ``initial_point``
+    starts the optimiser somewhere better than lifelines' own seed -- the coefficients of
+    a nested model, say -- which changes how long the fit takes and not where it ends.
     """
     if distribution not in FITTERS:
         message = f"Unknown distribution {distribution!r}; expected one of {sorted(FITTERS)}."
@@ -179,19 +187,26 @@ def fit_aft(
     started = time.perf_counter()
 
     if likelihood is Likelihood.INTERVAL_CENSORED:
-        frame = model_frame(encoded, covariates)
-        if weights_col is not None:
-            frame[weights_col] = encoded[weights_col].to_numpy()
-
-        fitter.fit_interval_censoring(
-            frame,
+        # Block by block. lifelines' own fit holds about 680 bytes a row of autograd tape
+        # and design copies -- 13.45 GB at 9.5 million rows, where the exact calendar key
+        # asks for 62 million -- and a test holds the engine to lifelines' coefficients,
+        # standard errors and log-likelihood on the same rows.
+        fit_interval_censoring_in_blocks(
+            fitter,
+            model_blocks(
+                _categorised(encoded, covariates),
+                covariates,
+                rows=block_rows,
+                weights_col=weights_col,
+            ),
+            formula=formula,
             lower_bound_col=LOWER_BOUND,
             upper_bound_col=UPPER_BOUND,
             event_col=EXACT_OBSERVATION,
             entry_col=AGE_START,
-            formula=formula,
             weights_col=weights_col,
             ancillary=ancillary,
+            initial_point=initial_point,
             show_progress=show_progress,
         )
     else:
@@ -235,6 +250,26 @@ def fit_aft(
         n_events=n_events,
         elapsed_seconds=elapsed,
     )
+
+
+def _categorised(encoded: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFrame:
+    """The panel with every text covariate categorical over the *whole* panel.
+
+    A block's design takes its dummy columns from the levels its column declares, so a
+    text column categorised block by block would give each block the levels it happens to
+    contain. The production panel is categorical already and passes through untouched;
+    a panel read straight from the loader is not.
+    """
+    text = [
+        name
+        for name in covariates
+        if not isinstance(encoded[name].dtype, pd.CategoricalDtype)
+        and not pd.api.types.is_numeric_dtype(encoded[name].dtype)
+        and not pd.api.types.is_bool_dtype(encoded[name].dtype)
+    ]
+    if not text:
+        return encoded
+    return encoded.assign(**{name: encoded[name].astype("category") for name in text})
 
 
 #: Memory the row-by-time prediction grid may occupy, in bytes. 256 MB leaves room for

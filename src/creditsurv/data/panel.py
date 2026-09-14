@@ -39,7 +39,7 @@ import pandas as pd
 from creditsurv.features import MACRO_DERIVED, add_macro_family
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
 LOAN_ID: Final = "loan_id"
 AGE: Final = "age"
@@ -149,6 +149,30 @@ def model_frame(panel: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFrame:
         message = f"Encoded panel is missing column(s): {missing}"
         raise PanelValidationError(message)
     return panel.loc[:, columns].copy()
+
+
+def model_blocks(
+    panel: pd.DataFrame,
+    covariates: Sequence[str],
+    *,
+    rows: int,
+    weights_col: str | None = None,
+) -> Iterator[pd.DataFrame]:
+    """:func:`model_frame` a block of ``rows`` at a time, with the weight alongside.
+
+    For :func:`creditsurv.models.blocks.fit_interval_censoring_in_blocks`. The whole
+    narrowed frame is never built: on the production panel it would be a second copy of
+    the largest object the pipeline holds.
+    """
+    if rows <= 0:
+        message = "rows must be positive."
+        raise ValueError(message)
+    for start in range(0, len(panel), rows):
+        block = panel.iloc[start : start + rows]
+        frame = model_frame(block, covariates)
+        if weights_col is not None:
+            frame[weights_col] = block[weights_col].to_numpy()
+        yield frame
 
 
 def aggregate_episodes(
