@@ -269,6 +269,9 @@ def aggregate(
     report_cardinality: Annotated[
         bool, typer.Option(help="Report the collapse without saving.")
     ] = False,
+    moratorium: Annotated[
+        str, typer.Option(help="exclude, censor or ignore: what a moratorium delinquency is.")
+    ] = "exclude",
 ) -> None:
     """Collapse the ingested panel into weighted cells.
 
@@ -276,10 +279,14 @@ def aggregate(
     exchangeable, so they become one row carrying a count. At this scale that is not
     an optimisation: a fit over billions of rows is out of reach, a fit over weighted
     cells is a minute.
+
+    ``--moratorium`` decides what a delinquency the borrower was not required to cure
+    counts as. Each policy writes its own table, so the two treatments can be compared
+    instead of the second silently replacing the first. See ``MoratoriumPolicy``.
     """
     import logging
 
-    from creditsurv.data.aggregate import build_cells, cardinality_report
+    from creditsurv.data.aggregate import MoratoriumPolicy, build_cells, cardinality_report
     from creditsurv.data.store import save_cells
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -288,13 +295,23 @@ def aggregate(
         _echo_table(cardinality_report().round(2))
         return
 
-    cells = build_cells()
-    path = save_cells(cells)
+    policy = MoratoriumPolicy(moratorium)
+    cells = build_cells(policy=policy)
+    path = save_cells(cells, policy.value)
     typer.echo(f"{len(cells):,} cells covering {int(cells['n'].sum()):,} loan-months")
-    typer.echo(f"Saved to {path}")
+    typer.echo(f"Moratorium policy: {policy.value}. Saved to {path}")
 
 
-def _episodes() -> tuple[pd.DataFrame, pd.DataFrame]:
+#: The moratorium option, shared by every command that reads cells. One definition, so the
+#: policy a model was fitted under is the policy its reports, coefficients and cache entry
+#: are named for -- and a comparison of the two treatments cannot quietly read one table
+#: twice.
+MoratoriumOption = Annotated[
+    str, typer.Option(help="exclude, censor or ignore: which cell table to read.")
+]
+
+
+def _episodes(moratorium: str = "exclude") -> tuple[pd.DataFrame, pd.DataFrame]:
     """The weighted episode panel every model command works from, and the macro path.
 
     Aggregated cells rather than a loan-month panel: the book is 2.9 billion
@@ -307,7 +324,7 @@ def _episodes() -> tuple[pd.DataFrame, pd.DataFrame]:
     from creditsurv.data.store import load_cells
 
     macro = load_macro_panel()
-    return cells_to_episodes(load_cells(), macro), macro
+    return cells_to_episodes(load_cells(moratorium), macro), macro
 
 
 @app.command()
@@ -320,6 +337,7 @@ def fit(
         str, typer.Option(help="Fit on everything up to this month. Empty for all of it.")
     ] = DEFAULT_AS_OF,
     save: Annotated[bool, typer.Option(help="Write the coefficients under docs/reports.")] = True,
+    moratorium: MoratoriumOption = "exclude",
 ) -> None:
     """Fit the model and print its coefficients.
 
@@ -344,7 +362,7 @@ def fit(
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     # Already encoded: cells_to_episodes writes the interval bounds as it expands,
     # because the bounds are a function of the cell's age band and its event flag.
-    encoded, _ = _episodes()
+    encoded, _ = _episodes(moratorium)
     if as_of:
         encoded = cell_split(encoded, pd.Period(as_of, freq="M")).train
         typer.echo(f"Training on {int(encoded[WEIGHT].sum()):,} loan-months up to {as_of}.")
@@ -373,7 +391,7 @@ def fit(
 
 
 @app.command()
-def compare() -> None:
+def compare(moratorium: MoratoriumOption = "exclude") -> None:
     """Compare distributional forms and test the shape assumption."""
     import logging
 
@@ -385,7 +403,7 @@ def compare() -> None:
     )
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    encoded, _ = _episodes()
+    encoded, _ = _episodes(moratorium)
     covariates = default_covariates()
     formula = default_formula()
 
@@ -404,6 +422,7 @@ def compare() -> None:
 @app.command()
 def backtest(
     as_of: Annotated[str, typer.Option(help="Reporting date, e.g. 2024-12.")] = DEFAULT_AS_OF,
+    moratorium: MoratoriumOption = "exclude",
 ) -> None:
     """Fit once on everything up to the reporting date, then predict against realised.
 
@@ -418,7 +437,7 @@ def backtest(
     from creditsurv.backtest.runner import run_backtest
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    episodes, _ = _episodes()
+    episodes, _ = _episodes(moratorium)
 
     split, fitted, result = run_backtest(
         episodes, pd.Period(as_of, freq="M"), default_covariates(), default_formula()
@@ -442,6 +461,7 @@ def report(
     reuse: Annotated[
         bool, typer.Option(help="Reuse a cached fit matching this specification exactly.")
     ] = False,
+    moratorium: MoratoriumOption = "exclude",
 ) -> None:
     """Run the pipeline and write the reports, from a single fit.
 
@@ -469,7 +489,7 @@ def report(
     from creditsurv.reporting import backtesting, calibration, methodology
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    episodes, macro = _episodes()
+    episodes, macro = _episodes(moratorium)
     covariates = default_covariates()
     formula = default_formula()
     destination = reports_dir()
@@ -479,7 +499,10 @@ def report(
 
     typer.echo(f"Fitting on {int(split.train[WEIGHT].sum()):,} loan-months up to {as_of}...")
     fitted = cast(
-        "FitResult", _fit_once(split.train, covariates, formula, as_of=as_of, reuse=reuse)
+        "FitResult",
+        _fit_once(
+            split.train, covariates, formula, as_of=as_of, reuse=reuse, moratorium=moratorium
+        ),
     )
 
     coefficients = destination / COEFFICIENTS_FILE
@@ -531,6 +554,7 @@ def _fit_once(
     *,
     as_of: str,
     reuse: bool,
+    moratorium: str = "exclude",
 ) -> object:
     """Fit the training half, reusing a cached model when one matches exactly.
 
@@ -550,6 +574,10 @@ def _fit_once(
 
     described = {
         "as_of": as_of,
+        # In the fingerprint because the two treatments can produce panels of similar
+        # size, and a censor fit silently reused for exclude would compare a model with
+        # itself.
+        "moratorium": moratorium,
         "formula": formula,
         "distribution": "weibull",
         "weights_col": WEIGHT,

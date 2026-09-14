@@ -18,6 +18,8 @@ from fixtures import origination_row, performance_row, write_archives
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pandas as pd
+
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -451,3 +453,114 @@ def test_the_eliminated_covariates_are_out_of_the_model() -> None:
     for name, reason in ELIMINATED.items():
         assert name in MACRO_CANDIDATES, f"{name} is recorded as eliminated but never a candidate"
         assert name not in formula, f"{name} was eliminated ({reason}) but is still fitted"
+
+
+def test_the_production_grid_is_a_subset_of_the_documented_one() -> None:
+    """Two classing schemes used to coexist and only one built cells.
+
+    `data_preparation.md` justified a DTI break at 43 as a long-standing underwriting
+    threshold while the model used 45, and named LTV breaks at 85 and 95 the model did
+    not have. A reader checking the economic justification of the bands found a
+    justification that did not describe the model.
+
+    Making the production grid a strict subset leaves only the coarsening to explain,
+    and every boundary that exists is one the documentation argues for.
+    """
+    from creditsurv.data.aggregate import PRODUCTION_EDGES
+    from creditsurv.features import BIN_EDGES
+
+    for name, edges in PRODUCTION_EDGES.items():
+        documented = set(BIN_EDGES[name])
+        stray = [edge for edge in edges if edge not in documented]
+        assert not stray, f"{name} cuts at {stray}, which BIN_EDGES does not justify"
+
+    assert 43.0 in PRODUCTION_EDGES["dti"], "the documented underwriting threshold is 43"
+    assert 80.0 in PRODUCTION_EDGES["orig_ltv"], "the mortgage-insurance threshold"
+
+
+def _moratorium_quarter() -> tuple[list[str], list[str]]:
+    """A loan on a statutory payment holiday, and one that simply stops paying."""
+    return (
+        [origination_row("F15Q1000001"), origination_row("F15Q1000002")],
+        [
+            # Forbearance: reported 90+ by statute, then cured.
+            performance_row("F15Q1000001", "201503", "0"),
+            performance_row("F15Q1000001", "201504", "1"),
+            performance_row("F15Q1000001", "201505", "2", delinquency="3", assistance="F"),
+            performance_row("F15Q1000001", "201506", "3", delinquency="4", assistance="F"),
+            performance_row("F15Q1000001", "201507", "4"),
+            performance_row("F15Q1000001", "201508", "5"),
+            # A real default, after the accommodation ended.
+            performance_row("F15Q1000001", "201509", "6", delinquency="3"),
+            # An ordinary borrower who stops paying, with no marker at all.
+            performance_row("F15Q1000002", "201503", "0"),
+            performance_row("F15Q1000002", "201504", "1"),
+            performance_row("F15Q1000002", "201505", "2", delinquency="3"),
+        ],
+    )
+
+
+def test_a_statutory_payment_holiday_is_not_a_default(tmp_path: Path) -> None:
+    """The CARES Act required loans in forbearance to be reported as delinquent, so a
+    payment holiday reads identically to a borrower who has stopped paying.
+
+    It is 17% of this book's events, and on 2019Q3 **87% of all 90+ rows carry an
+    accommodation marker**. Counting them is not a rounding error in the dependent
+    variable; it is most of the 2020 peak.
+    """
+    import duckdb
+
+    from creditsurv.data.aggregate import MoratoriumPolicy, _state_of_the_book_sql
+
+    _ingested(tmp_path, *_moratorium_quarter())
+    perf, orig = _sources(tmp_path)
+
+    holiday, stopped = "F15Q1000001", "F15Q1000002"
+
+    def book(policy: MoratoriumPolicy) -> pd.DataFrame:
+        frame = duckdb.connect().execute(_state_of_the_book_sql(policy), [perf, orig]).df()
+        return frame.sort_values(["loan_identifier", "period_key"])
+
+    def event_ages(frame: pd.DataFrame, loan: str) -> list[int]:
+        # Per loan, always. The first version of this test pooled both loans and read
+        # the unmarked borrower's default at age 2 as a failure of the exclusion.
+        rows = frame[frame["loan_identifier"] == loan]
+        return [int(age) for age in rows.loc[rows["event"], "age"]]
+
+    def last_age(frame: pd.DataFrame, loan: str) -> int:
+        return int(frame.loc[frame["loan_identifier"] == loan, "age"].max())
+
+    ignored = book(MoratoriumPolicy.IGNORE)
+    assert event_ages(ignored, holiday) == [2], "ignoring markers, the holiday is a default"
+    assert event_ages(ignored, stopped) == [2]
+
+    excluded = book(MoratoriumPolicy.EXCLUDE)
+    # The accommodated months are kept and carry no event, and the loan stays at risk,
+    # so the real default after the holiday is still caught.
+    assert event_ages(excluded, holiday) == [6], "the default after the holiday, not the holiday"
+    assert last_age(excluded, holiday) == 6
+    assert event_ages(excluded, stopped) == [2], "an unmarked delinquency is still a default"
+
+    censored = book(MoratoriumPolicy.CENSOR)
+    # Observation ends the month before the flagged one, so the holiday is not a
+    # default -- and neither is the real one that followed it, which is the price.
+    assert event_ages(censored, holiday) == []
+    assert last_age(censored, holiday) == 1
+    assert event_ages(censored, stopped) == [2]
+
+
+def test_the_two_moratorium_treatments_are_not_equivalent(tmp_path: Path) -> None:
+    """They differ in what they keep, which is why the choice is measured rather than
+    argued: EXCLUDE keeps the exposure and catches the later default, CENSOR does not."""
+    import duckdb
+
+    from creditsurv.data.aggregate import MoratoriumPolicy, _state_of_the_book_sql
+
+    _ingested(tmp_path, *_moratorium_quarter())
+    perf, orig = _sources(tmp_path)
+    connection = duckdb.connect()
+
+    kept = connection.execute(_state_of_the_book_sql(MoratoriumPolicy.EXCLUDE), [perf, orig]).df()
+    lost = connection.execute(_state_of_the_book_sql(MoratoriumPolicy.CENSOR), [perf, orig]).df()
+
+    assert len(kept) > len(lost), "censoring gives up the exposure after the accommodation"

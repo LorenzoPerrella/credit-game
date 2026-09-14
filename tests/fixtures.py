@@ -107,10 +107,20 @@ def origination_row(
     first_time: str = "N",
     first_payment: str = "201503",
     term: str = "360",
+    mi: str = "0",
 ) -> str:
-    """One line of ``orig_YYYYQn.txt``. Unset fields stay empty, as they do upstream."""
+    """One line of ``orig_YYYYQn.txt``. Unset fields stay empty, as they do upstream.
+
+    Mortgage insurance is the exception, deliberately. The real file never leaves it
+    empty -- an uninsured loan is written ``0``, which is 80.7% of the book, and not one
+    of 49.2 million loans has a blank -- so a fixture that left it empty described a file
+    that does not exist. That went unnoticed until ``has_mi`` stopped folding a missing
+    value into "not insured": every fixture loan was then dropped, and thirteen
+    aggregation tests reported zero cells.
+    """
     values = dict.fromkeys(ORIGINATION_COLUMNS, "")
     values.update(
+        mortgage_insurance_percentage=mi,
         classic_fico=fico,
         first_payment_date=first_payment,
         first_time_homebuyer_indicator=first_time,
@@ -138,6 +148,9 @@ def performance_row(
     zero_balance: str = "",
     upb: str = "200000",
     modification: str = "",
+    disaster: str = "",
+    assistance: str = "",
+    deferral: str = "",
 ) -> str:
     """One line of ``perf_YYYYQn.txt``.
 
@@ -155,6 +168,9 @@ def performance_row(
         zero_balance_code=zero_balance,
         current_actual_upb=upb,
         modification_flag=modification,
+        delinquency_due_to_disaster=disaster,
+        borrower_assistance_plan=assistance,
+        payment_deferral_flag=deferral,
     )
     return "|".join(values[name] for name in PERFORMANCE_COLUMNS)
 

@@ -27,29 +27,47 @@ if TYPE_CHECKING:
 
 _LOGGER: Final = logging.getLogger(__name__)
 
-CELLS_FILE = "cells.parquet"
+#: The moratorium policy a cell table is built under when none is named.
+DEFAULT_POLICY: Final = "exclude"
 
 
-def cells_path() -> Path:
-    return processed_dir() / CELLS_FILE
+def cells_path(policy: str = DEFAULT_POLICY) -> Path:
+    """Where the cells built under ``policy`` live.
+
+    One file per moratorium policy. The two treatments are built to be compared on
+    coefficients and on the backtest, and a single ``cells.parquet`` would let the second
+    aggregation overwrite the first without a word -- after which any comparison is of a
+    table with itself.
+    """
+    return processed_dir() / f"cells_{policy}.parquet"
 
 
-def save_cells(cells: pd.DataFrame) -> Path:
-    """Persist the aggregated cells."""
-    path = cells_path()
+def save_cells(cells: pd.DataFrame, policy: str = DEFAULT_POLICY) -> Path:
+    """Persist the aggregated cells, atomically.
+
+    Written to a sibling file and moved into place, for the reason the ingest learned by
+    losing a quarter to a reboot: an aggregation is hours of work, and a crash while
+    writing should leave the previous table intact rather than half of a new one.
+    """
+    path = cells_path(policy)
     path.parent.mkdir(parents=True, exist_ok=True)
-    cells.to_parquet(path)
+    partial = path.with_name(path.name + ".partial")
+    try:
+        cells.to_parquet(partial)
+        partial.replace(path)
+    finally:
+        partial.unlink(missing_ok=True)
     return path
 
 
-def load_cells() -> pd.DataFrame:
-    """Read the aggregated cells, or say how to build them."""
-    path = cells_path()
+def load_cells(policy: str = DEFAULT_POLICY) -> pd.DataFrame:
+    """Read the cells built under ``policy``, or say how to build them."""
+    path = cells_path(policy)
     if not path.exists():
         message = (
             f"No aggregated cells at {path}. Build them first:\n"
             "  uv run creditsurv ingest\n"
-            "  uv run creditsurv aggregate"
+            f"  uv run creditsurv aggregate --moratorium {policy}"
         )
         raise FileNotFoundError(message)
     return pd.read_parquet(path)
