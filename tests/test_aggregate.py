@@ -615,3 +615,33 @@ def test_cells_are_categorical_as_built_and_as_saved(tmp_path: Path) -> None:
         assert isinstance(cells[column].dtype, pd.CategoricalDtype), column
     save_cells(cells, "exclude")
     pd.testing.assert_frame_equal(load_cells("exclude"), cells)
+
+
+def test_the_loans_left_out_are_counted_by_what_they_lack_and_how_they_default(
+    tmp_path: Path,
+) -> None:
+    """D4: dropping incomplete loans is harmless only if they are few or default like the
+    rest, and neither can be assumed. Every field that drops a loan is counted, and the
+    dropped loans' default rate is set beside the kept ones'."""
+    from creditsurv.data.aggregate import incomplete_cases
+
+    origination = [
+        origination_row("F000000001"),
+        origination_row("F000000002"),
+        origination_row("F000000003", dti="999"),
+        origination_row("F000000004", purpose="9"),
+    ]
+    performance = [
+        *(performance_row(f"F00000000{i}", "201503", "0") for i in (1, 2, 3, 4)),
+        performance_row("F000000003", "201504", "1", delinquency="3"),
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    row = incomplete_cases(*_sources(tmp_path)).iloc[0]
+
+    assert row["loans"] == 4
+    assert row["dropped"] == 2
+    assert row["no_dti"] == 1
+    assert row["no_purpose"] == 1
+    assert row["default_rate_kept"] == pytest.approx(0.0)
+    assert row["default_rate_dropped"] == pytest.approx(0.5)

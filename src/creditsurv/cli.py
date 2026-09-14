@@ -270,6 +270,9 @@ def aggregate(
     report_cardinality: Annotated[
         bool, typer.Option(help="Report the collapse without saving.")
     ] = False,
+    report_incomplete: Annotated[
+        bool, typer.Option(help="Report, by vintage, the loans the cells leave out.")
+    ] = False,
     moratorium: Annotated[
         str, typer.Option(help="exclude, censor or ignore: what a moratorium delinquency is.")
     ] = "exclude",
@@ -287,13 +290,27 @@ def aggregate(
     """
     import logging
 
-    from creditsurv.data.aggregate import MoratoriumPolicy, build_cells, cardinality_report
+    from creditsurv.data.aggregate import (
+        MoratoriumPolicy,
+        build_cells,
+        cardinality_report,
+        incomplete_cases,
+    )
     from creditsurv.data.store import save_cells
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     if report_cardinality:
         _echo_table(cardinality_report().round(2))
+        return
+    if report_incomplete:
+        # D4: what the complete-case rule drops, and whether it defaults like what it keeps.
+        table = incomplete_cases(policy=MoratoriumPolicy(moratorium))
+        destination = reports_dir() / "incomplete_cases.csv"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(destination, index=False)
+        _echo_table(table.round(4))
+        typer.echo(f"Written: {destination}")
         return
 
     policy = MoratoriumPolicy(moratorium)

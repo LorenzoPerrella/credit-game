@@ -224,8 +224,19 @@ def _region_case() -> str:
     return f"CASE {whens} ELSE 'Other' END AS region"
 
 
-def _state_of_the_book_sql(policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE) -> str:
-    """The loan-month panel, cleaned and truncated, before any aggregation."""
+def _state_of_the_book_sql(
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE, *, complete_only: bool = True
+) -> str:
+    """The loan-month panel, cleaned and truncated, before any aggregation.
+
+    ``complete_only`` drops loans missing a credit score, loan-to-value or debt-to-income,
+    as the cells do. Off, they are kept, so :func:`incomplete_cases` can say what is lost.
+    """
+    complete = (
+        "WHERE o.credit_score IS NOT NULL AND o.orig_ltv IS NOT NULL AND o.dti IS NOT NULL"
+        if complete_only
+        else ""
+    )
     default_codes = ", ".join(f"'{code}'" for code in DEFAULT_ZERO_BALANCE)
     prepayment_codes = ", ".join(f"'{code}'" for code in PREPAYMENT_ZERO_BALANCE)
     modification_flags = ", ".join(f"'{flag}'" for flag in MODIFICATION_FLAGS)
@@ -333,7 +344,7 @@ def _state_of_the_book_sql(policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE) 
         COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE)  AS prepaid,
         o.*
     FROM truncated t JOIN orig o USING (loan_identifier)
-    WHERE o.credit_score IS NOT NULL AND o.orig_ltv IS NOT NULL AND o.dti IS NOT NULL
+    {complete}
     """
 
 
@@ -754,3 +765,70 @@ def cardinality_report(
             }
         ]
     )
+
+
+#: Origination fields whose absence drops a loan before the categorical keys are read.
+_COMPLETE_CASE_FIELDS: Final[tuple[str, ...]] = ("credit_score", "orig_ltv", "dti")
+
+
+def incomplete_cases(
+    perf_source: PathSpec = None,
+    orig_source: PathSpec = None,
+    *,
+    spec: CellSpec = DEFAULT_SPEC,
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> pd.DataFrame:
+    """The loans the cells leave out, vintage by vintage, and how they default.
+
+    The validation's D4. A loan missing its credit score, loan-to-value or debt-to-income,
+    or carrying a categorical code no mapping names, is dropped rather than imputed:
+    imputing an underwriting characteristic invents the thing being measured. Dropping is
+    harmless only if what goes is small or looks like what stays, and neither can be
+    assumed -- the validation found the share varying by two orders of magnitude across
+    vintages, almost all of it missing debt-to-income, and the dropped loans riskier.
+
+    One row per vintage: loans, how many are dropped, how many lack each field (a loan can
+    lack several), and the ever-default rate of the loans kept and of those dropped, under
+    ``policy``'s event definition. A pass over every performance file, quarter by quarter.
+    """
+    perf = _resolve(perf_source, "perf")
+    orig = _resolve(orig_source, "orig")
+    if not perf or not orig:
+        message = "No ingested quarters found. Run `creditsurv ingest` first."
+        raise FileNotFoundError(message)
+
+    missing = {field: f"{field} IS NULL" for field in _COMPLETE_CASE_FIELDS}
+    missing.update({name: f"({_CATEGORICAL[name]}) IS NULL" for name in spec.categorical})
+    flags = ", ".join(f"BOOL_OR({condition}) AS no_{name}" for name, condition in missing.items())
+    dropped = " OR ".join(f"no_{name}" for name in missing)
+    counts = ", ".join(f"COUNT(*) FILTER (WHERE no_{name}) AS no_{name}" for name in missing)
+
+    con = connection or _connect()
+    frames = []
+    for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
+        vintage = Path(perf_path).stem
+        query = f"""
+        WITH book AS ({_state_of_the_book_sql(policy, complete_only=False)}),
+        loans AS (
+            SELECT loan_identifier, BOOL_OR(event) AS defaulted, {flags}
+            FROM book
+            GROUP BY loan_identifier
+        ),
+        judged AS (SELECT *, ({dropped}) AS dropped FROM loans)
+        SELECT
+            '{vintage}' AS vintage,
+            COUNT(*) AS loans,
+            COUNT(*) FILTER (WHERE dropped) AS dropped,
+            {counts},
+            AVG(CASE WHEN NOT dropped THEN defaulted::INTEGER END) AS default_rate_kept,
+            AVG(CASE WHEN dropped THEN defaulted::INTEGER END) AS default_rate_dropped
+        FROM judged
+        """
+        frames.append(con.execute(query, [perf_path, orig_path]).df())
+        _LOGGER.info("%s: incomplete cases counted", vintage)
+
+    table = pd.concat(frames, ignore_index=True)
+    table["dropped_share"] = table["dropped"] / table["loans"]
+    table["relative_risk"] = table["default_rate_dropped"] / table["default_rate_kept"]
+    return table
