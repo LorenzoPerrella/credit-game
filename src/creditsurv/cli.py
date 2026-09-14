@@ -143,7 +143,8 @@ def prune_archives(
     for audit in blocked:
         typer.echo(
             f"{audit.year}: NOT deleting -- {len(audit.missing)} missing, "
-            f"{len(audit.mismatched)} row counts disagree"
+            f"{len(audit.mismatched)} row counts disagree, "
+            f"{len(audit.unreadable)} unreadable"
         )
 
     if not safe:

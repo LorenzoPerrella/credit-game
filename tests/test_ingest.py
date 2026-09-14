@@ -190,3 +190,91 @@ def _one_loan_quarter() -> tuple[list[str], list[str]]:
             performance_row("F15Q1000001", "201505", "2"),
         ],
     )
+
+
+def test_every_performance_field_is_either_kept_or_refused_with_a_reason() -> None:
+    """The most expensive defect in this project was three fields dropped in silence.
+
+    `delinquency_due_to_disaster`, `borrower_assistance_plan` and
+    `payment_deferral_flag` are what distinguishes a statutory payment holiday from a
+    credit default, and they were absent from the parse without appearing in any list
+    of exclusions. The CARES Act required forbearance to be reported as delinquency, so
+    17% of the events the model was fitted on were not credit at all.
+
+    A field not kept must therefore be a decision recorded on the exclusion list, never
+    an omission from the inclusion one.
+    """
+    from creditsurv.data.freddiemac import PERFORMANCE_COLUMNS
+    from creditsurv.data.ingest import PERFORMANCE_DROPPED, PERFORMANCE_KEEP
+
+    decided = set(PERFORMANCE_KEEP) | set(PERFORMANCE_DROPPED)
+    undecided = [name for name in PERFORMANCE_COLUMNS if name not in decided]
+    assert not undecided, f"no decision recorded for {undecided}"
+
+    unknown = decided - set(PERFORMANCE_COLUMNS)
+    assert not unknown, f"{unknown} are not in the published layout"
+
+    overlap = set(PERFORMANCE_KEEP) & set(PERFORMANCE_DROPPED)
+    assert not overlap, f"{overlap} are both kept and dropped"
+
+    # The three that cost 17% of the dependent variable.
+    for name in (
+        "delinquency_due_to_disaster",
+        "borrower_assistance_plan",
+        "payment_deferral_flag",
+    ):
+        assert name in PERFORMANCE_KEEP, f"{name} is what tells a moratorium from a default"
+
+
+def test_every_origination_field_is_either_kept_or_refused_with_a_reason() -> None:
+    """The same rule on the origination side, where `super_conforming_flag` reached
+    the parquet without ever being screened or listed as degenerate."""
+    from creditsurv.data.freddiemac import ORIGINATION_COLUMNS
+    from creditsurv.data.ingest import ORIGINATION_DROPPED, ORIGINATION_KEEP
+
+    decided = set(ORIGINATION_KEEP) | set(ORIGINATION_DROPPED)
+    undecided = [name for name in ORIGINATION_COLUMNS if name not in decided]
+    assert not undecided, f"no decision recorded for {undecided}"
+    assert not (decided - set(ORIGINATION_COLUMNS))
+    assert not (set(ORIGINATION_KEEP) & set(ORIGINATION_DROPPED))
+
+
+def test_a_failed_write_leaves_the_previous_parquet_intact(
+    archives: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reboot during `ingest --force` left 2013Q2 truncated, because the writer went
+    straight onto the only copy. Written to a sibling file and moved into place once
+    closed, a crash leaves the old file or the new one -- never half of either."""
+    ingest_quarter(2015, 1)
+    paths = {kind: Quarter(2015, 1).parquet_path(kind) for kind in ("orig", "perf")}
+    before = {kind: pq.read_table(path).num_rows for kind, path in paths.items()}
+
+    def fail(*_: object, **__: object) -> None:
+        message = "the machine rebooted"
+        raise OSError(message)
+
+    monkeypatch.setattr(pq.ParquetWriter, "write_batch", fail)
+    with pytest.raises(OSError, match="rebooted"):
+        ingest_quarter(2015, 1, force=True)
+
+    for kind, path in paths.items():
+        assert pq.read_table(path).num_rows == before[kind], f"{kind} was damaged"
+    assert not list(paths["perf"].parent.parent.rglob("*.partial")), "a half-file was left"
+
+
+def test_an_unreadable_parquet_blocks_the_deletion_instead_of_crashing(tmp_path: Path) -> None:
+    """The audit read each footer and raised on one that was gone -- which would have
+    taken `prune-archives` down with a traceback about magic bytes. An unreadable file
+    is the strongest possible reason to keep the archive, and is reported as one."""
+    from creditsurv.data.ingest import audit_archives
+
+    write_archives(tmp_path / "FREDDIE MAC", 2015, {1: _one_loan_quarter()})
+    ingest([2015])
+
+    path = Quarter(2015, 1).parquet_path("perf")
+    content = path.read_bytes()
+    path.write_bytes(content[: len(content) // 2])
+
+    audit = audit_archives([2015])[0]
+    assert not audit.safe_to_delete
+    assert audit.unreadable == ("2015Q1/perf",)
