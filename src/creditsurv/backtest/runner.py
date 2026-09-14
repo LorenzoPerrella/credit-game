@@ -64,6 +64,8 @@ class BacktestResult:
     over_time: pd.DataFrame = field(default_factory=pd.DataFrame)
     #: How far the covariate distributions moved across the cut.
     stability: pd.DataFrame = field(default_factory=pd.DataFrame)
+    #: Predicted against realised by calendar year, on the data the model was fitted to.
+    in_sample_by_year: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     @property
     def actual_over_expected(self) -> float:
@@ -83,6 +85,63 @@ class BacktestResult:
         }
 
 
+@dataclass(frozen=True)
+class Acceptance:
+    """Acceptance criteria, declared before the backtest runs and never after.
+
+    The validation's point was blunt and right: a backtest with no criterion can be read
+    but not passed or failed. The first out-of-time actual-over-expected this model
+    produced, 0.84, sat inside an in-sample spread of 0.27 to 2.78 by year -- so it
+    distinguished nothing, and nothing had said what it was meant to show.
+
+    The thresholds are the validation's own proposal, adopted as they stand rather than
+    tuned to a result, which is the only way a threshold carries information: actual over
+    expected within 0.80-1.25 overall and in every decile of predicted risk, and an
+    exposure-weighted Gini above 0.45.
+    """
+
+    ae_low: float = 0.80
+    ae_high: float = 1.25
+    gini_min: float = 0.45
+
+    def assess(self, result: BacktestResult) -> pd.DataFrame:
+        """One row per criterion: the threshold, the value found, and whether it held."""
+        ratio = result.actual_over_expected
+        band = f"{self.ae_low:.2f} to {self.ae_high:.2f}"
+        rows: list[dict[str, object]] = [
+            {
+                "criterion": "actual / expected, overall",
+                "threshold": band,
+                "value": f"{ratio:.4f}",
+                "passed": bool(self.ae_low <= ratio <= self.ae_high),
+            },
+            {
+                "criterion": "Gini, exposure-weighted",
+                "threshold": f"above {self.gini_min:.2f}",
+                "value": f"{result.gini:.4f}",
+                "passed": bool(result.gini > self.gini_min),
+            },
+        ]
+        if not result.calibration.empty:
+            deciles = result.calibration["ratio"].dropna()
+            rows.append(
+                {
+                    "criterion": "actual / expected, every decile",
+                    "threshold": band,
+                    "value": f"{deciles.min():.3f} to {deciles.max():.3f}",
+                    "passed": bool(deciles.between(self.ae_low, self.ae_high).all()),
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def passed(self, result: BacktestResult) -> bool:
+        return bool(self.assess(result)["passed"].all())
+
+
+#: The criteria every backtest in this project is judged against.
+ACCEPTANCE = Acceptance()
+
+
 def predicted_hazard(
     fitted: FitResult, cells: pd.DataFrame, covariates: Sequence[str]
 ) -> pd.Series:
@@ -95,6 +154,21 @@ def predicted_hazard(
     """
     hazard = episode_hazards(fitted, cells.loc[:, list(covariates)], cells[AGE].to_numpy(dtype=int))
     return pd.Series(hazard, index=cells.index, name="predicted")
+
+
+def by_year(fitted: FitResult, cells: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFrame:
+    """Predicted against realised by calendar year of observation.
+
+    Published beside the out-of-time result because a single actual-over-expected cannot
+    be read on its own. Computed in-sample it is the dispersion the model shows on data it
+    has already seen -- the validation found it running from 0.27 in 1999 to 2.78 in 2020
+    -- and an out-of-time figure is only informative against that range.
+    """
+    hazard = predicted_hazard(fitted, cells, covariates)
+    exposure = cells[WEIGHT].astype(float)
+    events = exposure * cells[EVENT].astype(bool)
+    years = pd.Series(pd.PeriodIndex(cells[PERIOD]).year, index=cells.index, name="year")
+    return actual_versus_expected(hazard, events, exposure, years)
 
 
 def score(
@@ -110,6 +184,9 @@ def score(
     Expected defaults are the sum of ``hazard times loan-months`` over the test cells;
     actual defaults are the loan-months the data records as ending in default. The
     ratio is the number a credit committee reads: above one the model under-predicted.
+
+    Given ``train``, the same comparison is also made **in-sample, year by year**, so the
+    out-of-time number arrives with the model's own dispersion beside it.
     """
     if test.empty:
         message = f"No exposure after {as_of} to score."
@@ -132,6 +209,7 @@ def score(
         else stability_report(
             train, test, covariates, time_varying=TIME_VARYING_CONTINUOUS, weights_col=WEIGHT
         ),
+        in_sample_by_year=pd.DataFrame() if train is None else by_year(fitted, train, covariates),
     )
 
 

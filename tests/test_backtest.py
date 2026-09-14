@@ -301,3 +301,70 @@ def test_score_refuses_an_empty_test_half(panel: pd.DataFrame) -> None:
 
     with pytest.raises(ValueError, match="No exposure after"):
         score(fitted, split.test.iloc[:0], COVARIATES, as_of=AS_OF)
+
+
+# --------------------------------------------------------------------------------------
+# Acceptance, and the in-sample dispersion an out-of-time number is read against
+# --------------------------------------------------------------------------------------
+
+
+def test_a_backtest_inside_every_threshold_passes() -> None:
+    from creditsurv.backtest.runner import ACCEPTANCE, BacktestResult
+
+    result = BacktestResult(
+        as_of=AS_OF,
+        loan_months=1_000_000,
+        expected_defaults=100.0,
+        actual_defaults=102.0,
+        gini=0.55,
+        calibration=pd.DataFrame({"ratio": [0.90, 1.00, 1.10, 1.20]}),
+    )
+
+    assert ACCEPTANCE.passed(result)
+    assert ACCEPTANCE.assess(result)["passed"].all()
+
+
+@pytest.mark.parametrize(
+    ("overall", "gini", "deciles", "failing"),
+    [
+        (0.75, 0.55, [0.90, 1.00], "actual / expected, overall"),
+        (1.00, 0.40, [0.90, 1.00], "Gini, exposure-weighted"),
+        # The first out-of-time result this model produced fails here and only here: its
+        # overall 0.84 sits inside the band, its lowest decile at 0.54 does not. A single
+        # overall figure would have passed a model whose calibration fails by decile.
+        (1.00, 0.55, [0.54, 1.00], "actual / expected, every decile"),
+    ],
+)
+def test_each_criterion_fails_on_its_own(
+    overall: float, gini: float, deciles: list[float], failing: str
+) -> None:
+    """A criterion that cannot fail is not a criterion, so each is shown failing while
+    the other two hold."""
+    from creditsurv.backtest.runner import ACCEPTANCE, BacktestResult
+
+    result = BacktestResult(
+        as_of=AS_OF,
+        loan_months=1_000_000,
+        expected_defaults=100.0,
+        actual_defaults=100.0 * overall,
+        gini=gini,
+        calibration=pd.DataFrame({"ratio": deciles}),
+    )
+    table = ACCEPTANCE.assess(result).set_index("criterion")
+
+    assert not ACCEPTANCE.passed(result)
+    assert not bool(table.loc[table.index == failing, "passed"].iloc[0])
+    assert int(table["passed"].sum()) == len(table) - 1
+
+
+def test_the_in_sample_years_arrive_beside_the_out_of_time_result(panel: pd.DataFrame) -> None:
+    """An out-of-time actual-over-expected means nothing without the dispersion the model
+    shows on data it has already seen, so the backtest carries both."""
+    split, _, result = run_backtest(_encoded(panel), AS_OF, COVARIATES, FORMULA)
+
+    table = result.in_sample_by_year
+    training_years = set(pd.PeriodIndex(split.train["period"]).year)
+
+    assert set(table["group"]) == training_years
+    assert table["exposure"].sum() == pytest.approx(float(split.train["n"].sum()))
+    assert (table["group"] <= AS_OF.year).all(), "in-sample must stop at the reporting date"

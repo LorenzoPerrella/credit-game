@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from creditsurv.backtest.runner import ACCEPTANCE
 from creditsurv.reporting import charts
 from creditsurv.reporting.builder import Report, provenance
 
@@ -70,6 +71,37 @@ projecting a book forward and closer to the question being asked.
             "Gini (exposure-weighted)": f"{result.gini:.4f}",
         }
     )
+
+    verdict = "**passes**" if ACCEPTANCE.passed(result) else "**does not pass**"
+    spread = ""
+    if not result.in_sample_by_year.empty:
+        in_sample = result.in_sample_by_year["actual_over_expected"].dropna()
+        spread = (
+            f" On this run the in-sample years range from {in_sample.min():.2f} to "
+            f"{in_sample.max():.2f}, and the out-of-time figure has to be read against that "
+            "range rather than against one."
+        )
+    report.heading("Acceptance").text(
+        f"""
+The criteria below were **declared before the backtest ran**, and they are what makes this
+section a test rather than a description: a backtest with no criterion can be read, but
+not passed or failed. They are the independent validation's proposal, adopted as they
+stand rather than tuned to a result.{spread}
+
+On them, the model {verdict}.
+"""
+    ).table(ACCEPTANCE.assess(result))
+
+    if not result.in_sample_by_year.empty:
+        report.heading("In-sample, by year").text(
+            """
+Predicted against realised on the data the model was fitted to, one row per calendar
+year. It belongs beside the out-of-time result. A model whose in-sample years swing widely
+cannot be called calibrated because one out-of-time figure lands near one; and a year far
+from one here locates a failure in the time dimension of the model, which the
+cross-section by decile cannot show.
+"""
+        ).table(result.in_sample_by_year, decimals=4)
 
     if not result.over_time.empty:
         figure = charts.backtest_over_time(result.over_time, figures / "backtest_over_time.png")
