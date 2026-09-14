@@ -18,9 +18,14 @@ over 2.54 billion loan-months under the `exclude` policy.
   errors and log-likelihood. Re-run it before trusting a new lifelines.
 - **Measure memory as phys_footprint** ("peak memory footprint" in `/usr/bin/time -l`),
   never `maxrss`: it misses compressed pages and understated the fit about 2.5x.
+- **The training half is 59.7 million rows**, and a cold fit on it took 91 minutes under
+  `exclude` and 79 under `censor`. `creditsurv moratorium`, two fits and two backtests,
+  took 4.8 hours.
 - **Never hold the panel beside its halves.** Build them from the cells with
-  `split_cells`, keep text keys categorical, and let `episode_hazards` narrow each block
-  instead of copying the covariates out. Each of those was gigabytes.
+  `split_cells`, which lets the table go before expanding either half, keep text keys
+  categorical, and let `episode_hazards` narrow each block instead of copying the
+  covariates out. Each of those was gigabytes: holding the table took the comparison of
+  moratorium policies to a 17.3 GB footprint on this 16 GB machine.
 - Aggregation peaks at ~11.3 GB, concatenating and writing the table. One heavy job at a
   time.
 - A successful fit is saved to `data/processed/fits/<hash>.pickle` the moment it
