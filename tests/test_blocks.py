@@ -8,7 +8,7 @@ These tests are that evidence, and the first thing to re-run against a new lifel
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pandas as pd
@@ -27,6 +27,7 @@ from creditsurv.models.aft import FITTERS
 from creditsurv.models.blocks import (
     POLISH_TOLERANCE_SE,
     StoredColumn,
+    _polish,
     fit_interval_censoring_in_blocks,
 )
 from fixtures import DEFAULT_PARAMS, build_panel
@@ -276,3 +277,45 @@ def test_the_polish_reaches_the_optimum_the_optimiser_stops_short_of(
     assert record.residual_error_se < POLISH_TOLERANCE_SE
     assert record.residual_error_se <= record.stopping_error_se
     assert fitter.log_likelihood_ >= stock.log_likelihood_ - 1e-9 * abs(stock.log_likelihood_)
+
+
+class _Cliff:
+    """One parameter, whose Newton step from far out lands past a cliff.
+
+    ``log cosh(x - 1)`` has its minimum at 1 and almost no curvature far from it, so the
+    Newton step from -3 is some 750 long. Past 10 the objective is negative, as lifelines'
+    clipped likelihood becomes once the parameters leave the region it is computed exactly
+    in: impossible for a mean negative log-likelihood, and lower than the true minimum.
+    """
+
+    total_weight = 1e6
+
+    def __call__(self, x: np.ndarray) -> tuple[float, np.ndarray]:
+        if x[0] > 10:
+            return -4604.0, np.zeros(1)
+        return float(np.log(np.cosh(x[0] - 1.0)) + 0.01), np.array([np.tanh(x[0] - 1.0)])
+
+    def hessian(self, x: np.ndarray) -> np.ndarray:
+        if x[0] > 10:
+            return np.zeros((1, 1))
+        return np.array([[1.0 / np.cosh(x[0] - 1.0) ** 2]])
+
+
+def test_the_polish_never_steps_into_values_no_likelihood_can_take() -> None:
+    """On the training half a warm start's full Newton step went 8.31e5 standard errors, to
+    an objective of -4604 -- lifelines' clipping, not a better fit. It lowered the objective,
+    so it was taken; the fit fell back on SLSQP for 76 minutes, and with the gradient and the
+    curvature both flat past the cliff it could as well have stopped there. Steps that refuse
+    impossible values, damped until they lower the objective, reach the optimum instead."""
+    objective = _Cliff()
+    start = np.array([-3.0])
+    value, gradient = objective(start)
+
+    point, reached, _, _, began, left = _polish(
+        cast("Any", objective), start, value, gradient, objective.hessian(start)
+    )
+
+    assert began > 1e3
+    assert reached >= 0
+    assert abs(float(point[0]) - 1.0) < 1e-6
+    assert left < POLISH_TOLERANCE_SE

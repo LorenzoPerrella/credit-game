@@ -338,6 +338,12 @@ def fit_interval_censoring_in_blocks(
         method = "newton"
 
     x, value, curvature, steps, stopped, remaining = solution
+    if not _possible(value):
+        message = (
+            f"The fit ended at an objective of {value:.6g}, which no likelihood can take: the "
+            "optimiser left the region where lifelines computes the likelihood exactly."
+        )
+        raise exceptions.ConvergenceError(message)
     log.info(
         "%s: Newton steps began %.3g standard errors from the optimum; %d left %.3g",
         method,
@@ -707,9 +713,15 @@ class _Objective:
 #: The polish stops once no Newton step larger than this, in standard errors, remains.
 POLISH_TOLERANCE_SE: Final = 1e-3
 
-#: Newton steps a polish may take before it stops and says so. Each costs a gradient and a
-#: Hessian over every block; from where SLSQP stops, two or three are enough.
-_POLISH_STEPS: Final = 8
+#: The most Newton steps a polish takes. From where SLSQP stops two or three do; from a warm
+#: start that adds a covariate the curvature at the start is a poor guide, and the steps stay
+#: damped until it catches up.
+_POLISH_STEPS: Final = 40
+
+#: Damping starts here when a step is refused and rises tenfold each time; past the ceiling
+#: no step is left that lowers the objective.
+_DAMPING_FLOOR: Final = 1e-6
+_DAMPING_CEILING: Final = 1e12
 
 
 def _newton_step(
@@ -744,33 +756,70 @@ def _polish(
     on sixteen: the distance depends on where the optimiser happens to stop, and no sample
     size makes it negligible. The gradient and the Hessian are lifelines' own, added up over
     the blocks, so the point reached is the maximum of the same likelihood, reached more
-    exactly. A step that does not lower the objective is halved until it does.
+    exactly.
+
+    Each step solves ``(H + mu D) d = g``, with ``D`` the diagonal of the Hessian: plain
+    Newton at ``mu = 0``, a short step along the scaled gradient as ``mu`` grows. A step is
+    taken only if it lowers the objective *to a value a likelihood can have*. The objective
+    is a mean negative log-likelihood and cannot be negative, but lifelines clips the
+    interval probability at 1e-25 and adds the truncation term unclipped, so far enough
+    from the data it goes negative -- lower than any real fit, and flat. From a warm start
+    on the training half the full step went 8.31e5 standard errors, to -4604, and was taken
+    because it was lower; a flat enough cliff would have been reported as the optimum. A
+    refused step raises ``mu`` tenfold and a taken one lowers it tenfold, back to plain
+    Newton near the optimum.
 
     Returns the point, its objective and Hessian, the steps taken, and the distance from
     the optimum before and after, in standard errors.
     """
-    step, stopped = _newton_step(curvature, gradient, objective.total_weight)
-    remaining, steps = stopped, 0
+    _, stopped = _newton_step(curvature, gradient, objective.total_weight)
+    remaining, steps, damping = stopped, 0, 0.0
     slack = 4 * np.finfo(float).eps
     while remaining > POLISH_TOLERANCE_SE and steps < _POLISH_STEPS:
-        scale = 1.0
+        diagonal = np.diag(curvature)
+        floor = 1e-12 * max(float(diagonal.max()), float(np.finfo(float).tiny))
+        scale = np.diag(np.maximum(diagonal, floor))
+        candidate, candidate_value, candidate_gradient = x, value, gradient
         while True:
-            candidate = x - scale * step
-            candidate_value, candidate_gradient = objective(candidate)
-            if candidate_value <= value + slack * abs(value):
-                break
-            scale /= 2.0
-            if scale < 1e-6:
+            stepped = _damped_step(x, gradient, curvature + damping * scale)
+            if stepped is not None:
+                candidate = stepped
+                candidate_value, candidate_gradient = objective(candidate)
+                lower = candidate_value <= value + slack * abs(value)
+                if _possible(candidate_value) and lower:
+                    break
+            damping = max(10.0 * damping, _DAMPING_FLOOR)
+            if damping > _DAMPING_CEILING:
                 log.warning("no Newton step lowers the objective; polish stopped")
                 return x, value, curvature, steps, stopped, remaining
         x, value, gradient = candidate, candidate_value, candidate_gradient
         curvature = _symmetric(objective.hessian(x))
-        step, remaining = _newton_step(curvature, gradient, objective.total_weight)
+        _, remaining = _newton_step(curvature, gradient, objective.total_weight)
         steps += 1
-        log.info("Newton step %d: %.3g standard errors from the optimum", steps, remaining)
+        log.info(
+            "Newton step %d, damping %.0e: %.3g standard errors from the optimum",
+            steps,
+            damping,
+            remaining,
+        )
+        damping = damping / 10.0 if damping >= 10.0 * _DAMPING_FLOOR else 0.0
     if remaining > POLISH_TOLERANCE_SE:
         log.warning("polish stopped after %d steps, %.3g standard errors out", steps, remaining)
     return x, value, curvature, steps, stopped, remaining
+
+
+def _possible(value: float) -> bool:
+    """Whether a mean negative log-likelihood could take this value: finite and not negative."""
+    return bool(np.isfinite(value)) and value >= 0.0
+
+
+def _damped_step(x: np.ndarray, gradient: np.ndarray, damped: np.ndarray) -> np.ndarray | None:
+    """``x`` less the damped Newton step, or ``None`` where that matrix is not positive definite."""
+    try:
+        np.linalg.cholesky(damped)
+    except np.linalg.LinAlgError:
+        return None
+    return np.asarray(x - np.linalg.solve(damped, gradient), dtype=float)
 
 
 def _from_slsqp(
@@ -794,20 +843,24 @@ def _from_slsqp(
 def _newton_from(
     objective: _Objective, start: np.ndarray
 ) -> tuple[np.ndarray, float, np.ndarray, int, float, float] | None:
-    """Newton steps from a warm start, or ``None`` if they cannot be trusted to converge.
+    """Damped Newton steps from a warm start, or ``None`` if they do not reach the optimum.
 
-    Trusted only where the likelihood is locally concave -- the Hessian of the negative
-    log-likelihood positive definite -- and only if they reach the tolerance within the
-    step limit. Otherwise the caller falls back on SLSQP, from the same start.
+    The start need not be in a concave region -- a damped step is only taken where the
+    damped Hessian is positive definite -- but the end must be: a point where the gradient
+    vanishes and the curvature does not bend upwards is not a maximum of the likelihood.
+    Otherwise the caller falls back on SLSQP, from the same start.
     """
     value, gradient = objective(start)
-    curvature = _symmetric(objective.hessian(start))
-    if not bool(np.all(np.linalg.eigvalsh(curvature) > 0)):
-        log.info("warm start is not in a concave region; falling back on SLSQP")
+    if not _possible(value):
+        log.info("the warm start's objective is not one a likelihood can take; using SLSQP")
         return None
+    curvature = _symmetric(objective.hessian(start))
     solution = _polish(objective, start, value, gradient, curvature)
     if solution[5] > POLISH_TOLERANCE_SE:
         log.info("Newton steps did not converge from the warm start; falling back on SLSQP")
+        return None
+    if not bool(np.all(np.linalg.eigvalsh(solution[2]) > 0)):
+        log.info("Newton steps ended where the likelihood is not concave; falling back on SLSQP")
         return None
     return solution
 

@@ -55,6 +55,15 @@ lifelines' own gradient and Hessian until less than 1e-3 standard errors remain.
 evaluations as from a cold start, 27 against 27. The engine runs Newton directly instead:
 0.7 minutes against 4.2 on four quarters, to the same optimum.
 
+**And Newton needs damping.** lifelines clips the interval probability at 1e-25 and adds the
+truncation term unclipped, so far from the data the objective -- a mean negative
+log-likelihood, which cannot be negative -- goes negative and flat. Adding `cltv_drift` to
+the loan block, a warm start's full Newton step went 8.31e5 standard errors, to -4604, and
+was taken because it was lower; the fit fell back on SLSQP for 76 minutes, and a flatter
+cliff would have been reported as the optimum. The polish now takes a step only to a value a
+likelihood can have, damped (Levenberg-Marquardt) until it lowers the objective, and a fit
+that ends anywhere else raises.
+
 ## Rules that are silent when broken
 
 **A moratorium is not a default.** CARES Act and disaster forbearance had to be reported

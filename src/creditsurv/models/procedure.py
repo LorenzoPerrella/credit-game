@@ -139,7 +139,9 @@ class Fits:
         )
         fingerprint = fit_fingerprint(**described)
         cached = load_fit(fingerprint)
-        if isinstance(cached, FitResult):
+        # A log-likelihood of zero or more is no likelihood at all: a fit saved before the
+        # polish refused such values may have stopped at one.
+        if isinstance(cached, FitResult) and cached.log_likelihood < 0:
             log.info("cached: %s on the %s", spec.formula, sample)
             self.record.append({**described, "minutes": 0.0, "evaluations": None, "cached": True})
             return cached
@@ -194,7 +196,7 @@ def selected_fit(*, identity: str, as_of: str, moratorium: str, formula: str) ->
             )
         )
     )
-    return cached if isinstance(cached, FitResult) else None
+    return cached if isinstance(cached, FitResult) and cached.log_likelihood < 0 else None
 
 
 @dataclass
