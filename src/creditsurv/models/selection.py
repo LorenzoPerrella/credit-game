@@ -434,6 +434,16 @@ def weighted_covariance(
     return pd.DataFrame(covariance, index=names, columns=names)
 
 
+def inflation_from_covariance(covariance: pd.DataFrame) -> pd.DataFrame:
+    """The VIF of every covariate in a covariance or correlation matrix, largest first.
+
+    For a matrix computed once and saved -- ``creditsurv select`` writes the correlation of
+    every candidate -- so the factors can be read back without the rows. They do not depend
+    on the scale of the covariates, so a correlation matrix gives what a covariance would.
+    """
+    return _inflation(covariance, [str(name) for name in covariance.columns])
+
+
 def _inflation(covariance: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
     """The VIF of each of ``columns``, from their covariance, largest first.
 

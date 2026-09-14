@@ -333,3 +333,27 @@ def test_every_candidate_has_an_economic_dimension_fixed_in_advance() -> None:
     candidates = {*MACRO_CANDIDATES, *STATIC_CONTINUOUS, *ORDINAL}
     assert candidates <= set(ECONOMIC_DIMENSION), sorted(candidates - set(ECONOMIC_DIMENSION))
     assert set(MACRO_ELIMINATION_PRIORITY) == set(MACRO_CANDIDATES)
+
+
+def test_factors_read_back_from_a_saved_correlation_are_the_ones_the_rows_give() -> None:
+    """The notebook shows the variance inflation from the correlation the selection saved,
+    so the two routes have to agree."""
+    from creditsurv.explore import weighted_correlation
+    from creditsurv.models.selection import inflation_from_covariance
+
+    rng = np.random.default_rng(8)
+    base = rng.normal(size=4000)
+    frame = pd.DataFrame(
+        {
+            "a": base,
+            "b": base + 0.1 * rng.normal(size=4000),
+            "c": rng.normal(size=4000),
+            "n": rng.integers(1, 5, 4000).astype(float),
+        }
+    )
+
+    rows = variance_inflation(frame, ["a", "b", "c"], weight="n").set_index("covariate")["vif"]
+    saved = weighted_correlation(frame, ["a", "b", "c"], weight="n")
+    table = inflation_from_covariance(saved).set_index("covariate")["vif"]
+
+    np.testing.assert_allclose(table.loc[rows.index], rows, rtol=1e-8)
