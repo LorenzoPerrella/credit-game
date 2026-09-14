@@ -499,8 +499,12 @@ def cells_to_episodes(
     episodes[UPPER_BOUND] = np.where(defaulted, stop.astype(float), np.inf)
     episodes[EXACT_OBSERVATION] = False
 
-    required = [name for name in MACRO_DERIVED if name in episodes.columns]
-    complete = episodes[required].notna().all(axis=1).to_numpy()
+    # Column by column. A frame of the required columns and its frame of flags were a copy
+    # of every macro column: 90 bytes a row with the fifteen candidates, 207 at the peak of
+    # an expansion that holds 97.
+    complete = np.ones(len(episodes), dtype=bool)
+    for name in (name for name in MACRO_DERIVED if name in episodes.columns):
+        complete &= episodes[name].notna().to_numpy()
     if complete.all():
         return episodes
     kept = episodes.loc[complete].copy(deep=False)
