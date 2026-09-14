@@ -544,3 +544,20 @@ def observation_months(cells: pd.DataFrame) -> pd.Series:
     it is expanded.
     """
     return origination_months(cells) + cells[AGE].astype(int)
+
+
+def defaults_by_observation_month(cells: pd.DataFrame) -> pd.Series:
+    """Defaults by calendar month, read back from the cells as origination month plus age.
+
+    What the validation's M1 test compares with the defaults counted on the loan-months
+    (:func:`creditsurv.data.aggregate.defaults_by_month`). With the origination quarter in
+    the key the two peaked two months out of step; with the month in the key they must be
+    the same series. Every month from the first to the last is present, zero or not.
+    """
+    months = observation_months(cells).to_numpy()
+    defaulted = cells[EVENT].to_numpy(dtype=bool)
+    events = np.where(defaulted, cells[WEIGHT].to_numpy(dtype=float), 0.0)
+    first = int(months.min())
+    counts = np.bincount(months - first, weights=events)
+    index = pd.RangeIndex(first, first + len(counts), name="month")
+    return pd.Series(counts, index=index, name="defaults").round().astype("int64")

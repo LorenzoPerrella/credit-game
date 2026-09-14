@@ -832,3 +832,44 @@ def incomplete_cases(
     table["dropped_share"] = table["dropped"] / table["loans"]
     table["relative_risk"] = table["default_rate_dropped"] / table["default_rate_kept"]
     return table
+
+
+def defaults_by_month(
+    perf_source: PathSpec = None,
+    orig_source: PathSpec = None,
+    *,
+    spec: CellSpec = DEFAULT_SPEC,
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> pd.Series:
+    """Defaults by calendar month, counted on the loan-months the cells are built from.
+
+    The reference for the validation's M1 test. A cell carries its origination month and
+    its age, and the month its defaults happened in is their sum; this counts the same
+    defaults without the cells, under the same rules -- the complete-case filter, the
+    categorical keys, the moratorium policy -- so the two series have to agree to the unit.
+    """
+    perf = _resolve(perf_source, "perf")
+    orig = _resolve(orig_source, "orig")
+    if not perf or not orig:
+        message = "No ingested quarters found. Run `creditsurv ingest` first."
+        raise FileNotFoundError(message)
+    spec.validate()
+
+    con = connection or _connect()
+    frames = []
+    for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
+        query = f"""
+        WITH book AS ({_state_of_the_book_sql(policy)}), classed AS (
+            SELECT {_select_columns(spec)}, period_key FROM book
+        )
+        SELECT
+            (period_key // 100) * 12 + (period_key % 100) - 1 AS month,
+            SUM(CAST(event AS INTEGER)) AS defaults
+        FROM classed
+        {_not_null_filter(spec)}
+        GROUP BY 1
+        """
+        frames.append(con.execute(query, [perf_path, orig_path]).df())
+    counts = pd.concat(frames, ignore_index=True).groupby("month")["defaults"].sum()
+    return counts.astype("int64").rename("defaults")

@@ -692,6 +692,40 @@ def moratorium(
     typer.echo(f"\nWritten: {written}")
 
 
+@app.command("check-calendar")
+def check_calendar(moratorium: MoratoriumOption = "exclude") -> None:
+    """The validation's M1 test: defaults by month from the cells, against the loan-months.
+
+    With the origination quarter in the key the reconstructed series peaked two months out
+    of step with the true one. With the month in the key the two must be the same series,
+    and their correlation must peak at a lag of zero. Written to
+    ``docs/reports/calendar_check.csv``. A pass over every performance file.
+    """
+    import logging
+
+    from creditsurv.data.aggregate import MoratoriumPolicy, defaults_by_month
+    from creditsurv.data.panel import defaults_by_observation_month
+    from creditsurv.data.store import load_cells
+    from creditsurv.explore import lagged_correlation
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    truth = defaults_by_month(policy=MoratoriumPolicy(moratorium))
+    rebuilt = defaults_by_observation_month(load_cells(moratorium))
+
+    correlation = lagged_correlation(truth, rebuilt)
+    months = truth.index.union(rebuilt.index)
+    moved = (truth.reindex(months, fill_value=0) - rebuilt.reindex(months, fill_value=0)).abs()
+    destination = reports_dir() / "calendar_check.csv"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    correlation.rename_axis("lag").to_frame().to_csv(destination)
+    typer.echo(correlation.round(6).to_string())
+    typer.echo(
+        f"Peak at lag {correlation.idxmax()}; {int(moved.sum()):,} of {int(truth.sum()):,} "
+        "defaults filed in a different month."
+    )
+    typer.echo(f"Written: {destination}")
+
+
 def _fit_once(
     train: pd.DataFrame,
     covariates: list[str],

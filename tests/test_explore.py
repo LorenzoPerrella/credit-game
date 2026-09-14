@@ -242,3 +242,15 @@ def test_a_real_crossing_is_still_caught() -> None:
     )
 
     assert curves_cross(curves)
+
+
+def test_a_series_filed_two_months_early_lines_up_two_months_on() -> None:
+    """The validation's M1 test, on a series whose answer is known."""
+    from creditsurv.explore import lagged_correlation
+
+    rng = np.random.default_rng(2)
+    truth = pd.Series(rng.poisson(100, 120).astype(float), index=pd.RangeIndex(24_000, 24_120))
+    early = pd.Series(truth.to_numpy()[2:], index=truth.index[:-2])
+
+    assert lagged_correlation(truth, early).idxmax() == 2
+    assert lagged_correlation(truth, truth).idxmax() == 0

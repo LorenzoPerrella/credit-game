@@ -645,3 +645,31 @@ def test_the_loans_left_out_are_counted_by_what_they_lack_and_how_they_default(
     assert row["no_purpose"] == 1
     assert row["default_rate_kept"] == pytest.approx(0.0)
     assert row["default_rate_dropped"] == pytest.approx(0.5)
+
+
+def test_the_cells_give_back_the_monthly_default_series_exactly(tmp_path: Path) -> None:
+    """M1. Origination month plus age is the month a default happened in, so the series
+    read back from the cells must equal the one counted on the loan-months. With the
+    origination quarter in the key, the two peaked two months out of step."""
+    from creditsurv.data.aggregate import defaults_by_month
+    from creditsurv.data.panel import defaults_by_observation_month
+
+    origination = [origination_row(f"F{i:09d}") for i in range(6)]
+    performance = []
+    for i in range(6):
+        for age, period in enumerate(("201503", "201504", "201505", "201506")):
+            defaulted = (i, age) in {(1, 2), (4, 3)}
+            performance.append(
+                performance_row(
+                    f"F{i:09d}", period, str(age), delinquency="3" if defaulted else "0"
+                )
+            )
+            if defaulted:
+                break
+    _ingested(tmp_path, origination, performance)
+
+    truth = defaults_by_month(*_sources(tmp_path))
+    rebuilt = defaults_by_observation_month(build_cells(*_sources(tmp_path)))
+
+    assert int(truth.sum()) == 2
+    assert truth[truth > 0].to_dict() == rebuilt[rebuilt > 0].to_dict()

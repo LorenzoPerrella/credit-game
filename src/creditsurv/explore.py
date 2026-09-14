@@ -293,3 +293,22 @@ def curves_cross(
             if len(meaningful) and not ((meaningful > 0).all() or (meaningful < 0).all()):
                 return True
     return False
+
+
+def lagged_correlation(
+    first: pd.Series, second: pd.Series, *, lags: Sequence[int] = range(-6, 7)
+) -> pd.Series:
+    """The correlation of two monthly series, with the second shifted by each lag.
+
+    The validation's test for M1: a reconstruction that files events some months early
+    lines up best at that lag, not at zero. Both series are laid on every month from the
+    first to the last, a month either lacks counting as zero, so a shift is a shift in
+    months and not in positions.
+    """
+    months = pd.RangeIndex(
+        int(min(first.index.min(), second.index.min())),
+        int(max(first.index.max(), second.index.max())) + 1,
+    )
+    left = first.reindex(months, fill_value=0).astype(float)
+    right = second.reindex(months, fill_value=0).astype(float)
+    return pd.Series({lag: float(left.corr(right.shift(lag))) for lag in lags}, name="correlation")
