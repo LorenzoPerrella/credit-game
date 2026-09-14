@@ -82,7 +82,8 @@ measurements behind that.
 | [Calibration](docs/reports/calibration.md) | Generated: what each regressor is worth, in PD |
 | [Backtesting](docs/reports/backtesting.md) | Generated: predicted against realised, after 2024 |
 
-Notebooks: [`01_portfolio.ipynb`](notebooks/01_portfolio.ipynb) carries the evidence;
+Notebooks: [`01_portfolio.ipynb`](notebooks/01_portfolio.ipynb) and
+[`02_lifetime_pd.ipynb`](notebooks/02_lifetime_pd.ipynb) carry the evidence;
 the statistics themselves live in the package, tested, so a notebook reads like a
 report rather than an implementation.
 
@@ -96,9 +97,19 @@ uv run creditsurv fetch-macro    # real FRED data, no API key
 uv run creditsurv ingest         # 40 GB of archives to parquet, ~30 min, idempotent
 uv run creditsurv portfolio      # describe the book before modelling it
 uv run creditsurv profile        # screen the covariates before aggregating
-uv run creditsurv aggregate      # collapse to weighted cells
-uv run creditsurv report         # one fit; writes all three reports
+uv run creditsurv aggregate --moratorium exclude  # collapse to weighted cells, ~40 min
+uv run creditsurv select         # the variable selection on the training half; resumes
+uv run creditsurv report --extra-fits  # one fit; writes all three reports
 uv run creditsurv prune-archives # reclaim the 40 GB, after verifying the parquet
+```
+
+The checks the independent validation asked for, each a command of its own:
+
+```bash
+uv run creditsurv aggregate --moratorium censor   # the other event definition (D1)
+uv run creditsurv moratorium                      # both fitted and backtested, side by side
+uv run creditsurv aggregate --report-incomplete   # the loans the cells leave out (D4)
+uv run creditsurv check-calendar                  # defaults by month, cells against files (M1)
 ```
 
 `prune-archives` is the only irreversible step and is deliberately a separate command,
