@@ -4,7 +4,7 @@ Lifetime PD (probability of default) modelling with **parametric multivariate
 survival models**, **time-varying covariates** and **interval censoring**, built on
 [lifelines](https://lifelines.readthedocs.io).
 
-Fitted on the **Freddie Mac Single-Family Loan-Level Dataset**: 48.8 million loans,
+Fitted on the **Freddie Mac Single-Family Loan-Level Dataset**: 49.2 million loans,
 2.88 billion loan-months, 1999 to 2026. Macroeconomic covariates from FRED. No
 sampling — the whole population.
 
@@ -46,15 +46,21 @@ model gives none of the three.
 | | |
 |---|---|
 | Archives | 40 GB, 28 vintage years |
-| Loan-months | **2,876,284,955** |
+| Loan-months | **2,881,397,251** |
 | After ingest | 17 GB of parquet |
-| After aggregation | **15.8 M weighted cells** |
-| Compression | **159×** |
+| After aggregation | **63.6 M weighted cells** |
+| Compression | **40×** |
 
 Episodes that agree on every covariate and on their position in time are
 exchangeable, so they collapse into one row carrying a count, and the likelihood
 treats that count as a frequency weight. At this scale that is not an optimisation
 but the only thing that makes the problem tractable.
+
+The table is four times what it was before the independent validation, because the key
+now carries the exact origination month rather than the quarter, and two more loan
+characteristics. A stock lifelines fit on it would need 45-50 GB, so fits run block by
+block (`creditsurv.models.blocks`) on lifelines' own likelihood, and are polished to the
+optimum that lifelines' optimiser stops up to 5.9 standard errors short of.
 
 **Episodes are monthly**, set by how often the covariates move rather than by how much
 they compress: the time-varying covariates come from monthly series, so an episode

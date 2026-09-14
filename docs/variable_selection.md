@@ -189,7 +189,46 @@ One covariate is removed per step, the model refitted, and the test repeated. A
 backwards sign outranks any p-value: it says the specification is wrong, not that the
 evidence is thin.
 
-## Results of running it
+## Running it: `creditsurv select`
+
+The steps above were first carried out one at a time, and their outcome copied by hand
+into `config.TIME_VARYING_CONTINUOUS` and `config.ELIMINATED`. Every function they used
+was tested; nothing ran them in sequence, so the specification could be believed but not
+regenerated. The validation called that out (F1), and the sequence is now a command:
+`creditsurv select` runs steps 5 to 9 on the whole population and writes
+[`reports/selection.md`](reports/selection.md), with `selection.json` beside it.
+`tests/test_procedure.py` fails when the configuration and that record disagree.
+
+What changed on the way, each for a stated reason:
+
+- **The training half only.** The first run selected on everything, including the months
+  the backtest judges the model on. A specification chosen on them has already seen the
+  test.
+- **Stability across loans originated in even and odd years.** The first run compared
+  the whole population with its first 94%, a comparison that needs the test window. The
+  two halves each cover every calendar month, so a sign that moves between them moves
+  with the sample and not with the economy.
+- **The economic dimension of every candidate is fixed in `config.ECONOMIC_DIMENSION`**,
+  before any fit, because the stability rule below only removes a covariate beside a
+  larger one of the same dimension. Decided afterwards, the rule would drop whatever came
+  out inconvenient.
+- **`has_mi` and `first_time_buyer` are candidates.** They were kept out of the cell key
+  on a claim that loan characteristics cost sixteen times the table; measured, the two
+  together cost 1.19×. They go through the screen beside the loan block, whatever it
+  says (M3).
+- **`vix_gap` and `inflation_gap` sit beside `vix` and `inflation`.** A level at the
+  observation date is the same for every loan in a month, so its coefficient is a
+  calendar effect by construction; its move since origination is not (S5). In the
+  elimination priority a level gives way before its own gap form.
+- **Every fit is polished to the optimum.** lifelines' optimiser stops on a change in the
+  mean log-likelihood, and on four quarters of the book it stopped up to 5.9 standard
+  errors short. A sign read off a fit that far from its optimum is not the fit's sign.
+
+The results below are the **first run's**, on the quarter-keyed table before the
+validation. They are kept because the arguments in them -- the retraction included --
+are still the reasons the rules exist; the numbers are superseded by the report.
+
+## Results of the first run
 
 On the whole population: **15,858,492 cells covering 2,515,340,009 loan-months, with
 1,938,519 defaults.** No sampling at any step.
@@ -612,6 +651,19 @@ weakness rather than the weakness.
 
 Both are recorded as revisions. Neither is presented as a prior.
 
+Three further departures came with the validation, and none of them is `nmds`'s:
+
+| Decision | `nmds` | Here |
+|---|---|---|
+| Stability judged at all | No stability step | Signs across two halves of the book, by origination year |
+| Selection sample | The data it is given | The training half only, so the backtest stays out of sample |
+| Levels of market series | Coarse classes of the level | Level and gap since origination both offered; the gap is preferred |
+
+The first is the one worth defending. Without it the wrong signs of the first run would
+have been chased one at a time, each refit rotating the basis into the next set; with it
+they were explained. The second is not a departure from `nmds` so much as from how the
+first run used it.
+
 ## What this procedure does not do
 
 **No information value or weight of evidence.** `nmds` does not use them either.
@@ -635,3 +687,4 @@ is stated by hand.
 | Variance inflation | > 10 | `nmds` `stepwise_vif` |
 | Univariate significance | p > 0.05 | `nmds` `fit_single_aft` |
 | Backward elimination | p > 0.05 + sign | `nmds` `survival_backward` |
+| Stability | sign changes between halves, beside a larger covariate of the same dimension | this project (`nmds` has no stability step) |
