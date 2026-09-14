@@ -377,3 +377,18 @@ def test_loans_entering_late_are_measured_not_silently_absorbed() -> None:
     assert net_entries(contiguous.assign(n=1.0)).empty
     with pytest.warns(UserWarning, match="after age zero"):
         to_loan_level_weighted(panel)
+
+
+def test_blocks_of_a_selection_are_the_selected_rows() -> None:
+    """Half of the panel read in blocks is that half, and no copy of it is made first."""
+    from creditsurv.data.panel import model_blocks
+
+    panel = to_interval_censored(make_panel({1: (5, True), 2: (6, False), 3: (4, False)})).assign(
+        n=1.0
+    )
+    selected = panel["loan_id"].to_numpy() != 2
+
+    blocks = list(model_blocks(panel, ["covariate"], rows=3, weights_col="n", where=selected))
+
+    expected = model_frame(panel[selected], ["covariate"]).assign(n=1.0)
+    pd.testing.assert_frame_equal(pd.concat(blocks), expected)

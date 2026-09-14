@@ -157,18 +157,25 @@ def model_blocks(
     *,
     rows: int,
     weights_col: str | None = None,
+    where: np.ndarray | pd.Series | None = None,
 ) -> Iterator[pd.DataFrame]:
     """:func:`model_frame` a block of ``rows`` at a time, with the weight alongside.
 
     For :func:`creditsurv.models.blocks.fit_interval_censoring_in_blocks`. The whole
     narrowed frame is never built: on the production panel it would be a second copy of
-    the largest object the pipeline holds.
+    the largest object the pipeline holds. ``where`` reads only the rows it selects -- one
+    half of the panel for a stability check, say -- without copying that half either.
     """
     if rows <= 0:
         message = "rows must be positive."
         raise ValueError(message)
-    for start in range(0, len(panel), rows):
-        block = panel.iloc[start : start + rows]
+    positions = None if where is None else np.flatnonzero(np.asarray(where, dtype=bool))
+    count = len(panel) if positions is None else len(positions)
+    for start in range(0, count, rows):
+        if positions is None:
+            block = panel.iloc[start : start + rows]
+        else:
+            block = panel.iloc[positions[start : start + rows]]
         frame = model_frame(block, covariates)
         if weights_col is not None:
             frame[weights_col] = block[weights_col].to_numpy()

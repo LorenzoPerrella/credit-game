@@ -24,7 +24,11 @@ from creditsurv.data.panel import (
     to_interval_censored,
 )
 from creditsurv.models.aft import FITTERS
-from creditsurv.models.blocks import StoredColumn, fit_interval_censoring_in_blocks
+from creditsurv.models.blocks import (
+    POLISH_TOLERANCE_SE,
+    StoredColumn,
+    fit_interval_censoring_in_blocks,
+)
 from fixtures import DEFAULT_PARAMS, build_panel
 
 if TYPE_CHECKING:
@@ -81,8 +85,13 @@ def stock_fit(
 
 
 def block_fit(
-    fitter: ParametericAFTRegressionFitter, frame: pd.DataFrame, rows: int
+    fitter: ParametericAFTRegressionFitter,
+    frame: pd.DataFrame,
+    rows: int,
+    *,
+    polish: bool = False,
 ) -> ParametericAFTRegressionFitter:
+    """The block engine, by default stopping where lifelines stops, to be compared with it."""
     fit_interval_censoring_in_blocks(
         fitter,
         model_blocks(frame, COVARIATES, rows=rows, weights_col="n"),
@@ -92,6 +101,7 @@ def block_fit(
         event_col=EXACT_OBSERVATION,
         entry_col=AGE_START,
         weights_col="n",
+        polish=polish,
     )
     return fitter
 
@@ -203,3 +213,66 @@ def test_a_stored_column_expands_to_exactly_the_column_it_was(column: np.ndarray
 
     assert np.array_equal(stored.expand(), column)
     assert stored.expand().dtype == np.float64
+
+
+def test_a_warm_start_ends_where_a_cold_one_does_in_fewer_steps(weighted: pd.DataFrame) -> None:
+    """Backward elimination refits a model one covariate smaller at every step.
+
+    Starting from the larger model's coefficients must change how long the smaller fit
+    takes and nothing about where it ends. Polished, both end at the optimum; unpolished
+    they stopped up to 1.8e-4 apart, each wherever SLSQP's tolerance happened to run out.
+    """
+    rows = single_level_rows(weighted)
+    larger = block_fit(FITTERS["weibull"](), weighted, rows, polish=True)
+
+    def smaller(initial_point: pd.Series | None) -> tuple[pd.Series, pd.Series, int]:
+        fitter = FITTERS["weibull"]()
+        record = fit_interval_censoring_in_blocks(
+            fitter,
+            model_blocks(weighted, COVARIATES, rows=rows, weights_col="n"),
+            formula="fico_s + cltv_drift + unemp_gap",
+            lower_bound_col=LOWER_BOUND,
+            upper_bound_col=UPPER_BOUND,
+            event_col=EXACT_OBSERVATION,
+            entry_col=AGE_START,
+            weights_col="n",
+            initial_point=initial_point,
+            polish=True,
+        )
+        return fitter.params_, fitter.standard_errors_, record.evaluations
+
+    cold, errors, cold_steps = smaller(None)
+    warm, _, warm_steps = smaller(larger.params_)
+
+    assert float(((warm - cold).abs() / errors).max()) < 2 * POLISH_TOLERANCE_SE
+    # SLSQP from the same warm start took 27 evaluations, as many as from a cold one.
+    assert warm_steps < cold_steps, f"{warm_steps} evaluations warm against {cold_steps} cold"
+
+
+def test_the_polish_reaches_the_optimum_the_optimiser_stops_short_of(
+    weighted: pd.DataFrame,
+) -> None:
+    """SLSQP stops on a change of 1e-10 in the mean log-likelihood.
+
+    A tolerance that takes no account of how precisely the data pin a coefficient down: on
+    four quarters of the book it stopped up to 5.9 standard errors short of the optimum,
+    and 2.0 on sixteen. Newton steps on lifelines' own gradient and Hessian finish the job,
+    and the likelihood they reach is at least the one lifelines stops at.
+    """
+    stock = stock_fit(FITTERS["weibull"](), weighted)
+    fitter = FITTERS["weibull"]()
+    record = fit_interval_censoring_in_blocks(
+        fitter,
+        model_blocks(weighted, COVARIATES, rows=single_level_rows(weighted), weights_col="n"),
+        formula=FORMULA,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="n",
+        polish=True,
+    )
+
+    assert record.residual_error_se < POLISH_TOLERANCE_SE
+    assert record.residual_error_se <= record.stopping_error_se
+    assert fitter.log_likelihood_ >= stock.log_likelihood_ - 1e-9 * abs(stock.log_likelihood_)

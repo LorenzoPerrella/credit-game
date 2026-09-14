@@ -196,6 +196,15 @@ class BlockFit:
     stored_bytes: int
     evaluations: int
     seconds: float
+    #: ``slsqp`` for lifelines' optimiser, ``newton`` when Newton steps ran from a warm start.
+    method: str
+    #: How far from the optimum the Newton steps began -- where SLSQP stopped, or the warm
+    #: start -- as the largest step available, in standard errors of the coefficient it
+    #: would move. See :func:`_polish`.
+    stopping_error_se: float
+    #: Newton steps taken after SLSQP stopped, and what they left, in the same units.
+    polish_steps: int
+    residual_error_se: float
 
 
 def fit_interval_censoring_in_blocks(
@@ -209,9 +218,10 @@ def fit_interval_censoring_in_blocks(
     entry_col: str | None = None,
     weights_col: str | None = None,
     ancillary: str | bool | pd.DataFrame | None = None,
-    initial_point: np.ndarray | dict[str, np.ndarray] | None = None,
+    initial_point: np.ndarray | dict[str, np.ndarray] | pd.Series | None = None,
     fit_options: dict[str, Any] | None = None,
     show_progress: bool = False,
+    polish: bool = True,
 ) -> BlockFit:
     """``fitter.fit_interval_censoring``, reading the rows a block at a time.
 
@@ -222,6 +232,14 @@ def fit_interval_censoring_in_blocks(
 
     The fitter is left fitted, as lifelines leaves it. What is returned is the record of
     the fit: rows, loan-months, events, the memory the stored rows took and the time.
+
+    ``initial_point`` takes what lifelines takes, and also a ``params_`` series from
+    another fit -- coefficients on their natural scale, keyed by parameter and covariate
+    -- which seeds the columns the two models share. See :func:`_warm_start`.
+
+    ``polish`` carries the fit from where SLSQP stops to the optimum -- see :func:`_polish`.
+    Off, the result is the one lifelines itself returns, which is what the equivalence
+    tests compare.
     """
     if isinstance(ancillary, pd.DataFrame):
         message = "An ancillary DataFrame cannot be read block by block; pass a formula or True."
@@ -263,7 +281,9 @@ def fit_interval_censoring_in_blocks(
     seeded = _initial_point(fitter, columns, raw, bounds)
     fitter._initial_point_dicts = [seeded]
     start, unflatten = flatten(seeded)
-    if isinstance(initial_point, dict):
+    if isinstance(initial_point, pd.Series):
+        start = flatten(_warm_start(seeded, columns, norm_std, initial_point))[0]
+    elif isinstance(initial_point, dict):
         start = flatten(initial_point)[0]
     elif initial_point is not None:
         start = np.asarray(initial_point, dtype=float)
@@ -282,27 +302,50 @@ def fit_interval_censoring_in_blocks(
     )
     objective = _Objective(fitter, scan.blocks, columns, norm_std.to_numpy(), unflatten)
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        results = minimize(
-            objective,
-            start,
-            method=fitter._scipy_fit_method,
-            jac=True,
-            options={"disp": show_progress, **fitter._scipy_fit_options, **(fit_options or {})},
-            callback=fitter._scipy_fit_callback,
-        )
-    if show_progress:
-        # lifelines prints the optimiser's result under the same flag.
-        print(results)
-    if not (results.fun < np.inf and results.success):
-        message = (
-            f"Fitting did not converge after {objective.evaluations} evaluations of "
-            f"{scan.rows:,} rows in {len(scan.blocks)} blocks.\n\nminimum_results={results}"
-        )
-        raise exceptions.ConvergenceError(message)
+    # From a warm start Newton goes straight to the optimum. SLSQP would rebuild its
+    # curvature estimate from nothing and take as many evaluations as from a cold start:
+    # 27 against 27 on the test fixture.
+    solution = (
+        _newton_from(objective, start) if polish and isinstance(initial_point, pd.Series) else None
+    )
+    if solution is None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = minimize(
+                objective,
+                start,
+                method=fitter._scipy_fit_method,
+                jac=True,
+                options={
+                    "disp": show_progress,
+                    **fitter._scipy_fit_options,
+                    **(fit_options or {}),
+                },
+                callback=fitter._scipy_fit_callback,
+            )
+        if show_progress:
+            # lifelines prints the optimiser's result under the same flag.
+            print(results)
+        if not (results.fun < np.inf and results.success):
+            message = (
+                f"Fitting did not converge after {objective.evaluations} evaluations of "
+                f"{scan.rows:,} rows in {len(scan.blocks)} blocks.\n\nminimum_results={results}"
+            )
+            raise exceptions.ConvergenceError(message)
+        solution = _from_slsqp(objective, results, polish=polish)
+        method = "slsqp"
+    else:
+        method = "newton"
 
-    _finish(fitter, columns, results, objective, unflatten)
+    x, value, curvature, steps, stopped, remaining = solution
+    log.info(
+        "%s: Newton steps began %.3g standard errors from the optimum; %d left %.3g",
+        method,
+        stopped,
+        steps,
+        remaining,
+    )
+    _store(fitter, columns, x, value, curvature, objective, unflatten)
     return BlockFit(
         rows=scan.rows,
         blocks=len(scan.blocks),
@@ -311,6 +354,10 @@ def fit_interval_censoring_in_blocks(
         stored_bytes=sum(block.nbytes for block in scan.blocks),
         evaluations=objective.evaluations,
         seconds=time.perf_counter() - started,
+        method=method,
+        stopping_error_se=stopped,
+        polish_steps=steps,
+        residual_error_se=remaining,
     )
 
 
@@ -558,6 +605,31 @@ def _initial_point(
     return seeded
 
 
+def _warm_start(
+    seeded: dict[str, np.ndarray],
+    columns: pd.MultiIndex,
+    norm_std: pd.Series,
+    params: pd.Series,
+) -> dict[str, np.ndarray]:
+    """A starting point from coefficients on their natural scale, a nested model's say.
+
+    lifelines optimises each coefficient multiplied by its column's standard deviation,
+    so a fitted ``params_`` is scaled back into that space before it can seed another
+    fit. Columns the other model did not have keep lifelines' own seed.
+
+    Backward elimination refits a model one covariate smaller at every step. On the whole
+    population each fit is well over an hour, and the model it removes a covariate from is
+    the best available guess at where the smaller one ends.
+    """
+    started = {name: values.copy() for name, values in seeded.items()}
+    parameters = columns.get_level_values(0)
+    for name, values in started.items():
+        for position, key in enumerate(columns[parameters == name].tolist()):
+            if key in params.index:
+                values[position] = float(params[key]) * float(norm_std[key])
+    return started
+
+
 class _Objective:
     """The negative mean log-likelihood and its derivatives, added up block by block.
 
@@ -632,23 +704,132 @@ class _Objective:
         return total
 
 
-def _finish(
-    fitter: ParametericAFTRegressionFitter,
-    columns: pd.MultiIndex,
-    results: OptimizeResult,
+#: The polish stops once no Newton step larger than this, in standard errors, remains.
+POLISH_TOLERANCE_SE: Final = 1e-3
+
+#: Newton steps a polish may take before it stops and says so. Each costs a gradient and a
+#: Hessian over every block; from where SLSQP stops, two or three are enough.
+_POLISH_STEPS: Final = 8
+
+
+def _newton_step(
+    curvature: np.ndarray, gradient: np.ndarray, total_weight: float
+) -> tuple[np.ndarray, float]:
+    """The Newton step in the optimiser's scaled space, and its size in standard errors.
+
+    Measured coefficient by coefficient against that coefficient's own standard error, and
+    the largest reported. The ratio does not depend on the scaling: step and error carry
+    the same factor of the column's standard deviation.
+    """
+    step, *_ = np.linalg.lstsq(curvature, gradient, rcond=None)
+    variance = np.diag(np.linalg.pinv(total_weight * curvature))
+    usable = variance > 0
+    if not usable.any():
+        return step, 0.0
+    return step, float(np.max(np.abs(step[usable]) / np.sqrt(variance[usable])))
+
+
+def _polish(
     objective: _Objective,
-    unflatten: Callable[[np.ndarray], dict[str, np.ndarray]],
-) -> None:
-    """What ``_fit_model`` and ``_fit`` set once the optimiser has converged."""
+    x: np.ndarray,
+    value: float,
+    gradient: np.ndarray,
+    curvature: np.ndarray,
+) -> tuple[np.ndarray, float, np.ndarray, int, float, float]:
+    """Newton steps from where SLSQP stopped, until no step worth taking is left.
+
+    SLSQP stops on a change of 1e-10 in the *mean* log-likelihood, a tolerance that takes no
+    account of how precisely the data pin a coefficient down. Measured against the standard
+    errors, it stopped up to 5.9 short of the optimum on four quarters of the book and 2.0
+    on sixteen: the distance depends on where the optimiser happens to stop, and no sample
+    size makes it negligible. The gradient and the Hessian are lifelines' own, added up over
+    the blocks, so the point reached is the maximum of the same likelihood, reached more
+    exactly. A step that does not lower the objective is halved until it does.
+
+    Returns the point, its objective and Hessian, the steps taken, and the distance from
+    the optimum before and after, in standard errors.
+    """
+    step, stopped = _newton_step(curvature, gradient, objective.total_weight)
+    remaining, steps = stopped, 0
+    slack = 4 * np.finfo(float).eps
+    while remaining > POLISH_TOLERANCE_SE and steps < _POLISH_STEPS:
+        scale = 1.0
+        while True:
+            candidate = x - scale * step
+            candidate_value, candidate_gradient = objective(candidate)
+            if candidate_value <= value + slack * abs(value):
+                break
+            scale /= 2.0
+            if scale < 1e-6:
+                log.warning("no Newton step lowers the objective; polish stopped")
+                return x, value, curvature, steps, stopped, remaining
+        x, value, gradient = candidate, candidate_value, candidate_gradient
+        curvature = _symmetric(objective.hessian(x))
+        step, remaining = _newton_step(curvature, gradient, objective.total_weight)
+        steps += 1
+        log.info("Newton step %d: %.3g standard errors from the optimum", steps, remaining)
+    if remaining > POLISH_TOLERANCE_SE:
+        log.warning("polish stopped after %d steps, %.3g standard errors out", steps, remaining)
+    return x, value, curvature, steps, stopped, remaining
+
+
+def _from_slsqp(
+    objective: _Objective, results: OptimizeResult, *, polish: bool
+) -> tuple[np.ndarray, float, np.ndarray, int, float, float]:
+    """Where SLSQP stopped, polished to the optimum unless ``polish`` is off."""
     started = time.perf_counter()
-    curvature = objective.hessian(results.x)
-    curvature = (curvature + curvature.T) / 2
+    x = np.asarray(results.x, dtype=float)
+    curvature = _symmetric(objective.hessian(x))
     log.info(
         "hessian over %d blocks in %.0fs", len(objective._blocks), time.perf_counter() - started
     )
+    value = float(results.fun)
+    gradient = np.asarray(results.jac, dtype=float)
+    if polish:
+        return _polish(objective, x, value, gradient, curvature)
+    _, stopped = _newton_step(curvature, gradient, objective.total_weight)
+    return x, value, curvature, 0, stopped, stopped
 
-    params = unflatten(results.x)
-    fitter.log_likelihood_ = -objective.total_weight * results.fun
+
+def _newton_from(
+    objective: _Objective, start: np.ndarray
+) -> tuple[np.ndarray, float, np.ndarray, int, float, float] | None:
+    """Newton steps from a warm start, or ``None`` if they cannot be trusted to converge.
+
+    Trusted only where the likelihood is locally concave -- the Hessian of the negative
+    log-likelihood positive definite -- and only if they reach the tolerance within the
+    step limit. Otherwise the caller falls back on SLSQP, from the same start.
+    """
+    value, gradient = objective(start)
+    curvature = _symmetric(objective.hessian(start))
+    if not bool(np.all(np.linalg.eigvalsh(curvature) > 0)):
+        log.info("warm start is not in a concave region; falling back on SLSQP")
+        return None
+    solution = _polish(objective, start, value, gradient, curvature)
+    if solution[5] > POLISH_TOLERANCE_SE:
+        log.info("Newton steps did not converge from the warm start; falling back on SLSQP")
+        return None
+    return solution
+
+
+def _symmetric(matrix: np.ndarray) -> np.ndarray:
+    """A Hessian symmetrised, as lifelines symmetrises it (lifelines issue 801)."""
+    symmetric: np.ndarray = (matrix + matrix.T) / 2
+    return symmetric
+
+
+def _store(
+    fitter: ParametericAFTRegressionFitter,
+    columns: pd.MultiIndex,
+    x: np.ndarray,
+    value: float,
+    curvature: np.ndarray,
+    objective: _Objective,
+    unflatten: Callable[[np.ndarray], dict[str, np.ndarray]],
+) -> None:
+    """What ``_fit_model`` and ``_fit`` set once the optimum is found."""
+    params = unflatten(x)
+    fitter.log_likelihood_ = -objective.total_weight * value
     fitter._hessian_ = objective.total_weight * curvature
 
     keys = list(fitter.regressors.keys())

@@ -51,6 +51,8 @@ if TYPE_CHECKING:
 
     from lifelines.fitters import ParametericAFTRegressionFitter
 
+    from creditsurv.models.blocks import BlockFit
+
 
 class Likelihood(StrEnum):
     """How the observation interval of an episode is treated."""
@@ -103,6 +105,9 @@ class FitResult:
     n_episodes: int
     n_events: int
     elapsed_seconds: float
+    #: What the block engine recorded, for an interval-censored fit. Absent from models
+    #: cached before the engine existed, so read it with ``getattr``.
+    blocks: BlockFit | None = None
 
     @property
     def aic(self) -> float:
@@ -155,7 +160,9 @@ def fit_aft(
     ancillary: str | bool | None = None,
     show_progress: bool = False,
     block_rows: int = DEFAULT_BLOCK_ROWS,
-    initial_point: np.ndarray | None = None,
+    initial_point: np.ndarray | pd.Series | None = None,
+    where: np.ndarray | None = None,
+    polish: bool = True,
 ) -> FitResult:
     """Fit a parametric AFT model to an encoded episode panel.
 
@@ -179,6 +186,7 @@ def fit_aft(
     if distribution not in FITTERS:
         message = f"Unknown distribution {distribution!r}; expected one of {sorted(FITTERS)}."
         raise ValueError(message)
+    selected = np.ones(len(encoded), dtype=bool) if where is None else np.asarray(where, dtype=bool)
 
     if weights_col is not None:
         _check_frequency_weights(encoded[weights_col], weights_col)
@@ -186,18 +194,20 @@ def fit_aft(
     fitter = FITTERS[distribution](penalizer=penalizer)
     started = time.perf_counter()
 
+    record: BlockFit | None = None
     if likelihood is Likelihood.INTERVAL_CENSORED:
         # Block by block. lifelines' own fit holds about 680 bytes a row of autograd tape
         # and design copies -- 13.45 GB at 9.5 million rows, where the exact calendar key
         # asks for 62 million -- and a test holds the engine to lifelines' coefficients,
         # standard errors and log-likelihood on the same rows.
-        fit_interval_censoring_in_blocks(
+        record = fit_interval_censoring_in_blocks(
             fitter,
             model_blocks(
                 _categorised(encoded, covariates),
                 covariates,
                 rows=block_rows,
                 weights_col=weights_col,
+                where=where,
             ),
             formula=formula,
             lower_bound_col=LOWER_BOUND,
@@ -208,11 +218,12 @@ def fit_aft(
             ancillary=ancillary,
             initial_point=initial_point,
             show_progress=show_progress,
+            polish=polish,
         )
     else:
-        frame = right_censored_frame(encoded, covariates)
+        frame = right_censored_frame(encoded if where is None else encoded[selected], covariates)
         if weights_col is not None:
-            frame[weights_col] = encoded[weights_col].to_numpy()
+            frame[weights_col] = encoded[weights_col].to_numpy()[selected]
         fitter.fit(
             frame,
             duration_col=AGE_STOP,
@@ -240,15 +251,17 @@ def fit_aft(
     else:
         # No event column: a row is a default when its interval is bounded above.
         defaulted = np.isfinite(encoded[UPPER_BOUND].to_numpy(dtype=float))
-    n_events = int(counts[defaulted].sum())
+    # Over the rows the model saw: a fit on half the book reports half the book.
+    n_events = int(counts[defaulted & selected].sum())
     return FitResult(
         fitter=fitter,
         distribution=distribution,
         likelihood=likelihood,
         formula=formula,
-        n_episodes=len(encoded),
+        n_episodes=int(selected.sum()),
         n_events=n_events,
         elapsed_seconds=elapsed,
+        blocks=record,
     )
 
 
