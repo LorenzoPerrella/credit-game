@@ -607,7 +607,16 @@ def select(
 
     from creditsurv.config import MACRO_CANDIDATES
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import cells_to_episodes, observation_months
+    from creditsurv.data.panel import (
+        AGE_START,
+        EVENT,
+        EXACT_OBSERVATION,
+        LOWER_BOUND,
+        UPPER_BOUND,
+        WEIGHT,
+        cells_to_episodes,
+        observation_months,
+    )
     from creditsurv.data.store import cells_path, load_cells
     from creditsurv.models.procedure import CANDIDATE_CATEGORICAL, Fits, run_selection
     from creditsurv.reporting import selection
@@ -635,11 +644,18 @@ def select(
     del cells
     halves = pd.PeriodIndex(train["orig_period"]).year.to_numpy() % 2 == 0
 
+    # Only what a fit or a covariance reads. The calendar columns, the episode end and the
+    # vintage label are a quarter of the frame on ~60 million rows, and every fit in the
+    # selection holds its stored design beside it.
+    keep = {*candidates, AGE_START, LOWER_BOUND, UPPER_BOUND, EXACT_OBSERVATION, WEIGHT, EVENT}
+    for column in [name for name in train.columns if name not in keep]:
+        del train[column]
+
     # The cell table's name, size and time of writing: a cached fit is never reused for a
     # table rebuilt since, even one that happens to have as many rows.
     source = cells_path(moratorium).stat()
     identity = f"{cells_path(moratorium).name}:{source.st_size}:{source.st_mtime_ns}"
-    typer.echo(f"Selecting on {len(train):,} cells, {int(train['n'].sum()):,} loan-months.")
+    typer.echo(f"Selecting on {len(train):,} cells, {int(train[WEIGHT].sum()):,} loan-months.")
 
     fits = Fits(train, identity=identity, as_of=as_of, moratorium=moratorium)
     record = run_selection(train, fits, halves=halves)

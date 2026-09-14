@@ -176,7 +176,9 @@ def exponential_is_rejected(result: FitResult) -> dict[str, float]:
 
     lifelines parameterises the shape as ``log rho``, so the constant-hazard hypothesis
     is exactly ``log rho = 0`` and the test reads straight off the coefficient table.
-    On the whole population it returns ``z = 468``, which is not a close call.
+    On the whole population the statistic runs to the hundreds, which is not a close call;
+    ``docs/reports/methodology.md`` gives the run's own value, and is the only place a
+    number for it is written down.
 
     The wider point is worth keeping: **where families nest, compare them by a test
     rather than by information criteria**. Only families that do not nest --
