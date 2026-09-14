@@ -88,6 +88,8 @@ def test_the_procedure_runs_every_step_and_says_why_it_removed_each_covariate(
     summary = json.loads((tmp_path / "reports" / selection.SUMMARY_FILE).read_text())
     assert written.exists()
     assert summary["formula"] == record.selected.formula
+    for filename in [*selection.TABLE_FILES.values(), selection.FITS_FILE]:
+        assert (tmp_path / "reports" / filename).exists(), filename
 
 
 def test_a_second_run_reads_every_fit_from_the_cache(

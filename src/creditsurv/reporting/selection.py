@@ -22,6 +22,21 @@ if TYPE_CHECKING:
 #: The summary the configuration is tested against, written beside the report.
 SUMMARY_FILE: Final = "selection.json"
 
+#: Every table behind the report, one file each. A notebook shows these rather than
+#: recomputing them: the correlation and the variance inflation read ~60 million rows of
+#: expanded panel, which is the command's job, not the notebook's.
+TABLE_FILES: Final[dict[str, str]] = {
+    "correlation": "selection_correlation.csv",
+    "collinear": "selection_collinear.csv",
+    "inflation": "selection_inflation.csv",
+    "screening": "selection_screening.csv",
+    "elimination": "selection_elimination.csv",
+    "stability": "selection_stability.csv",
+}
+
+#: The fits the run made, with their times and whether they came from the cache.
+FITS_FILE: Final = "selection_fits.csv"
+
 
 def generate(record: SelectionRecord, *, reports_dir: Path) -> Path:
     """Write ``selection.md`` and ``selection.json`` under ``reports_dir``."""
@@ -115,4 +130,8 @@ An unstable covariate with no such partner is kept, and left visible here.
     (reports_dir / SUMMARY_FILE).write_text(
         json.dumps(record.summary(), indent=2, sort_keys=True) + "\n"
     )
+    for attribute, filename in TABLE_FILES.items():
+        table: pd.DataFrame = getattr(record, attribute)
+        table.to_csv(reports_dir / filename, index=attribute == "correlation")
+    pd.DataFrame(record.fits).to_csv(reports_dir / FITS_FILE, index=False)
     return report.write(reports_dir / "selection.md")
