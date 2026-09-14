@@ -52,7 +52,9 @@ evaluations as from a cold start, 27 against 27. The engine runs Newton directly
 as delinquency, and made up 17% of the default events. The event definition is a
 `MoratoriumPolicy`, each policy writes its own `cells_<policy>.parquet`, and a fit's
 fingerprint names its policy. Two runs under different policies have different
-dependent variables.
+dependent variables. `exclude` was chosen by a rule written before either fit
+(`docs/reports/moratorium.md`); censoring threw away a quarter of the test window's
+defaults.
 
 **Every macro series is lagged three months, market quotes included.** A loan 90 days
 delinquent in month t missed its payments in t-3 to t-1, so no reading from month t can

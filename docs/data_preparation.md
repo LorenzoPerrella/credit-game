@@ -180,6 +180,19 @@ that `censor` passes, `censor` is chosen; otherwise `exclude` stands. Coefficien
 reported and not used to choose: the two fits estimate different dependent variables, and
 a difference between them is not a defect of either.
 
+**The result.** Both policies pass the overall actual over expected -- 1.061 excluded,
+0.958 censored -- and the Gini, 0.558 and 0.551, and both fail the decile criterion, at
+0.718 to 1.154 and 0.705 to 1.014. Neither fails a criterion the other passes, so by the
+rule above `exclude` stands.
+
+Two measurements say the prior deserved to be the prior. Censoring lost **26% of the test
+window's defaults**, 56,413 against 76,380, for 3% less exposure: loans that took a
+moratorium and genuinely defaulted afterwards, exactly the ones censoring was feared to
+remove for their risk. And `inflation` changes sign between the two fits, from −0.42 to
++1.71. A covariate whose direction depends on how one year's forbearance is treated is
+behaving as a calendar effect rather than an elasticity, which is what the validation said
+of it (S5); the selection weighs it against its gap form.
+
 ### Truncation at the first terminating month
 
 Servicing files keep reporting after a default, through foreclosure, disposition and
