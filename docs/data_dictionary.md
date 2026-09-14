@@ -142,7 +142,7 @@ reliably.
 | `fico_s` | derived | ≈ −2.4 to +3.0 | `(credit_score − 700) / 50`, the modelled form |
 | `orig_ltv` | `original_ltv` | Percent | **999 means missing** |
 | `orig_cltv` | `original_cltv` | Percent | Combined: catches second liens |
-| `dti` | `original_dti` | Percent | **999 means missing** |
+| `dti` | `original_dti` | Percent | **999 means missing** -- for every HARP refinance, which is why the model does not cover them; see [data_preparation.md](data_preparation.md#what-dropping-removes) |
 | `orig_upb` | `original_upb` | USD | |
 | `note_rate` | `original_interest_rate` | Percent | |
 | `orig_term` | `original_loan_term` | Months | 180 or 360 for almost all of the book |
