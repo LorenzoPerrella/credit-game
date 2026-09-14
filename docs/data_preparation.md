@@ -170,6 +170,16 @@ Each policy writes its own table, `cells_<policy>.parquet`. `creditsurv moratori
 and backtests the same specification on both, so the choice rests on what it does to the
 model; see [the moratorium report](reports/moratorium.md).
 
+**The rule for choosing, written while both fits were still running.** `exclude` is the
+prior. Forbearance went to the borrowers who asked for it, and those were on the whole the
+borrowers under strain, so ending their observation at the first accommodated month removes
+loans *because of* their risk: informative censoring, which biases the hazard down.
+`exclude` keeps them at risk and counts the defaults that genuinely follow. The data can
+overturn the prior only through the backtest -- if `exclude` fails an acceptance criterion
+that `censor` passes, `censor` is chosen; otherwise `exclude` stands. Coefficient moves are
+reported and not used to choose: the two fits estimate different dependent variables, and
+a difference between them is not a defect of either.
+
 ### Truncation at the first terminating month
 
 Servicing files keep reporting after a default, through foreclosure, disposition and
