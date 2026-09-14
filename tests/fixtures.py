@@ -108,6 +108,7 @@ def origination_row(
     first_payment: str = "201503",
     term: str = "360",
     mi: str = "0",
+    super_conforming: str = "N",
 ) -> str:
     """One line of ``orig_YYYYQn.txt``. Unset fields stay empty, as they do upstream.
 
@@ -116,11 +117,13 @@ def origination_row(
     of 49.2 million loans has a blank -- so a fixture that left it empty described a file
     that does not exist. That went unnoticed until ``has_mi`` stopped folding a missing
     value into "not insured": every fixture loan was then dropped, and thirteen
-    aggregation tests reported zero cells.
+    aggregation tests reported zero cells. The super-conforming flag is the other field the
+    real file always fills, ``N`` or ``Y``.
     """
     values = dict.fromkeys(ORIGINATION_COLUMNS, "")
     values.update(
         mortgage_insurance_percentage=mi,
+        super_conforming_flag=super_conforming,
         classic_fico=fico,
         first_payment_date=first_payment,
         first_time_homebuyer_indicator=first_time,

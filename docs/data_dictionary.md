@@ -331,6 +331,7 @@ information.
 | Origination vintage as a covariate | Reserved for the time split. As a covariate it absorbs the macro effects the model exists to estimate. |
 | Current delinquency status | A mediator, not a predictor. Including it inflates every metric while destroying the model's use. |
 | Contemporaneous macro | Look-ahead, and no mechanism: a default in *t* was caused before *t*. Every series is lagged three months. |
+| `super_conforming_flag` | 1.96% of loans are flagged, 5.1% at most (2020), and none before 2008, when the category did not exist: its `N` for those vintages records a date, not a loan. What it does carry, a high balance in a high-cost area, is what `log_orig_upb` would measure directly. |
 | `amortization_type`, `interest_only_indicator` | Exactly **one** value each across the whole dataset. |
 | All loss and proceeds columns | Populated only for defaults, and they need LGD, which is out of scope. |
 

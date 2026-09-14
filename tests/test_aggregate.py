@@ -673,3 +673,22 @@ def test_the_cells_give_back_the_monthly_default_series_exactly(tmp_path: Path) 
 
     assert int(truth.sum()) == 2
     assert truth[truth > 0].to_dict() == rebuilt[rebuilt > 0].to_dict()
+
+
+def test_the_super_conforming_flag_is_mapped_from_what_the_field_holds(tmp_path: Path) -> None:
+    """D6. The layout calls a blank "not super conforming" and the first mapping followed it,
+    turning NULL into N. The field holds N or Y on every one of 49.2 million loans, so that
+    mapping would have dropped 98% of the book had the flag ever entered a key."""
+    from creditsurv.data.aggregate import PRODUCTION_EDGES
+
+    origination = [
+        origination_row(f"F{i:09d}", super_conforming="Y" if i < 2 else "N") for i in range(6)
+    ]
+    performance = [performance_row(f"F{i:09d}", "201503", "0") for i in range(6)]
+    _ingested(tmp_path, origination, performance)
+
+    spec = CellSpec(continuous=PRODUCTION_EDGES, categorical=("super_conforming",))
+    cells = build_cells(*_sources(tmp_path), spec=spec)
+
+    loans = cells.groupby("super_conforming", observed=True)["n"].sum().to_dict()
+    assert loans == {"N": 4, "Y": 2}

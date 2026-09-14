@@ -434,13 +434,16 @@ _CATEGORICAL: Final[dict[str, str]] = {
     # insured share runs from 6.8% of the 2010 vintage to 38.9% of 2023's.
     "has_mi": "CASE WHEN mi_percent > 0 THEN 'Y' WHEN mi_percent = 0 THEN 'N' END",
     # Screened like everything else rather than ingested and forgotten. It reached the
-    # parquet without appearing in any screening table or in DEGENERATE_FIELDS, which
-    # is the gap that let three performance fields disappear silently. Blank is not a
-    # missing value here: the layout defines it as "not super conforming".
-    "super_conforming": (
-        "CASE WHEN super_conforming_flag = 'Y' THEN 'Y' "
-        "WHEN super_conforming_flag IS NULL THEN 'N' END"
-    ),
+    # parquet without appearing in any screening table or in DEGENERATE_FIELDS, which is
+    # the gap that let three performance fields disappear silently.
+    #
+    # Mapped from the field, not from the layout. The layout calls a blank "not super
+    # conforming" and the first mapping turned NULL into N, but across all 49.2 million
+    # loans the field holds exactly N (48,223,363) and Y (962,808) and never a blank: that
+    # mapping would have dropped 98% of the book the day the flag entered a key. It is not
+    # in one. No loan before 2008 is Y, because the category did not exist, so its N for
+    # those vintages records a date rather than a loan.
+    "super_conforming": "CASE super_conforming_flag WHEN 'Y' THEN 'Y' WHEN 'N' THEN 'N' END",
     "n_borrowers": (
         "CASE WHEN TRY_CAST(number_of_borrowers AS INTEGER) = 1 THEN '1' "
         "WHEN TRY_CAST(number_of_borrowers AS INTEGER) BETWEEN 2 AND 5 THEN '2+' END"
