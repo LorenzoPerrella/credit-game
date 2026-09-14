@@ -166,8 +166,21 @@ def test_an_unstable_covariate_goes_only_beside_a_larger_one_of_its_dimension() 
 def test_the_configuration_is_what_the_last_selection_chose() -> None:
     """The validation's F1: the specification was copied by hand from a procedure nothing
     re-ran. Once ``creditsurv select`` has written its record, the configuration has to
-    agree with it, or this fails."""
-    from creditsurv.config import TIME_VARYING_CONTINUOUS, reports_dir
+    agree with it, or this fails.
+
+    Every part of the specification, not only the macro block: the loan block can lose a
+    covariate to a backwards sign, and ``has_mi`` and ``first_time_buyer`` are in the model
+    exactly when the record says so (M3). The configuration's reasons for an elimination
+    are argued prose and the record's are the rule that fired, so what has to agree there
+    is who went."""
+    from creditsurv.config import (
+        CATEGORICAL_REFERENCE,
+        ELIMINATED,
+        ORDINAL,
+        STATIC_CONTINUOUS,
+        TIME_VARYING_CONTINUOUS,
+        reports_dir,
+    )
     from creditsurv.reporting.selection import SUMMARY_FILE
 
     path = reports_dir() / SUMMARY_FILE
@@ -175,4 +188,8 @@ def test_the_configuration_is_what_the_last_selection_chose() -> None:
         pytest.skip("no selection has been run on the whole population yet")
     summary = json.loads(path.read_text())
 
+    assert list(STATIC_CONTINUOUS) == summary["static_continuous"]
+    assert list(ORDINAL) == summary["ordinal"]
     assert list(TIME_VARYING_CONTINUOUS) == summary["time_varying_continuous"]
+    assert dict(CATEGORICAL_REFERENCE) == summary["categorical"]
+    assert set(ELIMINATED) == set(summary["eliminated"])

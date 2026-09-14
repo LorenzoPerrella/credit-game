@@ -7,6 +7,7 @@ and all of which are impossible to check on one.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -445,13 +446,21 @@ def test_the_eliminated_covariates_are_out_of_the_model() -> None:
     A covariate removed by the selection that quietly reappears in the formula is a
     silent reversal of a documented decision, and nothing else in the suite would
     notice it.
-    """
-    from creditsurv.config import ELIMINATED, MACRO_CANDIDATES, default_formula
 
-    formula = default_formula()
+    The formula is read as names, not as text: ``vix`` is inside ``vix_gap`` and
+    ``inflation`` inside ``inflation_gap``, so a level eliminated beside its own gap form
+    would read as still fitted. And a candidate is anything a cell carries -- the
+    selection screens loan characteristics and categoricals too, not only macro series.
+    """
+    from creditsurv.config import ELIMINATED, default_formula
+    from creditsurv.data.aggregate import DEFAULT_SPEC
+    from creditsurv.features import MACRO_DERIVED
+
+    carried = set(DEFAULT_SPEC.continuous) | set(DEFAULT_SPEC.categorical) | set(MACRO_DERIVED)
+    names = set(re.findall(r"\w+", default_formula()))
     for name, reason in ELIMINATED.items():
-        assert name in MACRO_CANDIDATES, f"{name} is recorded as eliminated but never a candidate"
-        assert name not in formula, f"{name} was eliminated ({reason}) but is still fitted"
+        assert name in carried, f"{name} is recorded as eliminated but no cell carries it"
+        assert name not in names, f"{name} was eliminated ({reason}) but is still fitted"
 
 
 def test_the_production_grid_is_a_subset_of_the_documented_one() -> None:
