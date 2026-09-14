@@ -634,6 +634,47 @@ def select(
     typer.echo(f"Written: {written}")
 
 
+@app.command()
+def moratorium(
+    as_of: Annotated[str, typer.Option(help="Reporting date for both fits.")] = DEFAULT_AS_OF,
+) -> None:
+    """Fit and backtest the model with forbearance excluded, and again with it censored.
+
+    D1 of the validation: 17% of default events were moratoria, not credit, and the two ways
+    of removing them keep different things. The choice is made on what each does to the
+    coefficients and the backtest, written to ``docs/reports/moratorium.md``.
+
+    One policy at a time, releasing its panel before the next. Both fits are cached under
+    their policy, so ``report --reuse`` picks up the chosen one instead of refitting it.
+    """
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.backtest.runner import backtest_split
+    from creditsurv.reporting.moratorium import generate, outcome
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    reporting_date = pd.Period(as_of, freq="M")
+    covariates, formula = default_covariates(), default_formula()
+
+    outcomes = []
+    for policy in ("exclude", "censor"):
+        typer.echo(f"\n{policy}:")
+        split, _ = _split(policy, reporting_date)
+        fitted = cast(
+            "FitResult",
+            _fit_once(split.train, covariates, formula, as_of=as_of, reuse=True, moratorium=policy),
+        )
+        _, result = backtest_split(split, covariates, formula, fitted=fitted)
+        outcomes.append(outcome(policy, split, fitted, result))
+        typer.echo(str(result.summary()))
+        del split, fitted, result
+
+    written = generate(outcomes[0], outcomes[1], reports_dir=reports_dir())
+    typer.echo(f"\nWritten: {written}")
+
+
 def _fit_once(
     train: pd.DataFrame,
     covariates: list[str],
