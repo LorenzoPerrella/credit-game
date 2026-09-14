@@ -66,6 +66,29 @@ DERIVED_COLUMNS: tuple[str, ...] = (
     "hpi_growth",
 )
 
+#: The macro series each derived covariate reads, stated once.
+#:
+#: It used to exist only implicitly, inside the body of ``add_macro_family``, and that
+#: is how a stress scenario could shock two series no fitted covariate read and leave two
+#: fitted covariates without a path, with nothing noticing. Stated, it lets a test tie
+#: the scenario to the formula; and a second test holds this map to what the builder
+#: actually does, so it cannot drift from the code it describes.
+MACRO_SOURCES: Final[dict[str, tuple[str, ...]]] = {
+    "cltv_drift": ("hpi",),
+    "hpi_growth": ("hpi",),
+    "unemp_gap": ("unemployment_rate",),
+    "policy_rate_gap": ("policy_rate",),
+    "rate_gap": ("mortgage_rate_30y", "mortgage_rate_15y"),
+    "nfci_lagged": ("nfci",),
+    "term_spread": ("term_spread",),
+    "credit_spread": ("credit_spread",),
+    "vix": ("vix",),
+    "sentiment": ("sentiment",),
+    "inflation": ("cpi",),
+    "equity_return": ("equity_index",),
+    "starts_growth": ("housing_starts",),
+}
+
 
 def lag_macro(macro: pd.DataFrame, *, lag_months: int = MACRO_LAG_MONTHS) -> pd.DataFrame:
     """Shift revised series forward so only published information is used.

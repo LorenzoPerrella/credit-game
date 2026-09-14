@@ -190,16 +190,33 @@ class Scenario:
 #: unconditional backtest uses.
 BASELINE = Scenario(name="baseline")
 
-#: A recession resembling 2008 in shape rather than magnitude: unemployment climbs
-#: over a year and stays high, house prices fall for two years, credit tightens.
+#: A recession resembling 2008 in shape rather than magnitude, shocked on the series
+#: the fitted model actually reads.
+#:
+#: The first version shocked unemployment, house prices, financial conditions and the
+#: thirty-year mortgage rate. By the time the specification settled on ``cltv_drift``,
+#: ``unemp_gap``, ``vix`` and ``inflation``, two of those four legs fed no covariate at
+#: all and two of the model's covariates had no path -- ``vix``, the largest
+#: standardised effect, among them. The published "adverse lifetime PD 1.46x baseline"
+#: therefore understated the model's own sensitivity, which moves 6.6x in-sample between
+#: 2005 and 2009. It was drift rather than a decision: the scenario predated the
+#: specification by three days. ``tests/test_scenarios.py`` now fails if the two part.
+#:
+#: Every shape is 2008-09's. Unemployment climbs four points over a year and holds;
+#: house prices fall a fifth over two years; implied volatility spikes thirty points in
+#: a quarter and decays to ten above where it started; consumer prices fall two percent
+#: over a year, which is the deflation of 2009 and what the inflation coefficient reads
+#: as stress. ``cpi`` is proportional for the same reason ``hpi`` is: it is a level
+#: index, and a two percent fall means the same thing at any value of it.
 ADVERSE = Scenario(
     name="adverse",
     shocks={
         "unemployment_rate": [*np.linspace(0.0, 4.0, 12), *([4.0] * 24)],
         "hpi": [*np.linspace(0.0, -0.20, 24), *([-0.20] * 12)],
-        "nfci": [*np.linspace(0.0, 1.5, 6), *([1.5] * 30)],
-        "mortgage_rate_30y": [*np.linspace(0.0, 1.0, 6), *([1.0] * 30)],
+        "vix": [*np.linspace(0.0, 30.0, 4), *np.linspace(30.0, 10.0, 12), *([10.0] * 20)],
+        "cpi": [*np.linspace(0.0, -0.02, 12), *([-0.02] * 24)],
     },
+    proportional=frozenset({"hpi", "cpi"}),
 )
 
 
