@@ -152,14 +152,14 @@ def weighted_correlation(
     Weighted because the rows are cells: an unweighted matrix would describe the
     distribution of *cells*, which is an artefact of the binning, rather than the
     distribution of loan-months, which is the data.
-    """
-    exposure = frame[weight].to_numpy(dtype=float)
-    values = frame.loc[:, list(columns)].to_numpy(dtype=float)
-    total = exposure.sum()
 
-    means = (values * exposure[:, None]).sum(axis=0) / total
-    centred = values - means
-    covariance = (centred * exposure[:, None]).T @ centred / total
+    From the covariance added up a block at a time. The first version held the
+    covariates and a centred copy of them at once -- two copies of every candidate on
+    the training half of the exact key -- for a matrix a dozen entries wide.
+    """
+    from creditsurv.models.selection import weighted_covariance
+
+    covariance = weighted_covariance(frame, columns, weight=weight).to_numpy(dtype=float)
     deviations = np.sqrt(np.diag(covariance))
     correlation = covariance / np.outer(deviations, deviations)
     return pd.DataFrame(correlation, index=list(columns), columns=list(columns))

@@ -386,26 +386,68 @@ def variance_inflation(
     Computed with least squares directly rather than through scikit-learn. `nmds`
     uses ``LinearRegression(normalize=True)``, which was removed in scikit-learn 1.2,
     so its implementation no longer runs; the method is worth taking, the code is not.
+
+    The regressions are posed on the weighted covariance matrix rather than on the rows.
+    With an intercept they are the same least-squares problems, and the matrix is added
+    up a block at a time by :func:`weighted_covariance`.
     """
-    values = frame.loc[:, list(columns)].to_numpy(dtype=float)
-    weights = frame[weight].to_numpy(dtype=float) if weight else np.ones(len(frame), dtype=float)
-    root = np.sqrt(weights)
+    return _inflation(weighted_covariance(frame, columns, weight=weight), columns)
 
+
+#: Rows added up at a time when accumulating weighted cross-products. The moments are
+#: sums, so the block size changes the memory and nothing else.
+MOMENT_BLOCK_ROWS: Final = 5_000_000
+
+
+def weighted_covariance(
+    frame: pd.DataFrame,
+    columns: Sequence[str],
+    *,
+    weight: str | None = None,
+    rows: int = MOMENT_BLOCK_ROWS,
+) -> pd.DataFrame:
+    """Exposure-weighted covariance of ``columns``, added up a block at a time.
+
+    A weight total, the weighted sums and the weighted cross-products are everything a
+    variance inflation factor or a correlation needs, and all three are sums. The first
+    version copied the covariates out whole and then again for every covariate it
+    regressed: on the training half of the exact key, tens of gigabytes to produce a
+    matrix a dozen entries wide.
+    """
+    names = list(columns)
+    total = 0.0
+    first = np.zeros(len(names))
+    second = np.zeros((len(names), len(names)))
+    for start in range(0, len(frame), rows):
+        block = frame.iloc[start : start + rows]
+        values = block.loc[:, names].to_numpy(dtype=float)
+        weights = block[weight].to_numpy(dtype=float) if weight else np.ones(len(block))
+        total += float(weights.sum())
+        first += weights @ values
+        second += values.T @ (values * weights[:, None])
+    mean = first / total
+    covariance = second / total - np.outer(mean, mean)
+    return pd.DataFrame(covariance, index=names, columns=names)
+
+
+def _inflation(covariance: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
+    """The VIF of each of ``columns``, from their covariance, largest first.
+
+    ``R²`` of a covariate on the others is the share of its variance that their
+    covariances explain, which is what the regression on the rows computes.
+    """
+    names = list(columns)
+    matrix = covariance.loc[names, names].to_numpy(dtype=float)
     rows = []
-    for index, name in enumerate(columns):
-        target = values[:, index]
-        others = np.delete(values, index, axis=1)
-        design = np.column_stack([np.ones(len(others)), others])
-
-        coefficients, *_ = np.linalg.lstsq(design * root[:, None], target * root, rcond=None)
-        residual = target - design @ coefficients
-        weighted_mean = float((target * weights).sum() / weights.sum())
-
-        residual_ss = float((weights * residual**2).sum())
-        total_ss = float((weights * (target - weighted_mean) ** 2).sum())
-        r_squared = 1.0 - residual_ss / total_ss if total_ss > 0 else 0.0
+    for index, name in enumerate(names):
+        variance = float(matrix[index, index])
+        others = [position for position in range(len(names)) if position != index]
+        r_squared = 0.0
+        if others and variance > 0.0:
+            cross = matrix[others, index]
+            explained, *_ = np.linalg.lstsq(matrix[np.ix_(others, others)], cross, rcond=None)
+            r_squared = min(max(float(cross @ explained) / variance, 0.0), 1.0)
         inflation = 1.0 / (1.0 - r_squared) if r_squared < 1.0 else np.inf
-
         rows.append({"covariate": name, "vif": inflation, "tolerance": 1.0 - r_squared})
 
     return pd.DataFrame(rows).sort_values("vif", ascending=False).reset_index(drop=True)
@@ -432,9 +474,12 @@ def stepwise_vif(
     protected = {name: rank for rank, name in enumerate(priority)}
     surviving = list(columns)
     log: list[dict[str, object]] = []
+    # Once: every later step's covariance is a submatrix of this one, so no step reads
+    # the rows again.
+    covariance = weighted_covariance(frame, columns, weight=weight)
 
     while len(surviving) > 1:
-        inflation = variance_inflation(frame, surviving, weight=weight)
+        inflation = _inflation(covariance, surviving)
         worst = inflation.iloc[0]
         if float(worst["vif"]) <= threshold:
             break
