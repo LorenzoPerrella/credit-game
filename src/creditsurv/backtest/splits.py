@@ -18,9 +18,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from creditsurv.data.panel import (
     WEIGHT,
     cells_to_episodes,
+    episode_step,
     observation_months,
     validate_episodes,
 )
@@ -112,19 +115,28 @@ def split_cells(
     halves -- which a test holds to the row -- and each half is expanded on its own.
     """
     cut = as_of.year * 12 + as_of.month - 1
-    months = observation_months(cells).to_numpy()
-    before = months <= cut
+    before = observation_months(cells).to_numpy() <= cut
     if not before.any():
         message = f"No exposure at or before {as_of}."
         raise ValueError(message)
-    train = cells_to_episodes(cells, macro, covariates=covariates, where=before)
+
+    # Each half is taken out first and the table let go before either is expanded. Expanding
+    # from the whole table held it beside the growing half, and the comparison of moratorium
+    # policies that did so peaked at a 17.3 GB footprint on a 16 GB machine. The caller that
+    # passes a table it does not keep frees it here.
+    step = episode_step(cells)
+    train_cells = cells.iloc[np.flatnonzero(before)]
+    test_cells = cells.iloc[np.flatnonzero(~before)]
+    del cells
+
+    train = cells_to_episodes(train_cells, macro, covariates=covariates, step=step)
+    del train_cells
     if train.empty:
         message = f"No exposure at or before {as_of}."
         raise ValueError(message)
-    after = ~before
     test = (
-        cells_to_episodes(cells, macro, covariates=covariates, where=after)
-        if after.any()
+        cells_to_episodes(test_cells, macro, covariates=covariates, step=step)
+        if len(test_cells)
         else train.iloc[:0].copy()
     )
     return Split(as_of=as_of, train=train, test=test)

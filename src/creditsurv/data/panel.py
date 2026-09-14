@@ -454,8 +454,7 @@ def cells_to_episodes(
     # never disagree with the width it was built with. Off the whole table, not the
     # selection: a selection holding ages 0 and 12 is not a table of year-long episodes.
     if step is None:
-        ages = sorted(int(age) for age in cells[AGE].unique())
-        step = min((b - a) for a, b in pairwise(ages)) if len(ages) > 1 else 1
+        step = episode_step(cells)
 
     if where is None:
         episodes = cells.copy(deep=False)
@@ -507,6 +506,17 @@ def cells_to_episodes(
     kept = episodes.loc[complete].copy(deep=False)
     kept.index = pd.RangeIndex(len(kept))
     return kept
+
+
+def episode_step(cells: pd.DataFrame) -> int:
+    """The width of the table's episodes in months: the spacing of its distinct ages.
+
+    Read off the data, so a cell table can never disagree with the width it was built with.
+    A caller that is about to expand part of a table reads it here, from the whole table,
+    before letting the table go.
+    """
+    ages = sorted(int(age) for age in cells[AGE].unique())
+    return min((b - a) for a, b in pairwise(ages)) if len(ages) > 1 else 1
 
 
 def origination_months(cells: pd.DataFrame) -> pd.Series:

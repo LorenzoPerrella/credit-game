@@ -606,6 +606,7 @@ def select(
     """
     import logging
 
+    import numpy as np
     import pandas as pd
 
     from creditsurv.config import MACRO_CANDIDATES
@@ -618,6 +619,7 @@ def select(
         UPPER_BOUND,
         WEIGHT,
         cells_to_episodes,
+        episode_step,
         observation_months,
     )
     from creditsurv.data.store import cells_path, load_cells
@@ -635,17 +637,16 @@ def select(
     ]
 
     # The training half only, and nothing of the test half is ever built: selection runs
-    # on the months the model may see.
+    # on the months the model may see. The half is taken out and the whole table let go
+    # before the expansion, which adds fifteen macro columns and peaks at several GB more.
     cells = load_cells(moratorium)
     cut = reporting_date.year * 12 + reporting_date.month - 1
-    train = cells_to_episodes(
-        cells,
-        load_macro_panel(),
-        covariates=candidates,
-        where=observation_months(cells).to_numpy() <= cut,
-    )
+    step = episode_step(cells)
+    selected = cells.iloc[np.flatnonzero(observation_months(cells).to_numpy() <= cut)]
     del cells
-    halves = pd.PeriodIndex(train["orig_period"]).year.to_numpy() % 2 == 0
+    train = cells_to_episodes(selected, load_macro_panel(), covariates=candidates, step=step)
+    del selected
+    halves = (train["orig_month"].to_numpy() // 12) % 2 == 0
 
     # Only what a fit or a covariance reads. The calendar columns, the episode end and the
     # vintage label are a quarter of the frame on ~60 million rows, and every fit in the
