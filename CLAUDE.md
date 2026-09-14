@@ -159,6 +159,11 @@ specification was.
 
 ## Open
 
+**HARP refinances are outside the model.** Freddie Mac reports no debt-to-income for them,
+so the complete-case rule drops them: 18% of the 2009Q2-2019Q1 vintages, about three times as
+likely to default as the loans kept (`docs/data_preparation.md`). Covering them takes a level
+of their own in the key -- a re-aggregation and a new selection -- never an imputed DTI.
+
 **`occupancy` survival curves cross** at 90 months: investor loans die faster early and
 slower late. No scale factor reconciles that, so the AFT assumption is violated for
 that covariate. The remedy is `ancillary` on the shape parameter — still one parametric

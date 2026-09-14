@@ -117,6 +117,37 @@ and `orig_ltv` were cleanly monotonic and this one was not.
 A loan missing a covariate is **dropped, not imputed**: imputing an underwriting
 characteristic invents the very thing being measured.
 
+#### What dropping removes
+
+Dropping is harmless only if what goes is small or looks like what stays. On the vintages it
+read, the validation (D4) found the share varying by two orders of magnitude and the dropped
+loans 8 to 16% riskier. `creditsurv aggregate --report-incomplete` now counts it over every
+vintage into `docs/reports/incomplete_cases.csv`, with the ever-default rate of the loans kept
+and of those dropped:
+
+| Vintages | Loans | Dropped | Of which no DTI | Default rate, kept | Default rate, dropped | Relative risk |
+|---|---|---|---|---|---|---|
+| 1999Q1–2009Q1 | 18,933,200 | 2.6% | 85% | 6.20% | 6.48% | 1.05 |
+| **2009Q2–2019Q1** | 15,949,082 | **18.0%** | **99.9%** | 1.60% | 4.71% | **2.94** |
+| 2019Q2–2026Q1 | 14,303,645 | 0.03% | 22% | 1.29% | 1.44% | 1.11 |
+| all | 49,185,927 | 6.9% | 97.6% | 3.35% | 4.97% | 1.48 |
+
+Rates are pooled over the vintages of a row, so each loan counts once. Within the middle row
+no vintage is below 2.3 or above 4.75, and the share dropped peaks at 39.2% in 2012Q2.
+
+**The middle row is one programme.** It opens in the first quarter of HARP, the Home
+Affordable Refinance Program, and closes after the programme expired at the end of 2018. In
+the 2012Q2 origination file, 181,302 of the 181,356 loans without a debt-to-income carry
+`harp_indicator = Y`, and not one HARP loan has one. Nearly all are no-cash-out refinances
+(181,197), at a median LTV of 98 against 74 for the rest, a quarter of them above 124.
+
+**The model therefore does not cover HARP refinances**: 2.87 million loans and 135,408
+defaults, about three times as likely to default as the loans kept from the same vintages. An
+imputed DTI would invent the one thing the programme waived. Covering them means a level of
+their own in the key -- a HARP or missing-DTI indicator -- at the cost of a re-aggregation and
+a new selection. Until that is decided the exclusion is stated rather than repaired, and it is
+listed under Open in `CLAUDE.md`.
+
 ### Categorical codes are mapped from what is in the field, not from the layout
 
 Every `CASE` in `_CATEGORICAL` lists its branches explicitly and has **no `ELSE`**, so

@@ -90,7 +90,11 @@ ORIGINATION_DROPPED: Final[dict[str, str]] = {
     "postal_code": "same, and higher cardinality still",
     "seller_name": "high cardinality; who sold the loan is not a borrower attribute",
     "prepayment_penalty_indicator": "near-constant N on conforming loans",
-    "harp_indicator": "a refinance programme flag, not a state of the loan",
+    "harp_indicator": (
+        "a refinance programme flag, not a state of the loan -- and the reason for most "
+        "incomplete cases: HARP loans carry no debt-to-income (181,302 of the 181,356 "
+        "without one in 2012Q2), so the model drops them; docs/data_preparation.md"
+    ),
     "pre_harp_loan_sequence_number": "empty in every vintage checked",
     "special_eligibility_program": "affordable-lending programme, out of scope",
     "property_valuation_method": "how the value was obtained, not what it is",
