@@ -175,7 +175,12 @@ def portfolio() -> None:
     import json
     import logging
 
+    import pandas as pd
+
     from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.ingest import load_manifest
+    from creditsurv.data.panel import EVENT, WEIGHT
+    from creditsurv.data.store import DEFAULT_POLICY, cells_path
     from creditsurv.portfolio import (
         book_summary,
         covariate_evolution,
@@ -216,8 +221,12 @@ def portfolio() -> None:
     defaults = default_rate_by_period()
     charts.default_rate_and_unemployment(defaults, macro, figures / "default_vs_unemployment.png")
 
-    # Every number docs/portfolio.md quotes, from this one pass (S7).
-    summary = book_summary(lending, outstanding, defaults)
+    # Every number docs/portfolio.md quotes (S7). The modelled figures are the cells' own,
+    # once the book has been aggregated, so they are the ones every report works from.
+    cells_file = cells_path(DEFAULT_POLICY)
+    cells = pd.read_parquet(cells_file, columns=[WEIGHT, EVENT]) if cells_file.exists() else None
+    performance_rows = sum(int(entry["perf"]) for entry in load_manifest().values())
+    summary = book_summary(lending, outstanding, performance_rows=performance_rows, cells=cells)
     destination = reports_dir() / "portfolio_summary.json"
     destination.write_text(json.dumps(summary, indent=2) + "\n")
     typer.echo("")

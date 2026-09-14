@@ -15,12 +15,29 @@ staring at coefficients would have surfaced.
 | | |
 |---|---|
 | Vintages | 1999 – 2026 |
-| Loans originated | **48,827,197** |
-| Amount originated | **$10.51 trillion** |
-| Loan-months observed | **2,876,284,955** |
-| Peak contracts outstanding | **13,220,705** |
-| Peak balance outstanding | **$3.01 trillion** |
-| Defaults observed | 1,906,460 |
+| Loans originated | **49,186,171** |
+| Amount originated | **$10.64 trillion** |
+| Rows in the performance files | 2,881,397,251 |
+| Loan-months outstanding | **2,845,574,202** |
+| Peak contracts outstanding | **13,396,700** |
+| Peak balance outstanding | **$3.07 trillion** |
+| Loan-months modelled | 2,535,194,125 |
+| Defaults modelled | **1,536,686** |
+
+Three loan-month counts, because they count three different things, and an earlier version
+of this table gave one number and left the reader to guess which. The files hold 2.88
+billion rows. The 2.85 billion that report a balance at a non-negative age are the book
+outstanding. The model is estimated on 2.54 billion: the months up to each loan's first
+terminating month, of loans whose credit score, loan-to-value and debt-to-income are known
+and whose every categorical code is mapped. The complete-case rule is what keeps the HARP
+refinances out; see [data_preparation.md](data_preparation.md#what-dropping-removes).
+
+A default is the event defined in [data_preparation.md](data_preparation.md), where a
+moratorium is not one. 1,536,686 is the count every generated report works from: the
+training and test halves of the backtest hold 1,460,306 and 76,380 of them. The validation
+had set this table's 1,906,460 against another document's 1,938,519 (S7). Each was right
+about a different run, and neither said which. The table is now written by
+`creditsurv portfolio`, into `reports/portfolio_summary.json`, by one command.
 
 ## New lending
 
@@ -47,7 +64,7 @@ That is the argument for time-varying covariates rather than a vintage dummy.
 
 ![Contracts and balance outstanding](reports/figures/outstanding_book.png)
 
-Contracts outstanding peak at 13.2 million and balance at $3.01 trillion. The two do
+Contracts outstanding peak at 13.4 million and balance at $3.07 trillion. The two do
 not peak together, because the average loan has grown: the same balance is carried by
 fewer, larger loans over time.
 
