@@ -487,6 +487,7 @@ def report(
     from creditsurv.data.panel import WEIGHT
     from creditsurv.models.aft import coefficient_table
     from creditsurv.reporting import backtesting, calibration, methodology
+    from creditsurv.reporting.calibration import covariate_steps
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     episodes, macro = _episodes(moratorium)
@@ -535,6 +536,9 @@ def report(
             reports_dir=destination,
             horizon_months=horizon,
             weights=book.set_index("loan_id")[WEIGHT],
+            steps=covariate_steps(
+                split.train, [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS], weights_col=WEIGHT
+            ),
         )
     )
 

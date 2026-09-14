@@ -153,3 +153,18 @@ def test_the_block_size_shrinks_as_the_horizon_grows() -> None:
 
     assert _block_size(60) > _block_size(327)
     assert _block_size(10**9) == 1
+
+
+def test_the_event_count_is_weighted_whenever_there_is_a_weight(encoded: pd.DataFrame) -> None:
+    """A row of an aggregated panel is a number of loan-months, not one.
+
+    The count was weighted only in the branch with no event column, so on the production
+    panel -- which carries both a weight and an event flag -- it counted *cells*.
+    methodology.md published 935,939 defaults where the fit had seen 1,866,441, and the
+    backtesting report from the same run said otherwise.
+    """
+    unweighted = fit_aft(encoded, COVARIATES, FORMULA)
+    weighted = fit_aft(encoded.assign(n=3), COVARIATES, FORMULA, weights_col="n")
+
+    assert unweighted.n_events == int(encoded["event"].sum())
+    assert weighted.n_events == 3 * unweighted.n_events
