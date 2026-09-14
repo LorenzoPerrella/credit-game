@@ -152,7 +152,10 @@ def predicted_hazard(
     is both simpler than projecting a book forward and closer to what is being asked:
     the model said this month carried this much risk, and this is what it carried.
     """
-    hazard = episode_hazards(fitted, cells.loc[:, list(covariates)], cells[AGE].to_numpy(dtype=int))
+    # Narrowed to the covariates block by block rather than copied out here: on the
+    # training half of the exact key that copy is ~3 GB, taken only to be read in slices.
+    ages = cells[AGE].to_numpy(dtype=int)
+    hazard = episode_hazards(fitted, cells, ages, columns=list(covariates))
     return pd.Series(hazard, index=cells.index, name="predicted")
 
 
@@ -222,7 +225,26 @@ def run_backtest(
     distribution: str = "weibull",
     fitted: FitResult | None = None,
 ) -> tuple[Split, FitResult, BacktestResult]:
-    """Split, fit once on the training half, and score the rest.
+    """Split, fit once on the training half, and score the rest."""
+    split = cell_split(episodes, as_of)
+    fitted, result = backtest_split(
+        split, covariates, formula, distribution=distribution, fitted=fitted
+    )
+    return split, fitted, result
+
+
+def backtest_split(
+    split: Split,
+    covariates: Sequence[str],
+    formula: str,
+    *,
+    distribution: str = "weibull",
+    fitted: FitResult | None = None,
+) -> tuple[FitResult, BacktestResult]:
+    """Fit once on the training half of a split already taken, and score the rest.
+
+    For a caller that built the halves from the cells, so the whole panel never existed
+    -- see :func:`creditsurv.backtest.splits.split_cells`.
 
     ``fitted`` accepts a model already estimated on this split's training half, so a
     caller that needs the same model for its reports does not pay for it twice. It is
@@ -230,7 +252,6 @@ def run_backtest(
     would score its own training data and return a flattering number with nothing
     visibly wrong.
     """
-    split = cell_split(episodes, as_of)
     assert_no_lookahead(split)
 
     if fitted is None:
@@ -245,5 +266,5 @@ def run_backtest(
         )
         raise ValueError(message)
 
-    result = score(fitted, split.test, covariates, as_of=as_of, train=split.train)
-    return split, fitted, result
+    result = score(fitted, split.test, covariates, as_of=split.as_of, train=split.train)
+    return fitted, result

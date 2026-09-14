@@ -70,7 +70,14 @@ def load_cells(policy: str = DEFAULT_POLICY) -> pd.DataFrame:
             f"  uv run creditsurv aggregate --moratorium {policy}"
         )
         raise FileNotFoundError(message)
-    return pd.read_parquet(path)
+    cells = pd.read_parquet(path)
+    # A table saved before its text keys were categorical comes back as Python strings.
+    # Categorised here, once, over the whole table -- which is also what keeps the levels
+    # of every later slice identical.
+    for column in cells.columns:
+        if cells[column].dtype == object:
+            cells[column] = cells[column].astype("category")
+    return cells
 
 
 #: Where fitted models are cached, under the processed directory.

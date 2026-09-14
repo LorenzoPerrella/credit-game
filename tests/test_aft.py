@@ -168,3 +168,16 @@ def test_the_event_count_is_weighted_whenever_there_is_a_weight(encoded: pd.Data
 
     assert unweighted.n_events == int(encoded["event"].sum())
     assert weighted.n_events == 3 * unweighted.n_events
+
+
+def test_narrowing_inside_the_blocks_changes_nothing(encoded: pd.DataFrame) -> None:
+    """The whole frame and the names must give the hazards a copied-out frame gives."""
+    from creditsurv.models import aft
+
+    result = fit_aft(encoded, COVARIATES, FORMULA)
+    ages = encoded["age"].to_numpy(dtype=int)
+
+    copied = aft.episode_hazards(result, encoded.loc[:, COVARIATES], ages)
+    narrowed = aft.episode_hazards(result, encoded, ages, columns=COVARIATES)
+
+    np.testing.assert_array_equal(narrowed, copied)

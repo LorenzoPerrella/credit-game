@@ -343,14 +343,20 @@ def duration_view(panel: pd.DataFrame, *, weights_col: str | None = None) -> pd.
 MAX_AGE_MONTHS: Final = 360
 
 
+#: pandas numbers monthly periods from January 1970; this module counts from year zero.
+_EPOCH_MONTHS: Final = 1970 * 12
+
+
 def _months_to_periods(months: pd.Series) -> pd.PeriodIndex:
     """Month ordinals since year zero, back to a monthly PeriodIndex.
 
-    Built from labels rather than through ``PeriodIndex(year=..., month=...)``, whose
-    keyword form is deprecated in pandas and absent from its type stubs.
+    From the ordinals directly. The first version formatted ``"YYYY-MM"`` labels and
+    parsed them back: the same periods, measured at 38 seconds for five million rows
+    against 0.02 -- eight minutes a column at the exact key's 66 million cells, with a
+    Python string per row while it ran.
     """
-    labels = (months // 12).astype(str) + "-" + (months % 12 + 1).astype(str).str.zfill(2)
-    return pd.PeriodIndex(labels, freq="M")
+    ordinals = months.to_numpy(dtype=np.int64) - _EPOCH_MONTHS
+    return pd.PeriodIndex(pd.arrays.PeriodArray(ordinals, dtype=pd.PeriodDtype("M")))
 
 
 def cells_to_episodes(
@@ -359,6 +365,8 @@ def cells_to_episodes(
     *,
     lag_months: int = 3,
     covariates: Sequence[str] | None = None,
+    where: np.ndarray | pd.Series | None = None,
+    step: int | None = None,
 ) -> pd.DataFrame:
     """Turn aggregated cells into weighted episodes the fitter can read.
 
@@ -383,21 +391,40 @@ def cells_to_episodes(
     which **44% was three categorical columns stored as Python strings**. At the cell
     counts an exact calendar key implies that is the difference between fitting and
     not, so the frame is built narrow rather than trimmed afterwards.
+
+    ``where`` expands only the cells it selects, which is how the training and test
+    halves are built without the whole panel existing first -- see
+    :func:`creditsurv.backtest.splits.split_cells`. The caller's table is never written
+    to and never copied whole: the first version copied it outright, then copied the
+    result again to drop incomplete rows.
     """
     if cells.empty:
         message = "No cells to expand."
         raise PanelValidationError(message)
 
-    episodes = cells.copy()
+    # Episodes are fixed width, so the stop is the start plus the step. The step is
+    # read off the data -- the spacing of the distinct ages -- so a cell table can
+    # never disagree with the width it was built with. Off the whole table, not the
+    # selection: a selection holding ages 0 and 12 is not a table of year-long episodes.
+    if step is None:
+        ages = sorted(int(age) for age in cells[AGE].unique())
+        step = min((b - a) for a, b in pairwise(ages)) if len(ages) > 1 else 1
+
+    if where is None:
+        episodes = cells.copy(deep=False)
+    else:
+        selected = np.asarray(where, dtype=bool)
+        if len(selected) != len(cells):
+            message = f"where selects from {len(selected):,} rows, the table has {len(cells):,}."
+            raise PanelValidationError(message)
+        episodes = cells.iloc[np.flatnonzero(selected)].copy(deep=False)
+        if episodes.empty:
+            message = "No cells to expand."
+            raise PanelValidationError(message)
+    episodes.index = pd.RangeIndex(len(episodes))
     for column in episodes.columns:
         if episodes[column].dtype == object:
             episodes[column] = episodes[column].astype("category")
-
-    # Episodes are fixed width, so the stop is the start plus the step. The step is
-    # read off the data -- the spacing of the distinct ages -- so a cell table can
-    # never disagree with the width it was built with.
-    ages = sorted(int(age) for age in episodes[AGE].unique())
-    step = min((b - a) for a, b in pairwise(ages)) if len(ages) > 1 else 1
 
     start_ages = episodes[AGE].to_numpy(dtype=np.float32)
     episodes[AGE_START] = start_ages
@@ -427,7 +454,12 @@ def cells_to_episodes(
     episodes[EXACT_OBSERVATION] = False
 
     required = [name for name in MACRO_DERIVED if name in episodes.columns]
-    return episodes.dropna(subset=required).reset_index(drop=True)
+    complete = episodes[required].notna().all(axis=1).to_numpy()
+    if complete.all():
+        return episodes
+    kept = episodes.loc[complete].copy(deep=False)
+    kept.index = pd.RangeIndex(len(kept))
+    return kept
 
 
 def origination_months(cells: pd.DataFrame) -> pd.Series:
@@ -456,3 +488,12 @@ def origination_months(cells: pd.DataFrame) -> pd.Series:
     )
     quarter = cells["vintage"].astype(str).str.extract(r"(\d{4})Q(\d)")
     return quarter[0].astype(int) * 12 + (quarter[1].astype(int) - 1) * 3
+
+
+def observation_months(cells: pd.DataFrame) -> pd.Series:
+    """The month each cell observes, as an ordinal in months since year zero.
+
+    Origination month plus age, so a cell table can be divided in calendar time before
+    it is expanded.
+    """
+    return origination_months(cells) + cells[AGE].astype(int)

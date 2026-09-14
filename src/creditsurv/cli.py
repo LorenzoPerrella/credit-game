@@ -28,6 +28,7 @@ from creditsurv.config import (
 if TYPE_CHECKING:
     import pandas as pd
 
+    from creditsurv.backtest.splits import Split
     from creditsurv.models.aft import FitResult
 
 #: The reporting date every command cuts at, unless one is given. Late on purpose: a
@@ -324,7 +325,26 @@ def _episodes(moratorium: str = "exclude") -> tuple[pd.DataFrame, pd.DataFrame]:
     from creditsurv.data.store import load_cells
 
     macro = load_macro_panel()
-    return cells_to_episodes(load_cells(moratorium), macro), macro
+    # Narrowed to the model's covariates: the whole macro family is nine columns nothing
+    # reads, and a row is never dropped for a series nothing reads.
+    episodes = cells_to_episodes(load_cells(moratorium), macro, covariates=default_covariates())
+    return episodes, macro
+
+
+def _split(moratorium: str, as_of: pd.Period) -> tuple[Split, pd.DataFrame]:
+    """The training and test halves at ``as_of``, and the macro path.
+
+    Built from the cells half by half, so the whole panel never exists beside its halves:
+    on the exact calendar key that would be ~12 GB before the first fit, on a 16 GB
+    machine. See :func:`creditsurv.backtest.splits.split_cells`.
+    """
+    from creditsurv.backtest.splits import split_cells
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.store import load_cells
+
+    macro = load_macro_panel()
+    split = split_cells(load_cells(moratorium), macro, as_of, covariates=default_covariates())
+    return split, macro
 
 
 @app.command()
@@ -355,17 +375,17 @@ def fit(
 
     import pandas as pd
 
-    from creditsurv.backtest.splits import cell_split
     from creditsurv.data.panel import WEIGHT
     from creditsurv.models.aft import Likelihood, coefficient_table, fit_aft
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     # Already encoded: cells_to_episodes writes the interval bounds as it expands,
     # because the bounds are a function of the cell's age band and its event flag.
-    encoded, _ = _episodes(moratorium)
     if as_of:
-        encoded = cell_split(encoded, pd.Period(as_of, freq="M")).train
+        encoded = _split(moratorium, pd.Period(as_of, freq="M"))[0].train
         typer.echo(f"Training on {int(encoded[WEIGHT].sum()):,} loan-months up to {as_of}.")
+    else:
+        encoded, _ = _episodes(moratorium)
 
     result = fit_aft(
         encoded,
@@ -434,14 +454,12 @@ def backtest(
 
     import pandas as pd
 
-    from creditsurv.backtest.runner import run_backtest
+    from creditsurv.backtest.runner import backtest_split
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    episodes, _ = _episodes(moratorium)
+    split, _ = _split(moratorium, pd.Period(as_of, freq="M"))
 
-    split, fitted, result = run_backtest(
-        episodes, pd.Period(as_of, freq="M"), default_covariates(), default_formula()
-    )
+    fitted, result = backtest_split(split, default_covariates(), default_formula())
     typer.echo(str(split.describe()))
     typer.echo(f"Fitted in {fitted.elapsed_seconds / 60:.1f} minutes on the training half.\n")
 
@@ -482,21 +500,19 @@ def report(
 
     import pandas as pd
 
-    from creditsurv.backtest.runner import run_backtest
-    from creditsurv.backtest.splits import cell_split
+    from creditsurv.backtest.runner import backtest_split
     from creditsurv.data.panel import WEIGHT
     from creditsurv.models.aft import coefficient_table
     from creditsurv.reporting import backtesting, calibration, methodology
     from creditsurv.reporting.calibration import covariate_steps
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    episodes, macro = _episodes(moratorium)
     covariates = default_covariates()
     formula = default_formula()
     destination = reports_dir()
 
     reporting_date = pd.Period(as_of, freq="M")
-    split = cell_split(episodes, reporting_date)
+    split, macro = _split(moratorium, reporting_date)
 
     typer.echo(f"Fitting on {int(split.train[WEIGHT].sum()):,} loan-months up to {as_of}...")
     fitted = cast(
@@ -543,7 +559,7 @@ def report(
     )
 
     typer.echo("Backtesting against what happened...")
-    _, _, result = run_backtest(episodes, reporting_date, covariates, formula, fitted=fitted)
+    _, result = backtest_split(split, covariates, formula, fitted=fitted)
     written.append(backtesting.generate(split, result, reports_dir=destination))
 
     typer.echo("\nWritten:")

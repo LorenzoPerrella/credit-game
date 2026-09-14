@@ -252,18 +252,29 @@ def actual_versus_expected(
     reads is the ratio: above one the model under-predicts, below one it
     over-predicts.
     """
-    frame = pd.DataFrame(
+    # Totals by bincount on the group codes. A group-by first builds a frame of four
+    # columns of doubles -- 2 GB on the training half of the exact key -- to fill a table
+    # of a few dozen rows.
+    codes, groups = pd.factorize(by, sort=True)
+    present = codes >= 0
+    codes = codes[present]
+    weights = exposure.to_numpy(dtype=float)[present]
+
+    def total(values: np.ndarray) -> np.ndarray:
+        summed: np.ndarray = np.bincount(codes, weights=values, minlength=len(groups))
+        return summed
+
+    grouped = pd.DataFrame(
         {
-            "group": by.to_numpy(),
-            "expected": predicted.to_numpy(dtype=float) * exposure.to_numpy(dtype=float),
-            "events": observed.to_numpy(dtype=float),
-            "exposure": exposure.to_numpy(dtype=float),
+            "group": groups,
+            "expected": total(predicted.to_numpy(dtype=float)[present] * weights),
+            "events": total(observed.to_numpy(dtype=float)[present]),
+            "exposure": total(weights),
         }
     )
-    grouped = frame.groupby("group", observed=True)[["expected", "events", "exposure"]].sum()
     grouped["expected_rate"] = grouped["expected"] / grouped["exposure"]
     grouped["actual_rate"] = grouped["events"] / grouped["exposure"]
     grouped["actual_over_expected"] = np.where(
         grouped["expected"] > 0, grouped["events"] / grouped["expected"], np.nan
     )
-    return grouped.reset_index()
+    return grouped

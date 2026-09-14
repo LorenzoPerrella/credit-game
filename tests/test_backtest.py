@@ -368,3 +368,57 @@ def test_the_in_sample_years_arrive_beside_the_out_of_time_result(panel: pd.Data
     assert set(table["group"]) == training_years
     assert table["exposure"].sum() == pytest.approx(float(split.train["n"].sum()))
     assert (table["group"] <= AS_OF.year).all(), "in-sample must stop at the reporting date"
+
+
+def test_splitting_the_cells_first_gives_the_halves_splitting_the_panel_would(
+    macro: pd.DataFrame,
+) -> None:
+    """The halves are built from the cells so the whole panel never exists beside them.
+
+    Expanding everything and then splitting holds the panel and both halves at once --
+    ~12 GB on the exact calendar key -- and the two routes must agree to the row,
+    including on the cells too early for their macro history to be built.
+    """
+    from creditsurv.backtest.splits import split_cells
+    from creditsurv.data.panel import cells_to_episodes
+
+    vintages = [1997 * 12, 2006 * 12, 2007 * 12]
+    cells = pd.DataFrame(
+        {
+            "orig_month": [month for month in vintages for _ in range(8)],
+            "purpose": pd.Categorical(["purchase", "refinance_cashout"] * 12),
+            "fico_s": [0.4] * 24,
+            "orig_ltv": [85.0] * 24,
+            "age": list(range(8)) * 3,
+            "event": ([False] * 7 + [True]) * 3,
+            "n": [50] * 24,
+        }
+    )
+    as_of = pd.Period("2007-03", freq="M")
+
+    halves = split_cells(cells, macro, as_of)
+    reference = cell_split(cells_to_episodes(cells, macro), as_of)
+
+    pd.testing.assert_frame_equal(halves.train, reference.train)
+    pd.testing.assert_frame_equal(halves.test, reference.test)
+
+
+def test_group_totals_are_the_totals_a_group_by_gives() -> None:
+    """The table is added up with bincount now, and must not move by a row or a digit."""
+    rng = np.random.default_rng(11)
+    size = 5_000
+    predicted = pd.Series(rng.uniform(0.0, 0.01, size))
+    exposure = pd.Series(rng.integers(1, 50, size).astype(float))
+    observed = pd.Series(rng.binomial(1, 0.005, size) * exposure)
+    by = pd.Series(
+        pd.Categorical(rng.choice(["b", "a", "c"], size), categories=["c", "b", "a", "unused"])
+    )
+
+    table = actual_versus_expected(predicted, observed, exposure, by)
+
+    frame = pd.DataFrame(
+        {"group": by, "expected": predicted * exposure, "events": observed, "exposure": exposure}
+    )
+    columns = ["expected", "events", "exposure"]
+    reference = frame.groupby("group", observed=True)[columns].sum().reset_index()
+    pd.testing.assert_frame_equal(table[["group", *columns]], reference, rtol=1e-12)

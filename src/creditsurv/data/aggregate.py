@@ -672,15 +672,55 @@ def build_cells(
     frames = []
     for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
         vintage = Path(perf_path).stem
-        cells = _cells_for_quarter(con, perf_path, orig_path, vintage, spec, policy)
+        cells = _compact(_cells_for_quarter(con, perf_path, orig_path, vintage, spec, policy))
         frames.append(cells)
         _LOGGER.info("%s: %d cells from %d loan-months", vintage, len(cells), int(cells["n"].sum()))
 
     # Vintage is in the key and constant within a quarter, so the pieces are already
     # disjoint: concatenating needs no second group-by.
-    combined = pd.concat(frames, ignore_index=True)
+    combined = _concatenate(frames)
     _LOGGER.info("Collapsed to %d cells", len(combined))
     return combined
+
+
+def _compact(cells: pd.DataFrame) -> pd.DataFrame:
+    """One quarter's cells, in the types they should have come back in.
+
+    DuckDB returns text as Python strings, one object per value. On the quarter-keyed
+    table three such columns were 44% of the episode frame; the exact key carries five
+    over some 66 million cells. So they become categorical as each quarter arrives,
+    before a table of strings can exist, and the origination month -- an ordinal near
+    24,000 -- is kept as a 32-bit integer.
+    """
+    for column in cells.columns:
+        if cells[column].dtype == object:
+            cells[column] = cells[column].astype("category")
+    if "orig_month" in cells.columns:
+        cells["orig_month"] = cells["orig_month"].astype("int32")
+    return cells
+
+
+def _concatenate(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """Stack the quarters, keeping every categorical column categorical.
+
+    pandas keeps a categorical through ``concat`` only when every piece declares the
+    same levels, and otherwise turns the whole column back into strings: one quarter
+    without an investor loan would undo :func:`_compact` for the entire table. The
+    levels are unified first, and sorted, so they do not depend on reading order.
+    """
+    if not frames:
+        message = "No cells to concatenate."
+        raise ValueError(message)
+    categorical = [
+        column
+        for column in frames[0].columns
+        if isinstance(frames[0][column].dtype, pd.CategoricalDtype)
+    ]
+    for column in categorical:
+        levels = sorted({level for frame in frames for level in frame[column].cat.categories})
+        for frame in frames:
+            frame[column] = frame[column].cat.set_categories(levels)
+    return pd.concat(frames, ignore_index=True)
 
 
 def cardinality_report(

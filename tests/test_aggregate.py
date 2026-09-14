@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pandas as pd
 import pytest
 
 from creditsurv.data.aggregate import CellSpec, build_cells, cardinality_report
@@ -17,8 +18,6 @@ from fixtures import origination_row, performance_row, write_archives
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pandas as pd
 
 
 @pytest.fixture(autouse=True)
@@ -564,3 +563,55 @@ def test_the_two_moratorium_treatments_are_not_equivalent(tmp_path: Path) -> Non
     lost = connection.execute(_state_of_the_book_sql(MoratoriumPolicy.CENSOR), [perf, orig]).df()
 
     assert len(kept) > len(lost), "censoring gives up the exposure after the accommodation"
+
+
+def test_text_keys_stay_categorical_through_the_concatenation() -> None:
+    """A quarter declaring different levels must not turn a column back into strings.
+
+    pandas keeps a categorical through ``concat`` only when the levels agree, and the
+    exact key's five text columns over ~66 million cells would otherwise be gigabytes of
+    Python strings. So the levels are unified, and sorted, before the quarters are stacked.
+    """
+    from creditsurv.data.aggregate import _compact, _concatenate
+
+    first = _compact(
+        pd.DataFrame(
+            {
+                "occupancy": ["owner_occupied", "investor"],
+                "orig_month": [24_000, 24_001],
+                "n": [3, 4],
+            }
+        )
+    )
+    second = _compact(
+        pd.DataFrame({"occupancy": ["second_home"], "orig_month": [24_002], "n": [5]})
+    )
+
+    combined = _concatenate([first, second])
+
+    assert isinstance(combined["occupancy"].dtype, pd.CategoricalDtype)
+    assert list(combined["occupancy"].cat.categories) == [
+        "investor",
+        "owner_occupied",
+        "second_home",
+    ]
+    assert combined["occupancy"].tolist() == ["owner_occupied", "investor", "second_home"]
+    assert combined["orig_month"].dtype == "int32"
+
+
+def test_cells_are_categorical_as_built_and_as_saved(tmp_path: Path) -> None:
+    """So no command downstream pays for a table of strings."""
+    from creditsurv.data.store import load_cells, save_cells
+
+    origination = [origination_row(f"F{i:09d}", purpose="P" if i % 2 else "C") for i in range(6)]
+    performance = [
+        performance_row(f"F{i:09d}", "201503", str(age)) for i in range(6) for age in range(3)
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path))
+
+    for column in ("vintage", "purpose", "occupancy", "has_mi", "first_time_buyer"):
+        assert isinstance(cells[column].dtype, pd.CategoricalDtype), column
+    save_cells(cells, "exclude")
+    pd.testing.assert_frame_equal(load_cells("exclude"), cells)

@@ -284,6 +284,7 @@ def episode_hazards(
     ages: np.ndarray,
     *,
     budget_bytes: int = _PREDICTION_BUDGET,
+    columns: Sequence[str] | None = None,
 ) -> np.ndarray:
     """Monthly conditional failure probability for each row, at its own age.
 
@@ -304,19 +305,26 @@ def episode_hazards(
     block is unchanged, so the result is identical to the single-call version -- which
     a test asserts, because "identical apart from chunking" is exactly the kind of
     claim that quietly stops being true.
+
+    ``columns`` narrows each block to the covariates. A caller holding the training half
+    of the whole population passes the frame and the names instead of copying the
+    covariates out first, which on the exact key is ~3 GB taken only to be sliced.
     """
     horizon = int(ages.max()) + 2
     grid = np.arange(0.0, float(horizon))
     block = _block_size(horizon, budget_bytes)
+    narrow = None if columns is None else list(columns)
 
     hazard = np.empty(len(frame), dtype=float)
     for start in range(0, len(frame), block):
         stop = min(start + block, len(frame))
         rows = frame.iloc[start:stop]
+        if narrow is not None:
+            rows = rows.loc[:, narrow]
         at = ages[start:stop]
         cumulative = result.fitter.predict_cumulative_hazard(rows, times=grid).to_numpy()
-        columns = np.arange(cumulative.shape[1])
-        increment = cumulative[at + 1, columns] - cumulative[at, columns]
+        positions = np.arange(cumulative.shape[1])
+        increment = cumulative[at + 1, positions] - cumulative[at, positions]
         hazard[start:stop] = 1.0 - np.exp(-increment)
     return hazard
 

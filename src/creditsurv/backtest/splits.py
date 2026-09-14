@@ -18,9 +18,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from creditsurv.data.panel import WEIGHT, validate_episodes
+from creditsurv.data.panel import (
+    WEIGHT,
+    cells_to_episodes,
+    observation_months,
+    validate_episodes,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import pandas as pd
 
 PERIOD = "period"
@@ -86,6 +93,40 @@ def cell_split(cells: pd.DataFrame, as_of: pd.Period) -> Split:
     if train.empty:
         message = f"No exposure at or before {as_of}."
         raise ValueError(message)
+    return Split(as_of=as_of, train=train, test=test)
+
+
+def split_cells(
+    cells: pd.DataFrame,
+    macro: pd.DataFrame,
+    as_of: pd.Period,
+    *,
+    covariates: Sequence[str] | None = None,
+) -> Split:
+    """:func:`cell_split` of the expanded panel, without the whole panel ever existing.
+
+    Expanding every cell and then splitting holds the panel and both of its halves at
+    once: on the exact calendar key, about 6 GB for the panel and 6 GB more for the
+    halves, on a 16 GB machine, before a single fit. The month a cell observes is fixed
+    by its origination month and its age, so dividing the cells first gives the same
+    halves -- which a test holds to the row -- and each half is expanded on its own.
+    """
+    cut = as_of.year * 12 + as_of.month - 1
+    months = observation_months(cells).to_numpy()
+    before = months <= cut
+    if not before.any():
+        message = f"No exposure at or before {as_of}."
+        raise ValueError(message)
+    train = cells_to_episodes(cells, macro, covariates=covariates, where=before)
+    if train.empty:
+        message = f"No exposure at or before {as_of}."
+        raise ValueError(message)
+    after = ~before
+    test = (
+        cells_to_episodes(cells, macro, covariates=covariates, where=after)
+        if after.any()
+        else train.iloc[:0].copy()
+    )
     return Split(as_of=as_of, train=train, test=test)
 
 

@@ -281,3 +281,80 @@ def test_a_quarterly_cell_table_is_read_but_warns(macro: pd.DataFrame) -> None:
         episodes = cells_to_episodes(cells, macro)
 
     assert len(episodes) == 4
+
+
+def _calendar_cells() -> pd.DataFrame:
+    """Three vintages around a reporting date, categorical as a loaded table is.
+
+    The 1997 cells cannot have their macro covariates built -- the stub panel opens that
+    January, and the lag reaches back before it -- so they are dropped, and must be
+    dropped the same way however the table is expanded.
+    """
+    vintages = [1997 * 12, 2006 * 12, 2007 * 12]
+    return pd.DataFrame(
+        {
+            "orig_month": [month for month in vintages for _ in range(6)],
+            "purpose": pd.Categorical(["purchase", "refinance_cashout"] * 9),
+            "fico_s": [0.4] * 18,
+            "orig_ltv": [85.0] * 18,
+            "age": list(range(6)) * 3,
+            "event": ([False] * 5 + [True]) * 3,
+            "n": [100] * 18,
+        }
+    )
+
+
+def test_expanding_a_selection_is_expanding_everything_and_keeping_it(
+    macro: pd.DataFrame,
+) -> None:
+    """``where`` exists so the halves can be built without the whole panel, and must not
+    change a row of what they contain."""
+    from creditsurv.data.panel import observation_months
+
+    cells = _calendar_cells()
+    selected = observation_months(cells).to_numpy() <= 2007 * 12 + 2
+
+    everything = cells_to_episodes(cells, macro)
+    chosen = cells_to_episodes(cells, macro, where=selected)
+
+    assert len(everything) < len(cells), "the incomplete 1997 cells must be exercised"
+    expected = everything[everything["period"] <= pd.Period("2007-03", freq="M")]
+    pd.testing.assert_frame_equal(chosen, expected.reset_index(drop=True))
+
+
+def test_the_step_is_read_off_the_whole_table(macro: pd.DataFrame) -> None:
+    """A selection holding ages 0 and 12 is not a table of year-long episodes."""
+    cells = pd.DataFrame(
+        {
+            "orig_month": [2006 * 12] * 4,
+            "fico_s": [0.4] * 4,
+            "orig_ltv": [85.0] * 4,
+            "age": [0, 1, 2, 12],
+            "event": [False] * 4,
+            "n": [10] * 4,
+        }
+    )
+
+    chosen = cells_to_episodes(cells, macro, where=np.array([True, False, False, True]))
+
+    assert ((chosen["age_stop"] - chosen["age_start"]) == 1.0).all()
+
+
+def test_expansion_leaves_the_cell_table_untouched(macro: pd.DataFrame) -> None:
+    """The episodes are built on a shallow copy, so the caller's table must not change."""
+    cells = _calendar_cells()
+    cells["purpose"] = cells["purpose"].astype(str)
+    before = cells.copy()
+
+    cells_to_episodes(cells, macro)
+
+    pd.testing.assert_frame_equal(cells, before)
+
+
+def test_month_ordinals_become_the_periods_their_labels_name() -> None:
+    from creditsurv.data.panel import _months_to_periods
+
+    months = pd.Series([1999 * 12, 2006 * 12 + 11, 2026 * 12 + 2])
+
+    expected = pd.PeriodIndex(["1999-01", "2006-12", "2026-03"], freq="M")
+    assert _months_to_periods(months).equals(expected)
