@@ -52,11 +52,11 @@ def train(book_dir: Path, macro_module: pd.DataFrame) -> pd.DataFrame:
     return encoded
 
 
-def _run(train: pd.DataFrame) -> tuple[SelectionRecord, Fits]:
+def _run(train: pd.DataFrame, *, identity: str = "fixture") -> tuple[SelectionRecord, Fits]:
     reference = str(train["purpose"].cat.categories[0])
     candidates = {"first_time_buyer": "N"} if "first_time_buyer" in train.columns else {}
     halves = pd.PeriodIndex(train["orig_period"]).year.to_numpy() % 2 == 0
-    fits = Fits(train, identity="fixture", as_of="2008-12", moratorium="exclude")
+    fits = Fits(train, identity=identity, as_of="2008-12", moratorium="exclude")
     record = run_selection(
         train,
         fits,
@@ -103,6 +103,74 @@ def test_a_second_run_reads_every_fit_from_the_cache(
     assert fits.record, "the second run must have asked for fits"
     assert all(entry["cached"] for entry in fits.record)
     assert second.selected == first.selected
+
+
+def test_report_finds_the_fit_the_selection_ended_on_and_starts_from_it(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``creditsurv report`` fits the specification the selection ended on, on the same rows.
+
+    Started from the selection's fit, Newton goes to the optimum a cold fit reaches, which
+    is what makes borrowing it a saving and not a different model. Under another cell table
+    there is nothing to borrow.
+    """
+    from creditsurv.data.panel import WEIGHT
+    from creditsurv.models.aft import fit_aft
+    from creditsurv.models.procedure import selected_fit
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    record, fits = _run(train)
+    ended = fits.fit(record.selected)
+    formula = record.selected.formula
+
+    found = selected_fit(identity="fixture", as_of="2008-12", moratorium="exclude", formula=formula)
+    assert found is not None
+    assert found.fitter.params_.equals(ended.fitter.params_)
+    rebuilt = selected_fit(
+        identity="rebuilt", as_of="2008-12", moratorium="exclude", formula=formula
+    )
+    assert rebuilt is None
+
+    covariates = record.selected.covariates
+    cold = fit_aft(train, covariates, formula, weights_col=WEIGHT)
+    warm = fit_aft(
+        train, covariates, formula, weights_col=WEIGHT, initial_point=found.fitter.params_
+    )
+
+    assert warm.blocks is not None
+    assert warm.blocks.method == "newton"
+    moved = (warm.fitter.params_ - cold.fitter.params_).abs() / cold.fitter.standard_errors_
+    assert moved.max() < 2e-3
+
+
+def test_report_starts_from_the_selection_only_on_the_table_it_selected_on(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The glue ``creditsurv report`` uses: the record's formula, date and policy, and the
+    cell table as it stands now. A table rebuilt since the selection offers nothing to
+    start from, and neither does a record written for another reporting date."""
+    from creditsurv.cli import _selection_start
+    from creditsurv.config import reports_dir
+    from creditsurv.data.store import cells_identity, cells_path
+    from creditsurv.reporting import selection
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CREDITSURV_REPORTS_DIR", str(tmp_path / "reports"))
+    table = cells_path("exclude")
+    table.parent.mkdir(parents=True, exist_ok=True)
+    table.write_bytes(b"cells")
+
+    record, fits = _run(train, identity=cells_identity("exclude"))
+    selection.generate(record, reports_dir=reports_dir())
+    ended = fits.fit(record.selected)
+
+    start = _selection_start("2008-12", "exclude")
+    assert start is not None
+    assert start.equals(ended.fitter.params_)
+    assert _selection_start("2009-12", "exclude") is None
+
+    table.write_bytes(b"cells, rebuilt since")
+    assert _selection_start("2008-12", "exclude") is None
 
 
 def test_the_formula_states_every_reference_level() -> None:

@@ -80,6 +80,17 @@ def load_cells(policy: str = DEFAULT_POLICY) -> pd.DataFrame:
     return cells
 
 
+def cells_identity(policy: str = DEFAULT_POLICY) -> str:
+    """The cell table's name, size and time of writing.
+
+    What a selection fit is cached under, so it is never reused for a table rebuilt since,
+    even one that happens to have as many rows.
+    """
+    path = cells_path(policy)
+    source = path.stat()
+    return f"{path.name}:{source.st_size}:{source.st_mtime_ns}"
+
+
 #: Where fitted models are cached, under the processed directory.
 FITS_DIRNAME = "fits"
 

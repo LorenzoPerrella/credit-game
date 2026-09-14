@@ -130,16 +130,13 @@ class Fits:
         where: np.ndarray | None = None,
         start: FitResult | None = None,
     ) -> FitResult:
-        described: dict[str, object] = {
-            "purpose": "selection",
-            "cells": self.identity,
-            "as_of": self.as_of,
-            "moratorium": self.moratorium,
-            "sample": sample,
-            "formula": spec.formula,
-            "distribution": "weibull",
-            "likelihood": "interval_censored",
-        }
+        described = selection_description(
+            identity=self.identity,
+            as_of=self.as_of,
+            moratorium=self.moratorium,
+            formula=spec.formula,
+            sample=sample,
+        )
         fingerprint = fit_fingerprint(**described)
         cached = load_fit(fingerprint)
         if isinstance(cached, FitResult):
@@ -165,6 +162,39 @@ class Fits:
             {**described, "minutes": minutes, "evaluations": evaluations, "cached": False}
         )
         return result
+
+
+def selection_description(
+    *, identity: str, as_of: str, moratorium: str, formula: str, sample: str = "training half"
+) -> dict[str, object]:
+    """What a selection fit is saved under, and so how it is found again."""
+    return {
+        "purpose": "selection",
+        "cells": identity,
+        "as_of": as_of,
+        "moratorium": moratorium,
+        "sample": sample,
+        "formula": formula,
+        "distribution": "weibull",
+        "likelihood": "interval_censored",
+    }
+
+
+def selected_fit(*, identity: str, as_of: str, moratorium: str, formula: str) -> FitResult | None:
+    """The selection's own fit of ``formula`` on the training half, if it made one.
+
+    The model ``creditsurv report`` fits is the specification the selection ended on, on
+    the same rows, so the selection has already found its optimum. Started there, the fit
+    takes Newton steps to the same point instead of SLSQP's whole path from lifelines' seed.
+    """
+    cached = load_fit(
+        fit_fingerprint(
+            **selection_description(
+                identity=identity, as_of=as_of, moratorium=moratorium, formula=formula
+            )
+        )
+    )
+    return cached if isinstance(cached, FitResult) else None
 
 
 @dataclass

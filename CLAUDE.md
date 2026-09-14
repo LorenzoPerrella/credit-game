@@ -21,6 +21,10 @@ over 2.54 billion loan-months under the `exclude` policy.
 - **The training half is 59.7 million rows**, and a cold fit on it took 91 minutes under
   `exclude` and 79 under `censor`. `creditsurv moratorium`, two fits and two backtests,
   took 4.8 hours.
+- **`report` starts its fit where the selection ended.** Same specification, same rows, so
+  the selection's cached fit is already the optimum, and Newton goes from there instead of
+  SLSQP from lifelines' seed. A cell table rebuilt since has another identity, and the fit
+  starts cold.
 - **Never hold the panel beside its halves.** Build them from the cells with
   `split_cells`, which lets the table go before expanding either half, keep text keys
   categorical, and let `episode_hazards` narrow each block instead of copying the

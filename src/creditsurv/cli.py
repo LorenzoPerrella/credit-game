@@ -547,7 +547,13 @@ def report(
     fitted = cast(
         "FitResult",
         _fit_once(
-            split.train, covariates, formula, as_of=as_of, reuse=reuse, moratorium=moratorium
+            split.train,
+            covariates,
+            formula,
+            as_of=as_of,
+            reuse=reuse,
+            moratorium=moratorium,
+            start=_selection_start(as_of, moratorium),
         ),
     )
 
@@ -631,7 +637,7 @@ def select(
         episode_step,
         observation_months,
     )
-    from creditsurv.data.store import cells_path, load_cells
+    from creditsurv.data.store import cells_identity, load_cells
     from creditsurv.models.procedure import CANDIDATE_CATEGORICAL, Fits, run_selection
     from creditsurv.reporting import selection
 
@@ -664,10 +670,7 @@ def select(
     for column in [name for name in train.columns if name not in keep]:
         del train[column]
 
-    # The cell table's name, size and time of writing: a cached fit is never reused for a
-    # table rebuilt since, even one that happens to have as many rows.
-    source = cells_path(moratorium).stat()
-    identity = f"{cells_path(moratorium).name}:{source.st_size}:{source.st_mtime_ns}"
+    identity = cells_identity(moratorium)
     typer.echo(f"Selecting on {len(train):,} cells, {int(train[WEIGHT].sum()):,} loan-months.")
 
     fits = Fits(train, identity=identity, as_of=as_of, moratorium=moratorium)
@@ -763,8 +766,12 @@ def _fit_once(
     as_of: str,
     reuse: bool,
     moratorium: str = "exclude",
+    start: pd.Series | None = None,
 ) -> object:
     """Fit the training half, reusing a cached model when one matches exactly.
+
+    ``start`` is where the optimiser begins -- the selection's own fit of the specification,
+    say -- and changes how long the fit takes, not where it ends.
 
     A fit on this population is two and a half hours, and the run that discovered that
     completed one and was then killed while writing its reports -- throwing away the
@@ -801,11 +808,44 @@ def _fit_once(
             return cached
         typer.echo(f"  no cached fit {fingerprint}; fitting")
 
-    fitted = fit_aft(train, covariates, formula, weights_col=WEIGHT)
+    fitted = fit_aft(train, covariates, formula, weights_col=WEIGHT, initial_point=start)
     typer.echo(f"  {fitted.elapsed_seconds / 60:.1f} minutes")
     path = save_fit(fitted, fingerprint, {**described, "minutes": fitted.elapsed_seconds / 60})
     typer.echo(f"  saved to {path}")
     return fitted
+
+
+def _selection_start(as_of: str, moratorium: str) -> pd.Series | None:
+    """The coefficients the selection ended on, when it chose on the same half and table.
+
+    ``None`` when no selection has been recorded, when it selected for another date or
+    moratorium policy, or when its fit is no longer in the cache: the fit then starts from
+    lifelines' own seed, as it always did. A record older than the cell table cannot match,
+    because the fit is cached under the table's size and time of writing.
+    """
+    import json
+
+    from creditsurv.data.store import cells_identity
+    from creditsurv.models.procedure import selected_fit
+    from creditsurv.reporting.selection import SUMMARY_FILE
+
+    path = reports_dir() / SUMMARY_FILE
+    if not path.exists():
+        return None
+    summary = json.loads(path.read_text())
+    if summary.get("as_of") != as_of or summary.get("moratorium") != moratorium:
+        return None
+    fitted = selected_fit(
+        identity=cells_identity(moratorium),
+        as_of=as_of,
+        moratorium=moratorium,
+        formula=str(summary["formula"]),
+    )
+    if fitted is None:
+        return None
+    typer.echo("  starting from the selection's fit of the specification it chose")
+    params: pd.Series = fitted.fitter.params_
+    return params
 
 
 def _origination_book(encoded: pd.DataFrame, macro: pd.DataFrame, size: int) -> pd.DataFrame:
