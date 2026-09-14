@@ -105,8 +105,10 @@ MACRO_SOURCES: Final[dict[str, tuple[str, ...]]] = {
     "term_spread": ("term_spread",),
     "credit_spread": ("credit_spread",),
     "vix": ("vix",),
+    "vix_gap": ("vix",),
     "sentiment": ("sentiment",),
     "inflation": ("cpi",),
+    "inflation_gap": ("cpi",),
     "equity_return": ("equity_index",),
     "starts_growth": ("housing_starts",),
 }
@@ -340,6 +342,8 @@ MACRO_DERIVED: Final[tuple[str, ...]] = (
     "vix",
     "sentiment",
     "starts_growth",
+    "vix_gap",
+    "inflation_gap",
 )
 
 
@@ -419,10 +423,19 @@ def add_macro_family(
         moved: np.ndarray = at(column, observation) - at(column, orig_month)
         return moved
 
-    def growth(column: str) -> np.ndarray:
-        """Year-on-year change, as a fraction."""
-        change: np.ndarray = at(column, observation) / at(column, observation, offset=12) - 1.0
+    def growth_at(column: str, when: pd.Series) -> np.ndarray:
+        """Year-on-year change to ``when``, as a fraction."""
+        change: np.ndarray = at(column, when) / at(column, when, offset=12) - 1.0
         return change
+
+    def growth(column: str) -> np.ndarray:
+        """Year-on-year change at the observation date."""
+        return growth_at(column, observation)
+
+    def growth_gap(column: str) -> np.ndarray:
+        """How far the year-on-year change has moved since the loan was written."""
+        moved: np.ndarray = growth_at(column, observation) - growth_at(column, orig_month)
+        return moved
 
     # Built only where the series exists, so a panel assembled from a partial cache
     # yields the covariates it can rather than raising on the first one it cannot.
@@ -433,9 +446,15 @@ def add_macro_family(
         ("term_spread", "term_spread", level),
         ("credit_spread", "credit_spread", level),
         ("vix", "vix", level),
+        # The gap forms of the two levels the validation called calendar effects (S5).
+        # A level is the same number for every loan in a month; its move since
+        # origination is not, so it is identified from loans living through the same
+        # month on different terms as well as from the calendar.
+        ("vix_gap", "vix", gap),
         ("sentiment", "sentiment", level),
         ("hpi_growth", "hpi", growth),
         ("inflation", "cpi", growth),
+        ("inflation_gap", "cpi", growth_gap),
         ("equity_return", "equity_index", growth),
         ("starts_growth", "housing_starts", growth),
     ):

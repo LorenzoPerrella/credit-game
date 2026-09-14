@@ -310,7 +310,41 @@ MACRO_CANDIDATES: Final[tuple[str, ...]] = (
     "vix",
     "sentiment",
     "starts_growth",
+    # Added for the validation's S5: ``vix`` and ``inflation`` enter as levels at the
+    # observation date, identical for every loan in a month, so their coefficients are
+    # calendar effects by construction. Their moves since origination vary across loans
+    # in the same month. Both forms are candidates and the selection decides.
+    "vix_gap",
+    "inflation_gap",
 )
+
+#: The economic dimension each candidate measures, fixed before any selection result.
+#:
+#: The stability rule of step 9 removes a covariate that is small, changes sign when the
+#: sample does, and sits beside a larger covariate of the **same** dimension. Which
+#: covariates share a dimension therefore has to be decided in advance: decided after the
+#: fits, the rule would be a way of dropping whatever came out inconvenient.
+ECONOMIC_DIMENSION: Final[dict[str, str]] = {
+    "fico_s": "credit quality",
+    "orig_ltv": "leverage at origination",
+    "dti": "debt burden",
+    "term_years": "term",
+    "cltv_drift": "housing",
+    "hpi_growth": "housing",
+    "starts_growth": "housing",
+    "unemp_gap": "labour",
+    "vix": "financial stress",
+    "vix_gap": "financial stress",
+    "nfci_lagged": "financial stress",
+    "credit_spread": "financial stress",
+    "rate_gap": "interest rates",
+    "policy_rate_gap": "interest rates",
+    "term_spread": "interest rates",
+    "inflation": "prices",
+    "inflation_gap": "prices",
+    "equity_return": "asset prices",
+    "sentiment": "confidence",
+}
 
 #: Order in which collinear macro covariates are given up, most expendable first.
 #:
@@ -387,9 +421,12 @@ ELIMINATED: Final[dict[str, str]] = {
 MACRO_ELIMINATION_PRIORITY: Final[tuple[str, ...]] = (
     "equity_return",
     "vix",
+    # A level gives way before its own gap form, for the reason at MACRO_CANDIDATES.
+    "vix_gap",
     "sentiment",
     "term_spread",
     "inflation",
+    "inflation_gap",
     "starts_growth",
     "policy_rate_gap",
     "credit_spread",

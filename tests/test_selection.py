@@ -314,3 +314,22 @@ def test_the_exponential_test_refuses_the_wrong_family() -> None:
 
     with pytest.raises(ValueError, match="nests inside the Weibull"):
         exponential_is_rejected(_Stub())  # type: ignore[arg-type]
+
+
+def test_every_candidate_has_an_economic_dimension_fixed_in_advance() -> None:
+    """The stability rule only compares covariates of one dimension.
+
+    A candidate without a dimension could never be judged by it, and one assigned a
+    dimension after the fits would be judged by a rule written to fit the result.
+    """
+    from creditsurv.config import (
+        ECONOMIC_DIMENSION,
+        MACRO_CANDIDATES,
+        MACRO_ELIMINATION_PRIORITY,
+        ORDINAL,
+        STATIC_CONTINUOUS,
+    )
+
+    candidates = {*MACRO_CANDIDATES, *STATIC_CONTINUOUS, *ORDINAL}
+    assert candidates <= set(ECONOMIC_DIMENSION), sorted(candidates - set(ECONOMIC_DIMENSION))
+    assert set(MACRO_ELIMINATION_PRIORITY) == set(MACRO_CANDIDATES)

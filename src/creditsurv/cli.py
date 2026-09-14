@@ -567,6 +567,73 @@ def report(
         typer.echo(f"  {path}")
 
 
+@app.command()
+def select(
+    as_of: Annotated[
+        str, typer.Option(help="Select on everything up to this month.")
+    ] = DEFAULT_AS_OF,
+    moratorium: MoratoriumOption = "exclude",
+) -> None:
+    """Run the variable selection on the training half, and write what it chose.
+
+    Steps 5 to 9 of ``docs/variable_selection.md`` on the whole population up to
+    ``--as-of``: correlation, variance inflation, univariate screening, backward
+    elimination and stability. On the whole population that is days, and it resumes --
+    every fit is saved as it lands -- so a run that stops picks up where it was.
+
+    The report goes to ``docs/reports/selection.md`` with ``selection.json`` beside it, the
+    record the configuration is tested against. See ``creditsurv.models.procedure``.
+    """
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.config import MACRO_CANDIDATES
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.panel import cells_to_episodes, observation_months
+    from creditsurv.data.store import cells_path, load_cells
+    from creditsurv.models.procedure import CANDIDATE_CATEGORICAL, Fits, run_selection
+    from creditsurv.reporting import selection
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    reporting_date = pd.Period(as_of, freq="M")
+    candidates = [
+        *STATIC_CONTINUOUS,
+        *ORDINAL,
+        *MACRO_CANDIDATES,
+        *CATEGORICAL_REFERENCE,
+        *CANDIDATE_CATEGORICAL,
+    ]
+
+    # The training half only, and nothing of the test half is ever built: selection runs
+    # on the months the model may see.
+    cells = load_cells(moratorium)
+    cut = reporting_date.year * 12 + reporting_date.month - 1
+    train = cells_to_episodes(
+        cells,
+        load_macro_panel(),
+        covariates=candidates,
+        where=observation_months(cells).to_numpy() <= cut,
+    )
+    del cells
+    halves = pd.PeriodIndex(train["orig_period"]).year.to_numpy() % 2 == 0
+
+    # The cell table's name, size and time of writing: a cached fit is never reused for a
+    # table rebuilt since, even one that happens to have as many rows.
+    source = cells_path(moratorium).stat()
+    identity = f"{cells_path(moratorium).name}:{source.st_size}:{source.st_mtime_ns}"
+    typer.echo(f"Selecting on {len(train):,} cells, {int(train['n'].sum()):,} loan-months.")
+
+    fits = Fits(train, identity=identity, as_of=as_of, moratorium=moratorium)
+    record = run_selection(train, fits, halves=halves)
+    written = selection.generate(record, reports_dir=reports_dir())
+
+    time_varying = tuple(name for name in record.selected.continuous if name in MACRO_CANDIDATES)
+    typer.echo(f"\nFormula: {record.selected.formula}")
+    typer.echo(f"TIME_VARYING_CONTINUOUS = {time_varying}")
+    typer.echo(f"Written: {written}")
+
+
 def _fit_once(
     train: pd.DataFrame,
     covariates: list[str],

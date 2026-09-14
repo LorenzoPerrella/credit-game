@@ -349,6 +349,7 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
     # covariate listed here with no clear prior would be eliminated for disagreeing
     # with a guess, which is worse than not testing it.
     "vix": -1,  # high implied volatility is a stressed economy
+    "vix_gap": -1,  # volatility risen since origination is stress the loan was not written in
     "hpi_growth": +1,  # rising house prices build equity
     #
     # ``rate_gap`` and ``policy_rate_gap`` were briefly given revised signs here, on
@@ -370,6 +371,7 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
 AMBIGUOUS_SIGNS: Final[dict[str, str]] = {
     "term_spread": "a steep curve is both cheap short funding and an expected slowdown",
     "inflation": "erodes the real debt, squeezes the real income",
+    "inflation_gap": "the same two channels, measured against the loan's own start",
     "dti": "kept as negative, but it is measured at origination and never updated",
 }
 
