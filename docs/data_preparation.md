@@ -374,6 +374,12 @@ wrong side of it: some 21 million loan-months of look-ahead that `assert_no_look
 could not see, because it checked the shifted month. The exact month costs 3.51× the
 cells, measured on nine quarters.
 
+`creditsurv check-calendar` checks that the move worked. It rebuilds the monthly default
+series from the cells and sets it against the series counted straight from the performance
+files. The validation's correlation had peaked two months out; it now peaks at a lag of
+zero, and not one of the 1,536,686 defaults is filed in a different month
+(`docs/reports/calendar_check.csv`).
+
 Text keys come back from DuckDB as Python strings. Each quarter's are made categorical as
 it arrives, and the levels are unified before the quarters are stacked, because pandas
 turns a categorical column back into strings when two pieces disagree on its levels.
