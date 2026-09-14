@@ -256,3 +256,32 @@ def _to_period(keys: pd.Series) -> pd.PeriodIndex:
     """YYYYMM integers to a monthly PeriodIndex."""
     text = keys.astype(int).astype(str)
     return pd.PeriodIndex(text.str[:4] + "-" + text.str[4:], freq="M")
+
+
+def book_summary(
+    lending: pd.DataFrame, outstanding: pd.DataFrame, defaults: pd.DataFrame
+) -> dict[str, object]:
+    """The numbers ``docs/portfolio.md`` opens with, from one pass and with their meaning.
+
+    The validation's S7 crossed that document's default count, 1,906,460, with another
+    document's 1,938,519. Each was right about a different run of a different panel, and
+    neither said which. Every figure here comes from the same pass, and the two loan-month
+    counts say what they count: every row the performance files report, against the
+    loan-months the model is estimated on.
+    """
+    years = pd.PeriodIndex(lending["period"]).year
+    return {
+        "vintages": f"{int(years.min())} - {int(years.max())}",
+        "loans_originated": int(lending["loans"].sum()),
+        "amount_originated": float(lending["amount"].sum()),
+        "loan_months_reported": int(outstanding["contracts"].sum()),
+        "peak_contracts_outstanding": int(outstanding["contracts"].max()),
+        "peak_balance_outstanding": float(outstanding["balance"].max()),
+        "loan_months_modelled": int(defaults["loan_months"].sum()),
+        "defaults_modelled": int(defaults["events"].sum()),
+        "definition": (
+            "Loan-months reported: every row of the performance files. Loan-months and "
+            "defaults modelled: the book the cells are built from -- complete cases, cut at "
+            "the first terminating month, with a moratorium not counted as a default."
+        ),
+    }

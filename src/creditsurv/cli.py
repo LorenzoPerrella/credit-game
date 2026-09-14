@@ -172,10 +172,12 @@ def portfolio() -> None:
     modelling legible -- and it is where several problems were found that staring at
     coefficients would not have surfaced.
     """
+    import json
     import logging
 
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.portfolio import (
+        book_summary,
         covariate_evolution,
         default_rate_by_period,
         origination_mix,
@@ -211,16 +213,17 @@ def portfolio() -> None:
     charts.macro_panel(macro, figures / "macro_panel.png")
 
     typer.echo("Realised default rate...")
-    charts.default_rate_and_unemployment(
-        default_rate_by_period(), macro, figures / "default_vs_unemployment.png"
-    )
+    defaults = default_rate_by_period()
+    charts.default_rate_and_unemployment(defaults, macro, figures / "default_vs_unemployment.png")
 
-    typer.echo(
-        f"\n{int(lending['loans'].sum()):,} loans, "
-        f"${lending['amount'].sum() / 1e12:.2f}tn originated; "
-        f"peak {int(outstanding['contracts'].max()):,} contracts outstanding"
-    )
-    typer.echo(f"Figures written to {figures}")
+    # Every number docs/portfolio.md quotes, from this one pass (S7).
+    summary = book_summary(lending, outstanding, defaults)
+    destination = reports_dir() / "portfolio_summary.json"
+    destination.write_text(json.dumps(summary, indent=2) + "\n")
+    typer.echo("")
+    for key, value in summary.items():
+        typer.echo(f"{key}: {value:,}" if isinstance(value, int | float) else f"{key}: {value}")
+    typer.echo(f"Figures written to {figures}; the summary to {destination}")
 
 
 @app.command()
