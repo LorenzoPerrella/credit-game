@@ -34,8 +34,9 @@ from creditsurv.config import MACRO_LAG_MONTHS
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-#: Published in arrears and revised, so lagged before entering any covariate.
-LAGGED_SERIES: tuple[str, ...] = (
+#: Published in arrears and later revised. The **publication lag**: a value for month t
+#: is not known in month t.
+PUBLICATION_LAGGED: tuple[str, ...] = (
     "unemployment_rate",
     "hpi",
     "nfci",
@@ -44,8 +45,21 @@ LAGGED_SERIES: tuple[str, ...] = (
     "housing_starts",
 )
 
-#: Published in real time and never revised, so used contemporaneously.
-CONTEMPORANEOUS_SERIES: tuple[str, ...] = (
+#: Quoted in real time and never revised, so no publication lag applies -- but a
+#: **transmission lag** does, and it applies to every series rather than to the one that
+#: was noticed.
+#:
+#: A loan is 90+ days delinquent in month t because payments were missed in t-3, t-2 and
+#: t-1. A market reading from month t cannot be what caused that. ``vix`` used to be read
+#: contemporaneously, justified by the data being available in real time -- an argument
+#: about *availability*, not *transmission* -- and the backtest showed the result:
+#: predicted default spiked in April 2025 and March 2026, the two VIX peaks of the test
+#: window, at actual-over-expected 0.47 and 0.59, while realised default did not move.
+#:
+#: Correcting only ``vix`` would repeat the pattern the validation criticised in the
+#: marginal-effects table, a fix applied to the covariate that happened to be found, so
+#: the lag reaches every market series the macro family can read.
+TRANSMISSION_LAGGED: tuple[str, ...] = (
     "mortgage_rate_30y",
     "mortgage_rate_15y",
     "treasury_10y",
@@ -53,7 +67,15 @@ CONTEMPORANEOUS_SERIES: tuple[str, ...] = (
     "credit_spread",
     "equity_index",
     "vix",
+    "policy_rate",
 )
+
+#: Every series is lagged. The two lists above record why, and it is not the same reason.
+LAGGED_SERIES: tuple[str, ...] = PUBLICATION_LAGGED + TRANSMISSION_LAGGED
+
+#: Empty on purpose. Kept so the rule it used to encode is visibly retired rather than
+#: silently absent.
+CONTEMPORANEOUS_SERIES: tuple[str, ...] = ()
 
 #: Covariates this module adds to a loan-month panel, and which must all be present
 #: for a row to be usable. ``refi_incentive`` and ``indexed_cltv`` are built only where

@@ -67,12 +67,20 @@ def test_revised_series_are_shifted_by_the_lag(macro: pd.DataFrame) -> None:
     )
 
 
-def test_the_mortgage_rate_is_not_lagged(macro: pd.DataFrame) -> None:
-    """A weekly market quote is known in real time and never revised."""
+def test_no_series_is_read_in_the_month_it_is_quoted(macro: pd.DataFrame) -> None:
+    """A market quote is known in real time, and still cannot cause a default that month.
+
+    A loan is 90+ days delinquent in month t because payments were missed in t-3 to t-1,
+    so no reading from month t can be what caused it. ``vix`` was read contemporaneously,
+    and the backtest's predicted default spiked on the two VIX peaks of the test window
+    while realised default did not move. The lag reaches every series, not only the one
+    that was noticed.
+    """
     lagged = lag_macro(macro, lag_months=3)
 
-    for column in CONTEMPORANEOUS_SERIES:
-        pd.testing.assert_series_equal(lagged[column], macro[column])
+    assert CONTEMPORANEOUS_SERIES == ()
+    for column in ("vix", "credit_spread", "mortgage_rate_30y", "policy_rate"):
+        assert value_at(lagged, "2000-06", column) == value_at(macro, "2000-03", column)
 
 
 def test_the_lag_leaves_the_opening_months_unusable(macro: pd.DataFrame) -> None:
