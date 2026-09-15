@@ -62,7 +62,10 @@ the loan block, a warm start's full Newton step went 8.31e5 standard errors, to 
 was taken because it was lower; the fit fell back on SLSQP for 76 minutes, and a flatter
 cliff would have been reported as the optimum. The polish now takes a step only to a value a
 likelihood can have, damped (Levenberg-Marquardt) until it lowers the objective, and a fit
-that ends anywhere else raises.
+that ends anywhere else raises. The next warm start, adding `unemp_gap`, took six damped
+steps from 735 standard errors out to 4e-6: **30 minutes against 76**. On three million rows
+the same start took 14 evaluations and 7 Hessians where SLSQP needed 91 evaluations, and
+ended 3e-5 standard errors from the cold optimum.
 
 ## Rules that are silent when broken
 
