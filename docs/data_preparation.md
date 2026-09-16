@@ -224,6 +224,25 @@ remove for their risk. And `inflation` changes sign between the two fits, from â
 behaving as a calendar effect rather than an elasticity, which is what the validation said
 of it (S5); the selection weighs it against its gap form.
 
+**The spike is gone.** The validation's evidence was the monthly default rate: 90.4 bp in
+May 2020 against 3.07 bp through 2019, a factor of 29 that no credit recession produces;
+2008-09, a real one, reached 24.5 bp. Recomputed on the `exclude` cells
+(`docs/reports/monthly_default_rate.csv`, written by `creditsurv portfolio`):
+
+| | Monthly default rate |
+|---|---|
+| 2019, pooled | 2.94 bp |
+| May 2020 | **2.00 bp** |
+| 2020, pooled | 2.86 bp |
+| Highest month of 2020-21 | 3.73 bp, November 2020 |
+| Highest month of 2007-11 | **25.11 bp**, November 2009 |
+
+The pandemic no longer looks like a crisis and 2009 still does. 2017, where the hurricanes
+had added 16,706 events, now sits at 3.25 bp between 2016's 3.26 and 2018's 3.31. That
+2020 comes out slightly *below* 2019 is itself a reading of the policy rather than of the
+economy: forbearance postponed the defaults it did not prevent, and the refinancing wave
+filled the book with new, low-hazard loans.
+
 ### Truncation at the first terminating month
 
 Servicing files keep reporting after a default, through foreclosure, disposition and
