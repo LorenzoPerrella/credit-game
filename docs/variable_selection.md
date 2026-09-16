@@ -9,7 +9,7 @@ point, and [data_dictionary.md](data_dictionary.md) for what the fields mean.
 
 ## Why a procedure at all
 
-With 48.8 million loans and thirty-odd candidate covariates, almost anything will be
+With 49.2 million loans and thirty-odd candidate covariates, almost anything will be
 statistically significant. Significance is not the constraint — *stability* is. A
 specification chosen by searching this sample will fit this sample and will not
 survive the next vintage.
@@ -86,7 +86,7 @@ Decisions taken, and why:
 - **`property_type`: MH and CP merged into `other`**; `number_of_units`: 2, 3 and 4
   merged into `2-4`. Both tails are below 5%, which is the `nmds` rule.
 - **`occupancy_status`: all three levels kept**, although investor (4.8%) and second
-  home (3.3%) sit below the 5% rule. With 48.8 million loans that is 2.3 million and
+  home (3.3%) sit below the 5% rule. With 49.2 million loans that is 2.4 million and
   1.6 million loans respectively — the rule exists to stop a level having nothing to
   estimate from, and neither of these is anywhere near that. They are also
   economically distinct in a way that merging would destroy. **This is a departure

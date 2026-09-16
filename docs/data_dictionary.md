@@ -8,7 +8,7 @@ once the grain of the data is clear.
 
 | Layer | Source | Scale |
 |---|---|---|
-| Loan book | Freddie Mac Single-Family Loan-Level Dataset | 48,827,197 loans, 1999–2026 |
+| Loan book | Freddie Mac Single-Family Loan-Level Dataset | 49,186,171 loans, 1999–2026 |
 | Macroeconomic series | FRED (St. Louis Fed), public CSV endpoint, no API key | 14 series, 1997–2026 |
 
 Both real, and the second is what gives the first its shape: vintages written into
@@ -40,14 +40,14 @@ is the most common way these models go wrong.
 | Layer | One row is | Measured size |
 |---|---|---|
 | 1. Raw macro | one month of one economic series | 354 months × 14 series |
-| 2. Origination record | one loan, as underwritten | **48,827,197** |
-| 3. Performance record | one loan in one calendar month | **2,876,284,955** |
-| 4. Weighted cell | a covariate combination at one age, with a count | **15,858,492** |
+| 2. Origination record | one loan, as underwritten | **49,186,171** |
+| 3. Performance record | one loan in one calendar month | **2,881,397,251** |
+| 4. Weighted cell | a covariate combination at one age, with a count | **63,639,116** under `exclude` |
 | 5. Model matrix | one *episode*, carrying that count as a weight | same as layer 4 |
 
 Layer 4 is where this project differs from a textbook treatment, and it is not an
-optimisation: a fit over 2.9 billion rows is out of reach, and a fit over 15.9
-million weighted cells takes minutes. See
+optimisation: a fit over 2.9 billion rows is out of reach, and a fit over the 59.7
+million weighted cells of the training half takes an hour and a half, block by block. See
 [data_preparation.md](data_preparation.md) for why the collapse is exact.
 
 ---
@@ -256,12 +256,14 @@ fitter is actually handed.
 | `event` | bool | Whether this cell's loan-months ended in default |
 | `n` | int | **How many loan-months the row stands for** |
 | `fico_s`, `orig_ltv`, `dti` | float | Coarse-classed, carried at the band's midpoint |
-| `purpose`, `occupancy`, `term_years` | category | Mapped levels |
+| `purpose`, `occupancy`, `term_years`, `has_mi`, `first_time_buyer` | category | Mapped levels |
 
 Episodes agreeing on every covariate and on their position in time are
 exchangeable, so they collapse into one row carrying a count, and the likelihood
-treats that count as a frequency weight. 2.52 billion loan-months become 15.86
-million cells — 159× — and the estimate is identical.
+treats that count as a frequency weight. 2.54 billion loan-months become 63.6
+million cells — 40× — and the estimate is identical. The table was four times smaller
+before the validation, when the key carried the origination quarter rather than the month
+and neither `has_mi` nor `first_time_buyer`.
 
 **`n` is a count of loan-months, never an amount.** Weighting by exposure would
 answer a different question from the one Basel and IFRS 9 ask: a PD is defined per

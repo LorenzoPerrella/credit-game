@@ -14,9 +14,9 @@ pipe-delimited files — `orig_YYYYQn.txt` with 31 fields, one row per loan, and
 | | Measured |
 |---|---|
 | Archives | 28 vintage years (1999–2026), 40 GB compressed |
-| Quarters | 107 |
-| Loans | **48,827,197** |
-| Loan-months | **2,876,284,955** |
+| Quarters | 109 |
+| Loans | **49,186,171** |
+| Loan-months reported | **2,881,397,251** |
 | Parquet after ingest | 17 GB |
 | Machine | 8 cores, 16 GB RAM |
 
@@ -26,7 +26,7 @@ materialised at any of them**.
 
 ```
 zip  ──[1 ingest]──>  parquet  ──[2 profile]──>  decisions  ──[3 aggregate]──>  cells  ──>  fit
-245 GB                 17 GB                        spec                      15.9·10⁶
+245 GB                 17 GB                        spec                      63.6·10⁶
 ```
 
 **The screening comes before the group-by, and the order is the point.** This
@@ -58,13 +58,22 @@ date. This pipeline now does the same.
 Peak memory is one batch, so a 4 GB quarter costs what a 40 MB one costs.
 
 **Column selection happens during the parse**, through `include_columns`, so the
-discarded fields are never materialised. Two groups are dropped deliberately:
+discarded fields are never materialised. Every field dropped is dropped deliberately, with
+its reason beside it in `ingest.py`:
 
 | Dropped | Why |
 |---|---|
 | `vantagescore_4`, `pre_harp_loan_sequence_number` | Empty in every vintage checked |
 | All loss columns (`actual_loss`, `net_sales_proceeds`, expenses, recoveries) | Populated only for defaulted loans, and only relevant to LGD — out of scope |
 | `postal_code`, `seller_name`, `msa` | High cardinality, no signal for a default model at this granularity |
+| `prepayment_penalty_indicator` | Near-constant `N` on conforming loans |
+| `harp_indicator`, `special_eligibility_program` | Programme flags, not states of the loan. `harp_indicator` marks exactly the loans with no debt-to-income, which the complete-case rule drops: see [What dropping removes](#what-dropping-removes) |
+| `property_valuation_method` | How a value was obtained, not what it is |
+
+Until the validation (D2) the last four were missing from this table, and so were
+`delinquency_due_to_disaster`, `borrower_assistance_plan` and `payment_deferral_flag`,
+which were not being kept either. Those three are what tell a moratorium from a default,
+and they are kept now: see [A moratorium is not a default](#a-moratorium-is-not-a-default).
 
 **Measured, not estimated:** 2024Q1 is 4.9 million rows in 4.8 seconds. 500 MB of
 text becomes 28 MB of parquet — about eighteen-fold. Over the whole dataset: 2.88
