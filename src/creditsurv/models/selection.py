@@ -137,6 +137,11 @@ def distribution_comparison(
     ``fitted`` supplies a model already estimated on this panel, and is reused instead
     of refitting its distribution. On a table of this size a fit is hours, so silently
     recomputing a model the caller already holds is not a small waste.
+
+    Each family is also held to the expected signs. A family that fits worse *and* points a
+    declared prior the wrong way is rejected twice, for independent reasons: the
+    validation's log-logistic fit on the specification before it was 623,126 AIC points
+    behind the Weibull and turned ``orig_ltv`` around.
     """
     rows = []
     for distribution in distributions:
@@ -158,12 +163,28 @@ def distribution_comparison(
                 "aic": result.aic,
                 "n_episodes": result.n_episodes,
                 "seconds": round(result.elapsed_seconds, 2),
+                "signs_against_prior": ", ".join(signs_against_prior(result)),
             }
         )
 
     table = pd.DataFrame(rows).sort_values("aic").reset_index(drop=True)
     table["delta_aic"] = table["aic"] - table["aic"].min()
     return table
+
+
+def signs_against_prior(result: FitResult) -> list[str]:
+    """The covariates whose coefficient points against its declared expected sign.
+
+    Read on the scale parameter, where every AFT family in the comparison puts its
+    covariates and where a positive coefficient lengthens survival. Only the signs declared
+    in ``EXPECTED_SIGNS`` count; a covariate without one cannot be against it.
+    """
+    summary = result.fitter.summary.loc[result.fitter._primary_parameter_name]
+    return [
+        str(name)
+        for name, coefficient in summary["coef"].items()
+        if EXPECTED_SIGNS.get(str(name), 0) * float(coefficient) < 0
+    ]
 
 
 def exponential_is_rejected(result: FitResult) -> dict[str, float]:

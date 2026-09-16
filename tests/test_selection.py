@@ -84,6 +84,8 @@ def test_regression_comparison_prefers_the_generating_family(
 
     assert table.iloc[0]["distribution"] == "weibull"
     assert set(table["n_episodes"]) == {len(encoded)}
+    # The generator's own family points every declared prior the right way.
+    assert table.iloc[0]["signs_against_prior"] == ""
 
 
 def test_shape_test_does_not_reject_a_constant_shape(encoded: pd.DataFrame) -> None:

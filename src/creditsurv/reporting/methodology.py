@@ -259,6 +259,13 @@ the one that decides.
     )
     report.heading("3. Regression fits on identical episodes", level=3).text(
         """
+The comparison is made with the covariates, and it is a sign check as well as a ranking: a
+family that fits worse and also points a declared prior the wrong way is rejected for two
+independent reasons. The validation made this comparison on the specification before it,
+which the published run had skipped: the log-logistic came 623,126 AIC points behind the
+Weibull, 28,138,529 against 27,515,402, and turned `orig_ltv`, `term_years` and investor
+occupancy around. The table is this run's own comparison, on this run's specification.
+
 The log-normal is absent because it does not converge on this panel structure --
 observed across sample sizes, with and without a penalizer, under two optimisers,
 with left truncation on and off, and with durations rescaled. The cause was not
