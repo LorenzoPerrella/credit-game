@@ -161,10 +161,10 @@ to proxy.
 A screen, not a decision. A covariate can be insignificant alone and matter in
 combination, which is why the survivors still face backward elimination.
 
-### 8. Backward elimination — two criteria, applied together
+### 8. Backward elimination — three criteria, in order
 
-`models.selection.backward_elimination`. **Thresholds: p > 0.05, and the expected
-sign.**
+`models.procedure.run_selection`. **Thresholds: the expected sign, a sign reversed
+against the covariate's own, and p > 0.05.**
 
 The sign constraint is the most useful thing in this procedure and the least common.
 A covariate whose coefficient comes out economically backwards is eliminated **even
@@ -185,9 +185,20 @@ coefficient lengthens survival and therefore *lowers* risk:
 | `nfci_lagged` | **−** | Tighter financial conditions fail sooner |
 | `mi_percent` | **+** | Insured loans are underwritten to a stricter standard |
 
+A covariate with **no** declared prior answers to its own sign instead: the sign of its
+coefficient beside the loan block at step 7. If the full model turns it around, it is
+removed. This is the marginal/conditional reversal rule the first run used on
+`credit_spread` and `term_spread`, set out under
+[the covariates given up](#credit_spread-and-term_spread--collinearity-the-textbook-case):
+a covariate whose conditional effect contradicts its own is carrying something other than
+what its name says. The executable version measures "its own" as the step-7 coefficient,
+fitted on the training half beside the loan block, rather than by reading a table of
+marginal default rates by band, which conditions on nothing and was computed on every
+month including the test window.
+
 One covariate is removed per step, the model refitted, and the test repeated. A
-backwards sign outranks any p-value: it says the specification is wrong, not that the
-evidence is thin.
+backwards sign outranks a reversal, and a reversal outranks any p-value: both say the
+specification is wrong, not that the evidence is thin.
 
 ## Running it: `creditsurv select`
 
@@ -220,6 +231,14 @@ What changed on the way, each for a stated reason:
   observation date is the same for every loan in a month, so its coefficient is a
   calendar effect by construction; its move since origination is not (S5). In the
   elimination priority a level gives way before its own gap form.
+- **The reversal rule is run, not only described.** The first version of the command
+  checked declared priors and p-values and nothing else, so its first complete run --
+  committed as it came out -- kept `rate_gap`, `inflation` and `equity_return`, three
+  covariates with no prior whose signs in the full model contradicted their own: `rate_gap`
+  −0.190 alone and +0.018 together, `inflation` +10.0 and −8.0, `equity_return` +0.43 and
+  −0.08. The rule was stated in this document before that run and applied by hand in the
+  first one; the omission was found by reading the run, and it is recorded here so the
+  reader can weigh that order of events.
 - **Every fit is polished to the optimum.** lifelines' optimiser stops on a change in the
   mean log-likelihood, and on four quarters of the book it stopped up to 5.9 standard
   errors short. A sign read off a fit that far from its optimum is not the fit's sign.

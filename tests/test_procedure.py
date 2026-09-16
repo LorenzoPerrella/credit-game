@@ -214,6 +214,38 @@ def test_a_backwards_sign_goes_before_an_insignificant_covariate() -> None:
     assert worst[1].startswith("wrong sign")
 
 
+def test_a_reversed_sign_goes_after_a_backwards_one_and_before_a_thin_one() -> None:
+    """The first run's marginal/conditional reversal rule, now run rather than argued: a
+    covariate with no declared prior whose sign in the full model contradicts its sign
+    beside the loan block alone goes, the weaker of two first. A covariate with a declared
+    prior answers to the prior instead, whatever it did alone."""
+    spec = Specification(continuous=("fico_s", "rate_gap", "inflation", "unemp_gap", "vix"))
+    alone = {"rate_gap": -0.19, "inflation": +10.0, "unemp_gap": +0.02, "vix": -0.02}
+    fitted = {
+        "fico_s": (0.3, 0.01, 0.0),
+        "rate_gap": (+0.018, 0.0008, 0.0),  # no prior, reversed, z = 22.5
+        "inflation": (-8.0, 0.063, 0.0),  # no prior, reversed, z = 127
+        "unemp_gap": (-0.04, 0.0004, 0.0),  # prior negative, agrees, though alone it did not
+        "vix": (-0.001, 0.01, 0.9),  # prior negative, agrees, insignificant
+    }
+
+    worst = _worst(spec, cast("FitResult", _fitted(fitted)), alone=alone)
+    assert worst is not None
+    assert worst[0] == "rate_gap"
+    assert worst[1].startswith("reversed sign")
+
+    backwards = {**fitted, "unemp_gap": (+0.04, 0.0004, 0.0)}
+    worst = _worst(spec, cast("FitResult", _fitted(backwards)), alone=alone)
+    assert worst is not None
+    assert worst[0] == "unemp_gap"
+
+    agreeing = {**fitted, "rate_gap": (-0.018, 0.0008, 0.0), "inflation": (+8.0, 0.063, 0.0)}
+    worst = _worst(spec, cast("FitResult", _fitted(agreeing)), alone=alone)
+    assert worst is not None
+    assert worst[0] == "vix"
+    assert worst[1].startswith("p =")
+
+
 def test_an_unstable_covariate_goes_only_beside_a_larger_one_of_its_dimension() -> None:
     table = pd.DataFrame(
         {

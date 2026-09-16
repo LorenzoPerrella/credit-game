@@ -10,8 +10,9 @@ last record it wrote part.
 5. **Weighted correlation** between the continuous candidates; pairs above 0.8 reported.
 6. **Variance inflation**, dropping the worst above 10 in the priority fixed in config.
 7. **Univariate screening**: each candidate fitted beside the loan block.
-8. **Backward elimination**: a backwards sign goes first, then a p-value above 0.05 --
-   although at this sample size no p-value is above anything.
+8. **Backward elimination**: a backwards sign goes first, then a sign reversed between the
+   screen and the full model on a covariate with no declared prior, then a p-value above
+   0.05 -- although at this sample size almost no p-value is above anything.
 9. **Stability**: the survivors fitted on two halves of the book. A covariate whose sign
    differs between them, beside a larger covariate of the same economic dimension, is not
    identified and goes: the rule the first run arrived at, now applied instead of argued.
@@ -294,10 +295,13 @@ def run_selection(
         *((name, None) for name in macro if name in surviving),
         *candidate_categorical.items(),
     ]
+    alone: dict[str, float] = {}
     for name, reference in candidates:
         result = fits.fit(base.plus(name, reference=reference), start=base_fit)
         rows = _screen(name, reference, result, base_fit, deviations)
         screened.extend(rows)
+        if reference is None:
+            alone[name] = float(str(rows[0]["coef"]))
         worst_p = max(float(str(row["p"])) for row in rows)
         if worst_p > PVALUE_THRESHOLD:
             eliminated[name] = f"step 7: p = {worst_p:.3g} beside the loan block"
@@ -314,7 +318,7 @@ def run_selection(
     steps: list[dict[str, object]] = []
     while True:
         result = fits.fit(current, start=previous)
-        worst = _worst(current, result)
+        worst = _worst(current, result, alone=alone)
         if worst is None:
             break
         name, reason, coefficient, p_value = worst
@@ -440,24 +444,44 @@ def _screen(
     return rows
 
 
-def _worst(spec: Specification, result: FitResult) -> tuple[str, str, float, float] | None:
+def _worst(
+    spec: Specification, result: FitResult, *, alone: Mapping[str, float] | None = None
+) -> tuple[str, str, float, float] | None:
     """The covariate step 8 removes next, and why -- or ``None`` when every one stays.
 
-    A backwards sign outranks any p-value, because it says the specification is wrong
-    rather than that the evidence is thin. Of several, the weakest -- smallest ``|z|`` --
-    goes first, and only one per step: removing it moves every other coefficient.
-    Categorical terms carry no expected sign, and at this sample size no p-value.
+    Three criteria, in order, and only one covariate per step, because removing it moves
+    every other coefficient; of several meeting the same criterion the weakest -- smallest
+    ``|z|`` -- goes first.
+
+    * **A backwards sign** against a declared prior. It outranks everything else: it says
+      the specification is wrong, not that the evidence is thin.
+    * **A reversed sign** on a covariate with no declared prior: its coefficient in the
+      full model points the other way from its coefficient ``alone`` beside the loan block
+      at step 7. This is the first run's marginal/conditional reversal rule, which removed
+      ``credit_spread`` and ``term_spread`` and which ``docs/variable_selection.md`` states
+      "so it can be applied consistently rather than invoked when convenient". A covariate
+      whose conditional effect contradicts its own is carrying something other than what
+      its name says. The first version of this procedure did not run it; its first
+      complete run kept three such covariates.
+    * **A p-value above 0.05**, which at this sample size almost nothing reaches.
+
+    Categorical terms carry no expected sign, are not screened alone, and at this sample
+    size have no p-value.
     """
     summary = _terms(result)
     backwards: list[tuple[float, str, float, float]] = []
+    reversed_: list[tuple[float, str, float, float]] = []
     thin: list[tuple[float, str, float, float]] = []
     for name in spec.continuous:
         coefficient = _number(summary, name, "coef")
         z = coefficient / _number(summary, name, "se(coef)")
         p_value = _number(summary, name, "p")
         expected = EXPECTED_SIGNS.get(name)
+        own = None if alone is None else alone.get(name)
         if expected is not None and coefficient * expected < 0:
             backwards.append((abs(z), name, coefficient, p_value))
+        elif expected is None and own is not None and coefficient * own < 0:
+            reversed_.append((abs(z), name, coefficient, p_value))
         elif p_value > PVALUE_THRESHOLD:
             thin.append((p_value, name, coefficient, p_value))
     if backwards:
@@ -466,6 +490,15 @@ def _worst(spec: Specification, result: FitResult) -> tuple[str, str, float, flo
         return (
             name,
             f"wrong sign: {coefficient:+.4g} where {direction} is expected",
+            coefficient,
+            p_value,
+        )
+    if reversed_ and alone is not None:
+        _, name, coefficient, p_value = min(reversed_)
+        return (
+            name,
+            f"reversed sign: {coefficient:+.4g} in the full model, "
+            f"{alone[name]:+.4g} beside the loan block alone",
             coefficient,
             p_value,
         )
