@@ -179,7 +179,7 @@ def portfolio() -> None:
 
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.ingest import load_manifest
-    from creditsurv.data.panel import EVENT, WEIGHT
+    from creditsurv.data.panel import AGE, EVENT, WEIGHT, default_rate_by_observation_month
     from creditsurv.data.store import DEFAULT_POLICY, cells_path
     from creditsurv.portfolio import (
         book_summary,
@@ -224,9 +224,18 @@ def portfolio() -> None:
     # Every number docs/portfolio.md quotes (S7). The modelled figures are the cells' own,
     # once the book has been aggregated, so they are the ones every report works from.
     cells_file = cells_path(DEFAULT_POLICY)
-    cells = pd.read_parquet(cells_file, columns=[WEIGHT, EVENT]) if cells_file.exists() else None
+    cells = (
+        pd.read_parquet(cells_file, columns=["orig_month", AGE, WEIGHT, EVENT])
+        if cells_file.exists()
+        else None
+    )
     performance_rows = sum(int(entry["perf"]) for entry in load_manifest().values())
     summary = book_summary(lending, outstanding, performance_rows=performance_rows, cells=cells)
+    if cells is not None:
+        # D1's evidence, recomputed on the book the model is fitted to: the realised
+        # default rate month by month, where forbearance once made May 2020 a factor of 29.
+        rates = default_rate_by_observation_month(cells)
+        rates.to_csv(reports_dir() / "monthly_default_rate.csv", index=False)
     destination = reports_dir() / "portfolio_summary.json"
     destination.write_text(json.dumps(summary, indent=2) + "\n")
     typer.echo("")

@@ -575,3 +575,29 @@ def defaults_by_observation_month(cells: pd.DataFrame) -> pd.Series:
     counts = np.bincount(months - first, weights=events)
     index = pd.RangeIndex(first, first + len(counts), name="month")
     return pd.Series(counts, index=index, name="defaults").round().astype("int64")
+
+
+def default_rate_by_observation_month(cells: pd.DataFrame) -> pd.DataFrame:
+    """The realised default rate of every calendar month, from the cells.
+
+    Loan-months at risk and defaults in each month, and their ratio in basis points. The
+    validation's D1 rested on this series: with forbearance counted as delinquency it
+    reached 90.4 bp in May 2020 against 3.07 bp through 2019, a factor of 29 that no credit
+    recession produces. Every month from the first to the last is present; a month with no
+    exposure has no rate.
+    """
+    months = observation_months(cells).to_numpy()
+    first = int(months.min())
+    exposure = np.bincount(months - first, weights=cells[WEIGHT].to_numpy(dtype=float))
+    defaults = defaults_by_observation_month(cells).to_numpy(dtype=float)
+    rate = np.full(len(exposure), np.nan)
+    np.divide(defaults, exposure, out=rate, where=exposure > 0)
+    ordinals = pd.Series(np.arange(first, first + len(exposure)))
+    return pd.DataFrame(
+        {
+            "period": _months_to_periods(ordinals),
+            "loan_months": exposure.round().astype("int64"),
+            "defaults": defaults.round().astype("int64"),
+            "rate_bp": rate * 1e4,
+        }
+    )

@@ -718,6 +718,32 @@ def test_the_cells_give_back_the_monthly_default_series_exactly(tmp_path: Path) 
     assert truth[truth > 0].to_dict() == rebuilt[rebuilt > 0].to_dict()
 
 
+def test_the_monthly_default_rate_is_defaults_over_the_loan_months_at_risk(
+    tmp_path: Path,
+) -> None:
+    """D1's evidence was a monthly rate: defaults over the loan-months at risk that month.
+    Four loans, one defaulting in its second month; the month after has three at risk."""
+    from creditsurv.data.panel import default_rate_by_observation_month
+
+    origination = [origination_row(f"F{i:09d}") for i in range(4)]
+    performance = [
+        performance_row(
+            f"F{i:09d}", period, str(age), delinquency="3" if (i, age) == (0, 1) else "0"
+        )
+        for i in range(4)
+        for age, period in enumerate(("201503", "201504", "201505"))
+        if i != 0 or age <= 1
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    rates = default_rate_by_observation_month(build_cells(*_sources(tmp_path)))
+
+    assert rates["period"].astype(str).tolist() == ["2015-03", "2015-04", "2015-05"]
+    assert rates["loan_months"].tolist() == [4, 4, 3]
+    assert rates["defaults"].tolist() == [0, 1, 0]
+    assert rates["rate_bp"].tolist() == pytest.approx([0.0, 2500.0, 0.0])
+
+
 def test_the_super_conforming_flag_is_mapped_from_what_the_field_holds(tmp_path: Path) -> None:
     """D6. The layout calls a blank "not super conforming" and the first mapping followed it,
     turning NULL into N. The field holds N or Y on every one of 49.2 million loans, so that
