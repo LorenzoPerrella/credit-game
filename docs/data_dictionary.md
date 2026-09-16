@@ -252,6 +252,7 @@ fitter is actually handed.
 | Field | Type | Definition |
 |---|---|---|
 | `vintage` | str | Origination quarter, `YYYYQn`, read off the file name |
+| `orig_month` | int | Origination month, as `year × 12 + month − 1`. The calendar is read from it: with only the quarter, every macro series was read about two months late (M1) |
 | `age` | int | Loan age in months, the start of the episode |
 | `event` | bool | Whether this cell's loan-months ended in default |
 | `n` | int | **How many loan-months the row stands for** |
