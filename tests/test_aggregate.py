@@ -656,6 +656,40 @@ def test_the_loans_left_out_are_counted_by_what_they_lack_and_how_they_default(
     assert row["default_rate_dropped"] == pytest.approx(0.5)
 
 
+def test_a_reperforming_sale_is_censored_only_when_nothing_came_before_it(
+    tmp_path: Path,
+) -> None:
+    """D5: code 16 is credit by definition, so censoring the sale could lose a default. It
+    does not when the book has already acted: a loan that reached 90 days defaulted there,
+    and a modified one was censored at the modification. Only a loan performing when sold
+    is censored at the sale. A prepayment is not one of these exits."""
+    from creditsurv.data.aggregate import credit_adjacent_exits
+
+    origination = [origination_row(f"F00000000{i}") for i in range(1, 6)]
+    performance = [
+        performance_row("F000000001", "201503", "0"),
+        performance_row("F000000001", "201504", "1", delinquency="3"),
+        performance_row("F000000001", "201505", "2", zero_balance="16", upb="0"),
+        performance_row("F000000002", "201503", "0"),
+        performance_row("F000000002", "201504", "1", zero_balance="16", upb="0"),
+        performance_row("F000000003", "201503", "0"),
+        performance_row("F000000003", "201504", "1", modification="Y"),
+        performance_row("F000000003", "201505", "0", zero_balance="16", upb="0"),
+        performance_row("F000000004", "201503", "0"),
+        performance_row("F000000004", "201504", "1", zero_balance="96", upb="0"),
+        performance_row("F000000005", "201503", "0"),
+        performance_row("F000000005", "201504", "1", zero_balance="01", upb="0"),
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    table = credit_adjacent_exits(*_sources(tmp_path)).set_index("code")
+    counts = ["loans", "defaulted_first", "censored_earlier", "censored_at_exit"]
+
+    assert table.loc["16", counts].to_numpy().tolist() == [3, 1, 1, 1]
+    assert table.loc["96", counts].to_numpy().tolist() == [1, 0, 0, 1]
+    assert "01" not in table.index
+
+
 def test_the_cells_give_back_the_monthly_default_series_exactly(tmp_path: Path) -> None:
     """M1. Origination month plus age is the month a default happened in, so the series
     read back from the cells must equal the one counted on the loan-months. With the

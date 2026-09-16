@@ -285,6 +285,10 @@ def aggregate(
     report_incomplete: Annotated[
         bool, typer.Option(help="Report, by vintage, the loans the cells leave out.")
     ] = False,
+    report_exits: Annotated[
+        bool,
+        typer.Option(help="Report how loans leaving by a reperforming sale or removal count."),
+    ] = False,
     moratorium: Annotated[
         str, typer.Option(help="exclude, censor or ignore: what a moratorium delinquency is.")
     ] = "exclude",
@@ -306,6 +310,7 @@ def aggregate(
         MoratoriumPolicy,
         build_cells,
         cardinality_report,
+        credit_adjacent_exits,
         incomplete_cases,
     )
     from creditsurv.data.store import save_cells
@@ -322,6 +327,18 @@ def aggregate(
         destination.parent.mkdir(parents=True, exist_ok=True)
         table.to_csv(destination, index=False)
         _echo_table(table.round(4))
+        typer.echo(f"Written: {destination}")
+        return
+    if report_exits:
+        # D5: whether censoring a reperforming sale or a removal loses a default.
+        table = credit_adjacent_exits(policy=MoratoriumPolicy(moratorium))
+        destination = reports_dir() / "credit_adjacent_exits.csv"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(destination, index=False)
+        totals = table.groupby("code")[
+            ["loans", "defaulted_first", "censored_earlier", "censored_at_exit"]
+        ].sum()
+        _echo_table(totals)
         typer.echo(f"Written: {destination}")
         return
 

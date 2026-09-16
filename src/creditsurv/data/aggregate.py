@@ -837,6 +837,79 @@ def incomplete_cases(
     return table
 
 
+#: Zero-balance codes that end a loan without a loss and without the borrower choosing to
+#: repay: a reperforming loan sale (16) and a removal (96). Both are censoring, and
+#: :func:`credit_adjacent_exits` measures what that classification rests on.
+CREDIT_ADJACENT_EXITS: Final = ("16", "96")
+
+
+def credit_adjacent_exits(
+    perf_source: PathSpec = None,
+    orig_source: PathSpec = None,
+    *,
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
+    codes: tuple[str, ...] = CREDIT_ADJACENT_EXITS,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> pd.DataFrame:
+    """How the loans leaving by a reperforming sale or a removal were treated, by vintage.
+
+    The validation's D5: code 16 is credit by definition, since a reperforming loan was
+    delinquent once, and counting its sale as censoring could lose a default. Whether it
+    does depends on what the book did first. A loan that reached 90 days has already
+    defaulted and been cut there, and one that was modified was censored at the
+    modification; only a loan still performing when it was sold is censored at the sale.
+
+    One row per vintage and code, over every loan carrying the code, under ``policy``'s
+    event definition: how many defaulted first, were censored earlier, or were censored at
+    the exit itself. A pass over every performance file, quarter by quarter.
+    """
+    perf = _resolve(perf_source, "perf")
+    orig = _resolve(orig_source, "orig")
+    if not perf or not orig:
+        message = "No ingested quarters found. Run `creditsurv ingest` first."
+        raise FileNotFoundError(message)
+    listed = ", ".join(f"'{code}'" for code in codes)
+
+    con = connection or _connect()
+    frames = []
+    for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
+        vintage = Path(perf_path).stem
+        query = f"""
+        WITH book AS ({_state_of_the_book_sql(policy, complete_only=False)}),
+        outcome AS (
+            SELECT loan_identifier, BOOL_OR(event) AS defaulted, BOOL_OR(prepaid) AS exited
+            FROM book
+            GROUP BY loan_identifier
+        ),
+        coded AS (
+            SELECT loan_identifier, MIN(zero_balance_code) AS code
+            FROM read_parquet(?)
+            WHERE zero_balance_code IN ({listed})
+            GROUP BY loan_identifier
+        ),
+        judged AS (
+            SELECT
+                c.code,
+                COALESCE(o.defaulted, FALSE) AS defaulted,
+                COALESCE(o.exited, FALSE) AND NOT COALESCE(o.defaulted, FALSE) AS at_exit
+            FROM coded c LEFT JOIN outcome o USING (loan_identifier)
+        )
+        SELECT
+            '{vintage}' AS vintage,
+            code,
+            COUNT(*) AS loans,
+            COUNT(*) FILTER (WHERE defaulted) AS defaulted_first,
+            COUNT(*) FILTER (WHERE NOT defaulted AND NOT at_exit) AS censored_earlier,
+            COUNT(*) FILTER (WHERE at_exit) AS censored_at_exit
+        FROM judged
+        GROUP BY code
+        ORDER BY code
+        """
+        frames.append(con.execute(query, [perf_path, orig_path, perf_path]).df())
+        _LOGGER.info("%s: exits by code counted", vintage)
+    return pd.concat(frames, ignore_index=True)
+
+
 def defaults_by_month(
     perf_source: PathSpec = None,
     orig_source: PathSpec = None,
