@@ -179,6 +179,27 @@ and `XX` an unknown status. Casting to a number turns both into null, which comp
 false and so reads as *performing* — correct for `XX`, wrong for `RA`. The
 zero-balance code is therefore checked alongside it, not instead of it.
 
+**Codes 16 and 96 are censoring, and what that rests on is measured.** The validation (D5)
+found both unclassified, and code 16 credit by definition: a loan sold as reperforming was
+delinquent once, so counting its sale as censoring could lose a default. Whether it does
+depends on what the book did first -- a loan that reached 90 days has already defaulted and
+been cut there, and one that was modified was censored at the modification. `creditsurv
+aggregate --report-exits` counts the three outcomes over every vintage
+(`docs/reports/credit_adjacent_exits.csv`):
+
+| Code | Loans | Defaulted first | Censored earlier | Censored at the exit |
+|---|---|---|---|---|
+| 16, reperforming loan sale | 185,526 | **167,148** (90.1%) | 15,531 (8.4%) | 2,847 (1.5%) |
+| 96, removal | 129,077 | 53,464 (41.4%) | 1,381 (1.1%) | 74,232 (57.5%) |
+
+On 2006Q1 the counts are the validation's, 5,855 and 973. **Censoring the sale loses no
+default**: nine reperforming loans in ten are counted as defaults at their first 90-day
+month, and of the rest all but 2,847 had left observation at a modification. Those 2,847
+were performing when sold and had never reached 90 days, which by this event definition is
+not a default. A removal is different in kind -- most removed loans were performing -- and
+the one thing censoring could hide there is a default about to happen when the loan was
+taken out of the dataset: at most 74,232 loans, 0.15% of the book.
+
 ### A moratorium is not a default
 
 The CARES Act required servicers to report loans in forbearance as delinquent, and
