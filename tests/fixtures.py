@@ -110,6 +110,7 @@ def origination_row(
     term: str = "360",
     mi: str = "0",
     loan_size: str = "N",
+    harp: str = "N",
 ) -> str:
     """One line of ``orig_YYYYQn.txt``. Unset fields stay empty, as they do upstream.
 
@@ -125,6 +126,7 @@ def origination_row(
     values.update(
         mortgage_insurance_percentage=mi,
         super_conforming_flag=loan_size,
+        harp_indicator=harp,
         classic_fico=fico,
         first_payment_date=first_payment,
         first_time_homebuyer_indicator=first_time,

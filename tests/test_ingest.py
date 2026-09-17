@@ -89,6 +89,25 @@ def test_values_survive_the_round_trip(archives: Path) -> None:
     assert sorted(set(ages)) == ["0", "1", "2"]
 
 
+def test_the_harp_flag_reaches_the_parquet(tmp_path: Path) -> None:
+    """HARP refinances carry no debt-to-income, so the model dropped them silently.
+
+    The flag is what lets them be a level of the key instead of an omission.
+    """
+    root = tmp_path / "FREDDIE MAC"
+    origination = [
+        origination_row("F000000001", harp="Y"),
+        origination_row("F000000002", harp="N"),
+    ]
+    performance = [performance_row(f"F{i:09d}", "201503", "0") for i in (1, 2)]
+    write_archives(root, 2015, {1: (origination, performance)})
+
+    ingest_quarter(2015, 1)
+
+    table = pq.read_table(Quarter(2015, 1).parquet_path("orig"))
+    assert table.column("harp_indicator").to_pylist() == ["Y", "N"]
+
+
 def test_ingest_is_idempotent(archives: Path) -> None:
     """An interrupted run must cost only the quarter it was in the middle of."""
     first = ingest_quarter(2015, 1)
