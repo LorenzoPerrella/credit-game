@@ -55,7 +55,17 @@ DEFAULT_DELINQUENCY: Final = 3
 #: Both were previously unclassified and so treated as ordinary censoring, which
 #: violated this module's own rule that every CASE lists its branches.
 DEFAULT_ZERO_BALANCE: Final = ("02", "03", "09", "15")
-PREPAYMENT_ZERO_BALANCE: Final = ("01", "16", "96")
+
+#: A voluntary payoff, and the only one of the three that is a prepayment.
+#:
+#: With prepayment modelled as a competing risk it has to be the borrower's own decision to
+#: repay: that is what the refinancing incentive predicts. A reperforming sale (16) and an
+#: administrative removal (96) are neither default nor repayment -- they are the loan leaving
+#: the dataset -- so they end observation and are censoring, which is what `--report-exits`
+#: measured them to be: 90.1% of reperforming sales had already defaulted, and 57.5% of
+#: removals were performing when they went.
+PREPAYMENT_ZERO_BALANCE: Final = ("01",)
+CENSORING_ZERO_BALANCE: Final = ("16", "96")
 
 
 class MoratoriumPolicy(StrEnum):
@@ -240,6 +250,7 @@ def _state_of_the_book_sql(
     )
     default_codes = ", ".join(f"'{code}'" for code in DEFAULT_ZERO_BALANCE)
     prepayment_codes = ", ".join(f"'{code}'" for code in PREPAYMENT_ZERO_BALANCE)
+    exit_codes = ", ".join(f"'{code}'" for code in CENSORING_ZERO_BALANCE)
     modification_flags = ", ".join(f"'{flag}'" for flag in MODIFICATION_FLAGS)
     # Under EXCLUDE an accommodated month is not an event but the loan stays at risk;
     # under CENSOR it ends observation the way a modification does.
@@ -274,6 +285,7 @@ def _state_of_the_book_sql(
                 FALSE
             )                                                           AS defaulted,
             COALESCE(zero_balance_code IN ({prepayment_codes}), FALSE)   AS prepaid,
+            COALESCE(zero_balance_code IN ({exit_codes}), FALSE)         AS left_the_book,
             COALESCE(modification_flag IN ({modification_flags}), FALSE)
                 OR ({censoring})                                    AS ends_observation
         FROM read_parquet(?)
@@ -290,7 +302,8 @@ def _state_of_the_book_sql(
     terminal AS (
         SELECT
             loan_identifier,
-            MIN(CASE WHEN defaulted OR prepaid THEN period_key END) AS terminal_period,
+            MIN(CASE WHEN defaulted OR prepaid OR left_the_book THEN period_key END)
+                AS terminal_period,
             MIN(CASE WHEN ends_observation THEN period_key END)     AS ended_period
         FROM perf GROUP BY loan_identifier
     ),
@@ -343,6 +356,13 @@ def _state_of_the_book_sql(
         t.eltv,
         COALESCE(t.defaulted AND t.period_key = t.terminal_period, FALSE) AS event,
         COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE)  AS prepaid,
+        COALESCE(t.left_the_book AND t.period_key = t.terminal_period, FALSE)
+                                                                         AS left_the_book,
+        CASE
+            WHEN COALESCE(t.defaulted AND t.period_key = t.terminal_period, FALSE) THEN 'default'
+            WHEN COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE) THEN 'prepayment'
+            ELSE 'none'
+        END                                                              AS outcome,
         o.*
     FROM truncated t JOIN orig o USING (loan_identifier)
     {complete}
@@ -601,7 +621,10 @@ def _select_columns(spec: CellSpec) -> str:
     columns += [f"{_CATEGORICAL[name]} AS {name}" for name in spec.categorical]
     columns.append(_age_expression(spec.episode_months))
     columns.append(_ORIGINATION_MONTH)
-    columns.append("event")
+    # Three states, not a flag: a cell's loan-months ended in default, in a voluntary
+    # repayment, or in neither. Prepayment is a competing risk, and a model of it needs to
+    # tell the two exits apart.
+    columns.append("outcome")
     return ",\n            ".join(columns)
 
 
@@ -887,8 +910,11 @@ def credit_adjacent_exits(
         vintage = Path(perf_path).stem
         query = f"""
         WITH book AS ({_state_of_the_book_sql(policy, complete_only=False)}),
-        outcome AS (
-            SELECT loan_identifier, BOOL_OR(event) AS defaulted, BOOL_OR(prepaid) AS exited
+        per_loan AS (
+            SELECT
+                loan_identifier,
+                BOOL_OR(event) AS defaulted,
+                BOOL_OR(left_the_book) AS exited
             FROM book
             GROUP BY loan_identifier
         ),
@@ -903,7 +929,7 @@ def credit_adjacent_exits(
                 c.code,
                 COALESCE(o.defaulted, FALSE) AS defaulted,
                 COALESCE(o.exited, FALSE) AND NOT COALESCE(o.defaulted, FALSE) AS at_exit
-            FROM coded c LEFT JOIN outcome o USING (loan_identifier)
+            FROM coded c LEFT JOIN per_loan o USING (loan_identifier)
         )
         SELECT
             '{vintage}' AS vintage,
@@ -952,7 +978,7 @@ def defaults_by_month(
         )
         SELECT
             (period_key // 100) * 12 + (period_key % 100) - 1 AS month,
-            SUM(CAST(event AS INTEGER)) AS defaults
+            SUM(CASE WHEN outcome = 'default' THEN 1 ELSE 0 END) AS defaults
         FROM classed
         {_not_null_filter(spec)}
         GROUP BY 1

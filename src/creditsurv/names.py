@@ -579,7 +579,18 @@ _VARIABLES: Final[tuple[Variable, ...]] = (
         former="orig_period",
     ),
     _structure("vintage", "Vintage", "The quarter the loan was written in."),
-    _structure("event", "Default", "Whether the loan-month ended in default."),
+    _structure("event", "Default", "Whether the loan-month ended in the cause being fitted."),
+    Variable(
+        "outcome",
+        "Outcome",
+        Kind.STRUCTURE,
+        "How a cell's loan-months ended.",
+        levels=(
+            Level("default", "Default"),
+            Level("prepayment", "Prepayment"),
+            Level("none", "Still in the book"),
+        ),
+    ),
     _structure("prepaid", "Prepayment", "Whether the loan-month ended in a voluntary payoff."),
     _structure(
         "loan_months",

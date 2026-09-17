@@ -83,8 +83,8 @@ def test_default_is_flagged_once_and_the_loan_is_cut(tmp_path: Path) -> None:
     cells = build_cells(*_sources(tmp_path))
 
     assert int(cells["loan_months"].sum()) == 3, "the loan should stop at its first defaulted month"
-    assert int(cells.loc[cells["event"], "loan_months"].sum()) == 1
-    assert int(cells.loc[cells["event"], "age"].iloc[0]) == 2
+    assert int(cells.loc[cells["outcome"] == "default", "loan_months"].sum()) == 1
+    assert int(cells.loc[cells["outcome"] == "default", "age"].iloc[0]) == 2
 
 
 def test_an_reo_code_counts_even_when_delinquency_is_alphanumeric(tmp_path: Path) -> None:
@@ -102,21 +102,38 @@ def test_an_reo_code_counts_even_when_delinquency_is_alphanumeric(tmp_path: Path
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells.loc[cells["event"], "loan_months"].sum()) == 1
+    assert int(cells.loc[cells["outcome"] == "default", "loan_months"].sum()) == 1
 
 
-def test_prepayment_is_censoring_not_an_event(tmp_path: Path) -> None:
-    origination = [origination_row("F000000001")]
+def test_the_three_outcomes_are_told_apart(tmp_path: Path) -> None:
+    """Default, a voluntary payoff, and the loan leaving the dataset are three things.
+
+    Prepayment is a competing risk now, so it has to be the borrower's own decision to repay:
+    a reperforming sale (16) and a removal (96) are neither default nor repayment. They end
+    observation, as they did, but as censoring.
+    """
+    origination = [origination_row(f"F00000000{i}") for i in range(1, 5)]
     performance = [
         performance_row("F000000001", "201503", "0"),
-        performance_row("F000000001", "201504", "1", zero_balance="01"),
+        performance_row("F000000001", "201504", "1", delinquency="3"),
+        performance_row("F000000002", "201503", "0"),
+        performance_row("F000000002", "201504", "1", zero_balance="01", upb="0"),
+        performance_row("F000000003", "201503", "0"),
+        performance_row("F000000003", "201504", "1", zero_balance="16", upb="0"),
+        performance_row("F000000004", "201503", "0"),
+        performance_row("F000000004", "201504", "1", zero_balance="96", upb="0"),
     ]
     _ingested(tmp_path, origination, performance)
 
     cells = build_cells(*_sources(tmp_path))
+    by_outcome = cells.groupby(cells["outcome"].astype(str))["loan_months"].sum()
 
-    assert not cells["event"].any()
-    assert int(cells["loan_months"].sum()) == 2
+    assert int(by_outcome.get("default", 0)) == 1
+    assert int(by_outcome.get("prepayment", 0)) == 1
+    # Eight loan-months in, two of them ending in an event: the other six are still at risk
+    # as far as the likelihood is concerned, including the two sold and removed.
+    assert int(by_outcome.get("none", 0)) == 6
+    assert int(cells["loan_months"].sum()) == 8
 
 
 def test_sentinel_values_drop_the_loan(tmp_path: Path) -> None:
@@ -272,9 +289,9 @@ def test_the_event_flag_is_never_null(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert cells["event"].dtype == bool
-    assert not cells["event"].isna().any()
-    assert int(cells.loc[cells["event"], "loan_months"].sum()) == 1
+    assert set(cells["outcome"].astype(str)) <= {"default", "prepayment", "none"}
+    assert not cells["outcome"].isna().any()
+    assert int(cells.loc[cells["outcome"] == "default", "loan_months"].sum()) == 1
 
 
 def test_no_categorical_mapping_has_an_else_branch() -> None:
@@ -533,7 +550,7 @@ def test_a_statutory_payment_holiday_is_not_a_default(tmp_path: Path) -> None:
         # Per loan, always. The first version of this test pooled both loans and read
         # the unmarked borrower's default at age 2 as a failure of the exclusion.
         rows = frame[frame["loan_identifier"] == loan]
-        return [int(age) for age in rows.loc[rows["event"], "age"]]
+        return [int(age) for age in rows.loc[rows["outcome"] == "default", "age"]]
 
     def last_age(frame: pd.DataFrame, loan: str) -> int:
         return int(frame.loc[frame["loan_identifier"] == loan, "age"].max())

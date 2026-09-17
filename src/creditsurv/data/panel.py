@@ -56,6 +56,13 @@ UPPER_BOUND: Final = "upper_bound"
 EXACT_OBSERVATION: Final = "exact_observation"
 WEIGHT: Final = "loan_months"
 
+#: How a cell's loan-months ended: in default, in a voluntary repayment, or in neither.
+OUTCOME: Final = "outcome"
+DEFAULT_CAUSE: Final = "default"
+PREPAYMENT_CAUSE: Final = "prepayment"
+CENSORED: Final = "none"
+CAUSES: Final = (DEFAULT_CAUSE, PREPAYMENT_CAUSE)
+
 #: Columns every canonical loan-month panel must carry.
 REQUIRED_COLUMNS: Final[tuple[str, ...]] = (LOAN_ID, AGE, EVENT)
 
@@ -564,6 +571,7 @@ def cells_to_episodes(
     covariates: Sequence[str] | None = None,
     where: np.ndarray | pd.Series | None = None,
     step: int | None = None,
+    cause: str = DEFAULT_CAUSE,
 ) -> pd.DataFrame:
     """Turn aggregated cells into weighted episodes the fitter can read.
 
@@ -639,7 +647,10 @@ def cells_to_episodes(
     episodes["origination_period"] = _months_to_periods(origination_month)
     episodes["period"] = _months_to_periods(observation)
 
-    defaulted = episodes[EVENT].to_numpy(dtype=bool)
+    # The bounds are the bounds of *this* cause: for prepayment, a default is censoring
+    # exactly as a survivor is, which is what makes the two cause-specific hazards separable.
+    defaulted = ended_in(episodes, cause)
+    episodes[EVENT] = defaulted
     start = episodes[AGE_START].to_numpy(dtype=np.float32)
     stop = episodes[AGE_STOP].to_numpy(dtype=np.float32)
     episodes[LOWER_BOUND] = np.where(defaulted, start, stop)
@@ -660,6 +671,22 @@ def cells_to_episodes(
     kept = episodes.loc[complete].copy(deep=False)
     kept.index = pd.RangeIndex(len(kept))
     return kept
+
+
+def ended_in(frame: pd.DataFrame, cause: str = DEFAULT_CAUSE) -> np.ndarray:
+    """Which rows ended in ``cause``, whichever way the table records its outcome.
+
+    A cell table carries the three-state ``outcome``; an episode frame carries the boolean
+    ``event`` of the cause it was expanded for, and a table written before the outcome
+    existed carries only a default flag.
+    """
+    if OUTCOME in frame.columns:
+        ended: np.ndarray = (frame[OUTCOME].astype(str) == cause).to_numpy()
+        return ended
+    if cause != DEFAULT_CAUSE:
+        message = f"This table records defaults only; it cannot say which rows ended in {cause}."
+        raise PanelValidationError(message)
+    return frame[EVENT].to_numpy(dtype=bool)
 
 
 def episode_step(cells: pd.DataFrame) -> int:
@@ -719,7 +746,7 @@ def defaults_by_observation_month(cells: pd.DataFrame) -> pd.Series:
     the same series. Every month from the first to the last is present, zero or not.
     """
     months = observation_months(cells).to_numpy()
-    defaulted = cells[EVENT].to_numpy(dtype=bool)
+    defaulted = ended_in(cells)
     events = np.where(defaulted, cells[WEIGHT].to_numpy(dtype=float), 0.0)
     first = int(months.min())
     counts = np.bincount(months - first, weights=events)

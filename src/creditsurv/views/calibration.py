@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from creditsurv.data.panel import AGE, EVENT, WEIGHT
+from creditsurv.data.panel import AGE, DEFAULT_CAUSE, WEIGHT, ended_in
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -51,6 +51,7 @@ def survival_by_age(
     *,
     groups: pd.Series | None = None,
     z: float = 1.96,
+    cause: str = DEFAULT_CAUSE,
 ) -> pd.DataFrame:
     """Kaplan-Meier and the model's survival, age by age, for each group.
 
@@ -64,7 +65,8 @@ def survival_by_age(
     """
     ages = episodes[AGE].to_numpy(dtype=np.int64)
     weight = episodes[WEIGHT].to_numpy(dtype=float)
-    defaulted = weight * episodes[EVENT].to_numpy(dtype=bool)
+    # Episodes carry the flag of the cause they were expanded for; cells carry the outcome.
+    defaulted = weight * ended_in(episodes, cause)
     codes, labels = _codes(groups, len(episodes))
     present = codes >= 0
 
@@ -119,6 +121,7 @@ def actual_expected(
     episodes: pd.DataFrame,
     hazard: np.ndarray,
     dimensions: Mapping[str, pd.Series | pd.Categorical | np.ndarray],
+    cause: str = DEFAULT_CAUSE,
 ) -> pd.DataFrame:
     """Defaults against the model's expectation, for every combination of ``dimensions``.
 
@@ -126,7 +129,7 @@ def actual_expected(
     defaults expected, both rates, and their ratio -- above one the model under-predicts.
     """
     weight = episodes[WEIGHT].to_numpy(dtype=float)
-    defaulted = weight * episodes[EVENT].to_numpy(dtype=bool)
+    defaulted = weight * ended_in(episodes, cause)
 
     combined = np.zeros(len(episodes), dtype=np.int64)
     present = np.ones(len(episodes), dtype=bool)

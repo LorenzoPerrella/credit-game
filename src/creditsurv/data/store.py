@@ -18,6 +18,7 @@ import logging
 import pickle
 from typing import TYPE_CHECKING, Final
 
+import numpy as np
 import pandas as pd
 
 from creditsurv import names
@@ -116,6 +117,15 @@ def modernise_cells(cells: pd.DataFrame) -> pd.DataFrame:
     modern = cells.rename(columns=renames)
     if "fico_s" in renames:
         modern["credit_score"] = modern["credit_score"] * 50.0 + 700.0
+    if "outcome" in modern.columns:
+        pass
+    elif "event" in modern.columns:
+        # Written before the outcome had three states. The defaults are there; the
+        # prepayments are not, which is the reason the cells are rebuilt.
+        defaulted = modern["event"].to_numpy(dtype=bool)
+        modern["outcome"] = pd.Categorical(
+            np.where(defaulted, "default", "none"), categories=["default", "none"]
+        )
     for column, levels in names.former_levels().items():
         if column in modern.columns and isinstance(modern[column].dtype, pd.CategoricalDtype):
             present = {
