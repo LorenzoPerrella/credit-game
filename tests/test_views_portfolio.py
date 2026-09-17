@@ -9,7 +9,12 @@ import pytest
 
 from creditsurv.data.aggregate import build_cells
 from creditsurv.data.ingest import Quarter, ingest_quarter
-from creditsurv.views.portfolio import book_by_segment, lending_by_segment, vintage_curves
+from creditsurv.views.portfolio import (
+    book_by_segment,
+    lending_by_segment,
+    underwriting_by_vintage,
+    vintage_curves,
+)
 from fixtures import origination_row, performance_row, write_archives
 
 if TYPE_CHECKING:
@@ -97,3 +102,12 @@ def test_vintage_curves_cumulate_default_on_each_vintage_s_risk_sets(
     assert vintage.loc[1, "at_risk"] == pytest.approx(3.0)
     assert vintage.loc[1, "cumulative_default"] == pytest.approx(1 / 3)
     assert isinstance(curves, pd.DataFrame)
+
+
+def test_underwriting_quartiles_are_one_long_table_by_measure(sources: tuple[str, str]) -> None:
+    table = underwriting_by_vintage(sources[1])
+
+    assert set(table["measure"]) == {"score", "ltv", "dti"}
+    assert (table["loans"] == 3).all()
+    assert (table["q25"] <= table["q50"]).all()
+    assert (table["q50"] <= table["q75"]).all()

@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 
     from creditsurv.backtest.splits import Split
     from creditsurv.models.aft import FitResult, Likelihood
-    from creditsurv.views.tables import View
 
 #: The reporting date every command cuts at, unless one is given. Late on purpose: a
 #: credit model wants every loan-month it can get in training, and the test window only
@@ -679,8 +678,9 @@ def views(
         covariates_over_time,
         projection_views,
     )
-    from creditsurv.views.portfolio import book_by_segment, lending_by_segment, vintage_curves
-    from creditsurv.views.tables import View, write_views
+    from creditsurv.views.portfolio import portfolio_views
+    from creditsurv.views.selection import selection_views
+    from creditsurv.views.tables import write_views
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     destination = tables_dir()
@@ -747,95 +747,14 @@ def views(
     if portfolio:
         typer.echo("The book by segment, the lending, the vintage curves and the macro series...")
         cells = pd.read_parquet(cells_path(moratorium), columns=["orig_month", AGE, WEIGHT, EVENT])
-        macro_panel = load_macro_panel()
-        macro_panel.index = macro_panel.index.astype(str)
-        series = (
-            macro_panel.rename_axis("month")
-            .reset_index()
-            .melt(id_vars="month", var_name="series", value_name="value")
-            .dropna()
+        write_views(
+            portfolio_views(cells, load_macro_panel(), policy=MoratoriumPolicy(moratorium)),
+            destination,
         )
-        tables = [
-            View(
-                "book_by_segment",
-                "The book by month and segment",
-                "Loan-months, defaults and prepayments by calendar month, with the default rate "
-                "and the conditional prepayment rate. The whole book, including the loans the "
-                "model leaves out.",
-                book_by_segment(policy=MoratoriumPolicy(moratorium)),
-                source="parquet",
-            ),
-            View(
-                "lending_by_segment",
-                "Lending by vintage year and segment",
-                "Loans and amounts written, each loan counted once, with shares of the year.",
-                lending_by_segment(),
-                source="parquet",
-            ),
-            View(
-                "vintage_curves",
-                "Cumulative default by vintage",
-                "Kaplan-Meier of each vintage year on its own risk sets, from the cells.",
-                vintage_curves(cells),
-                source="cells",
-            ),
-            View(
-                "macro_series",
-                "Macroeconomic series",
-                "The monthly FRED series every macro covariate is built from, before lags.",
-                series,
-                source="fred",
-            ),
-        ]
-        write_views(tables, destination)
-        del cells, tables
+        del cells
 
-    selection = _selection_views()
-    if selection:
-        write_views(selection, destination)
+    write_views(selection_views(reports_dir()), destination)
     typer.echo(f"Written: {destination}")
-
-
-def _selection_views() -> list[View]:
-    """The record ``creditsurv select`` wrote, as views: what the selection saw and decided."""
-    import pandas as pd
-
-    from creditsurv.reporting.selection import FITS_FILE, TABLE_FILES
-    from creditsurv.views.tables import View
-
-    source = reports_dir()
-    described = {
-        "correlation": "Exposure-weighted correlation between the continuous candidates.",
-        "collinear": "Pairs correlated beyond 0.8, reported and not resolved.",
-        "inflation": "Candidates removed for variance inflation above 10, in the fixed order.",
-        "screening": "Each candidate beside the loan block: sign, effect, likelihood ratio.",
-        "elimination": "Backward elimination, one covariate a step, and the rule that fired.",
-        "stability": "Standardised effects on the training half and on each half of the book.",
-        "fits": "Every model the selection estimated, its time, and whether it was cached.",
-    }
-    files = {**TABLE_FILES, "fits": FITS_FILE}
-    views = []
-    for name, filename in files.items():
-        path = source / filename
-        if not path.exists():
-            continue
-        frame = pd.read_csv(path, index_col=0 if name == "correlation" else None)
-        if name == "correlation":
-            frame = (
-                frame.rename_axis("first")
-                .reset_index()
-                .melt(id_vars="first", var_name="second", value_name="correlation")
-            )
-        views.append(
-            View(
-                f"selection_{name}",
-                f"Selection: {name}",
-                described[name],
-                frame,
-                source="selection",
-            )
-        )
-    return views
 
 
 @app.command()

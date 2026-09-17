@@ -37,6 +37,7 @@ from creditsurv.data.aggregate import (
 from creditsurv.data.panel import origination_months
 from creditsurv.views.calibration import WHOLE_BOOK, survival_by_age
 from creditsurv.views.segments import SEGMENTS
+from creditsurv.views.tables import View
 
 if TYPE_CHECKING:
     import duckdb
@@ -232,3 +233,94 @@ def vintage_curves(cells: pd.DataFrame) -> pd.DataFrame:
     return table.drop(columns=["km_lower", "km_upper"]).assign(
         cumulative_default_pct=lambda frame: frame["cumulative_default"] * 100.0
     )
+
+
+def macro_series(panel: pd.DataFrame) -> pd.DataFrame:
+    """The monthly macro panel as one long table: month, series, value."""
+    frame = panel.copy()
+    frame.index = frame.index.astype(str)
+    long: pd.DataFrame = (
+        frame.rename_axis("month")
+        .reset_index()
+        .melt(id_vars="month", var_name="series", value_name="value")
+        .dropna()
+    )
+    return long
+
+
+def underwriting_by_vintage(
+    orig_source: PathSpec = None,
+    *,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> pd.DataFrame:
+    """Quartiles of credit score, loan-to-value and debt-to-income by vintage year, long.
+
+    The origination files alone, with the sentinels removed: the band is who was being lent
+    to, the median the middle of the book.
+    """
+    from creditsurv.portfolio import covariate_evolution
+
+    wide = covariate_evolution(None, orig_source, connection=connection)
+    pieces = []
+    for measure in ("score", "ltv", "dti"):
+        columns = [f"{measure}_{label}" for label in ("q25", "q50", "q75")]
+        if not set(columns) <= set(wide.columns):
+            continue
+        piece = wide[["year", "loans", *columns]].rename(
+            columns=dict(zip(columns, ("q25", "q50", "q75"), strict=True))
+        )
+        pieces.append(piece.assign(measure=measure))
+    long: pd.DataFrame = pd.concat(pieces, ignore_index=True)
+    return long[["measure", "year", "loans", "q25", "q50", "q75"]]
+
+
+def portfolio_views(
+    cells: pd.DataFrame,
+    macro_panel: pd.DataFrame,
+    perf_source: PathSpec = None,
+    orig_source: PathSpec = None,
+    *,
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> list[View]:
+    """Every view of the book itself: none needs a model."""
+    return [
+        View(
+            "book_by_segment",
+            "The book by month and segment",
+            "Loan-months, defaults and prepayments by calendar month, with the default rate and "
+            "the conditional prepayment rate. The whole book, including the loans the model "
+            "leaves out.",
+            book_by_segment(perf_source, orig_source, policy=policy, connection=connection),
+            source="parquet",
+        ),
+        View(
+            "lending_by_segment",
+            "Lending by vintage year and segment",
+            "Loans and amounts written, each loan counted once, with shares of the year.",
+            lending_by_segment(perf_source, orig_source, connection=connection),
+            source="parquet",
+        ),
+        View(
+            "underwriting_by_vintage",
+            "Underwriting by vintage",
+            "Quartiles of credit score, loan-to-value and debt-to-income by vintage year, "
+            "sentinels removed.",
+            underwriting_by_vintage(orig_source, connection=connection),
+            source="parquet",
+        ),
+        View(
+            "vintage_curves",
+            "Cumulative default by vintage",
+            "Kaplan-Meier of each vintage year on its own risk sets, from the cells.",
+            vintage_curves(cells),
+            source="cells",
+        ),
+        View(
+            "macro_series",
+            "Macroeconomic series",
+            "The monthly FRED series every macro covariate is built from, before any lag.",
+            macro_series(macro_panel),
+            source="fred",
+        ),
+    ]
