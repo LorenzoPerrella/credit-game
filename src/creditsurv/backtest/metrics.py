@@ -187,24 +187,49 @@ def weighted_calibration(
             "events": observed.to_numpy(dtype=float),
             "exposure": exposure.to_numpy(dtype=float),
         }
-    ).sort_values("predicted")
-
-    cumulative = frame["exposure"].cumsum()
-    frame["bucket"] = np.minimum(
-        (cumulative / frame["exposure"].sum() * n_buckets).astype(int), n_buckets - 1
     )
+    frame["bucket"] = exposure_buckets(
+        frame["predicted"].to_numpy(), frame["exposure"].to_numpy(), n_buckets=n_buckets
+    )
+    # The expected rate is the expected defaults over the loan-months, as the actual rate is.
+    # A plain mean of the cells' hazards gave a cell of three loan-months the say of one of
+    # thirty thousand; on the test window it put the riskiest decile at 0.929 where it is
+    # 1.064, and every decile below one.
+    frame["expected_defaults"] = frame["predicted"] * frame["exposure"]
 
     grouped = frame.groupby("bucket", observed=True).agg(
         loan_months=("exposure", "sum"),
         events=("events", "sum"),
-        expected=("predicted", "mean"),
+        expected_defaults=("expected_defaults", "sum"),
     )
+    grouped["expected"] = grouped.pop("expected_defaults") / grouped["loan_months"]
     grouped["actual"] = grouped["events"] / grouped["loan_months"]
     grouped["difference"] = grouped["actual"] - grouped["expected"]
     grouped["ratio"] = np.where(
         grouped["expected"] > 0, grouped["actual"] / grouped["expected"], np.nan
     )
     return grouped.reset_index()
+
+
+def exposure_buckets(
+    predicted: np.ndarray, exposure: np.ndarray, *, n_buckets: int = 10
+) -> np.ndarray:
+    """The bucket of predicted risk each row falls in, buckets holding equal exposure.
+
+    Returned in the rows' own order, so a caller can group anything else by it. One
+    definition for the backtest's decile table and for every view that opens a
+    calibration by decile: two versions of the same bucketing would, sooner or later,
+    put the same loan-month in different deciles.
+    """
+    order = np.argsort(predicted, kind="stable")
+    cumulative = np.cumsum(exposure[order])
+    total = cumulative[-1] if len(cumulative) else 0.0
+    sorted_buckets = np.minimum(
+        (cumulative / total * n_buckets).astype(np.int64) if total > 0 else 0, n_buckets - 1
+    )
+    buckets = np.empty(len(predicted), dtype=np.int64)
+    buckets[order] = sorted_buckets
+    return buckets
 
 
 def weighted_gini(predicted: pd.Series, observed: pd.Series, exposure: pd.Series) -> float:

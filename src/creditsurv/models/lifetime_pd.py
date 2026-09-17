@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from creditsurv.data.panel import AGE, LOAN_ID
+from creditsurv.data.panel import AGE, LOAN_ID, WEIGHT
 from creditsurv.features import add_macro_covariates
 from creditsurv.models.aft import episode_hazards
 
@@ -123,6 +123,28 @@ def conditional_pd(
     survival_at_end = survival[end_month]
     survival_at_start = 1.0 if as_of_month == 0 else survival[as_of_month]
     return (1.0 - survival_at_end / survival_at_start).rename("pd")
+
+
+def origination_book(encoded: pd.DataFrame, macro: pd.DataFrame, size: int) -> pd.DataFrame:
+    """The commonest origination profiles, as a book to be scored from today.
+
+    Calibration asks what the regressors are worth on a book, so the book has to be
+    one that exists. Cells at age zero are exactly the origination profiles the
+    portfolio was written in, and their counts say how much of it each accounts for
+    -- so the largest ``size`` of them, carried with their weights, describe the book
+    far better than the same number of individual loans drawn arbitrarily.
+
+    They are then dated to the present: age zero at the last macro period, which asks
+    what these profiles would be worth if written today rather than replaying the
+    history they were actually written in.
+    """
+    book = encoded.loc[encoded[AGE] == 0].nlargest(size, WEIGHT).reset_index(drop=True)
+    book[AGE] = 0
+    book["period"] = macro.index.max() + 1
+    # Named here rather than left to the projection, because the weights have to be
+    # indexed by the same label the scored results come back under.
+    book[LOAN_ID] = [f"row_{index:09d}" for index in range(len(book))]
+    return book
 
 
 def pd_term_structure(survival: pd.DataFrame) -> pd.DataFrame:

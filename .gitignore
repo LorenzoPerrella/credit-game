@@ -38,3 +38,10 @@ data/
 
 # DuckDB spill files, if a query ever needs them.
 .tmp/
+
+# The documentation site, built by `mkdocs build` locally and in CI.
+/site/
+
+# The independent validation report, saved from the browser: kept locally for reference and
+# summarised on the site's validation response page, not published with the code.
+Convalida PD Lifetime Freddie Mac*

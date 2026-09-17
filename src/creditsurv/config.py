@@ -18,6 +18,7 @@ from typing import Final
 
 _DATA_DIR_ENV: Final = "CREDITSURV_DATA_DIR"
 _REPORTS_DIR_ENV: Final = "CREDITSURV_REPORTS_DIR"
+_TABLES_DIR_ENV: Final = "CREDITSURV_TABLES_DIR"
 
 
 #: Files that mark the root of a source checkout.
@@ -69,6 +70,16 @@ def reports_dir() -> Path:
     """
     override = os.environ.get(_REPORTS_DIR_ENV)
     return Path(override) if override else project_root() / "docs" / "reports"
+
+
+def tables_dir() -> Path:
+    """The aggregate tables behind the documentation site's views.
+
+    Committed, because the data they come from cannot reach the CI that builds the site: a
+    view is computed locally by ``creditsurv views`` and turned into a figure at build time.
+    """
+    override = os.environ.get(_TABLES_DIR_ENV)
+    return Path(override) if override else project_root() / "docs" / "tables"
 
 
 # --------------------------------------------------------------------------------------

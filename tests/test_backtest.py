@@ -133,6 +133,19 @@ def test_weighted_calibration_buckets_by_exposure() -> None:
     assert np.allclose(table["ratio"], 1.0, atol=0.05)
 
 
+def test_the_expected_rate_of_a_bucket_is_weighted_by_its_loan_months() -> None:
+    """Cells stand for different numbers of loan-months, and the expected rate counts them."""
+    predicted = pd.Series([0.001, 0.009])
+    exposure = pd.Series([9000.0, 1000.0])
+    events = pd.Series([9.0, 9.0])
+
+    table = weighted_calibration(predicted, events, exposure, n_buckets=1)
+
+    # 18 expected defaults over 10,000 loan-months; the plain mean of the two hazards is 0.005.
+    assert table["expected"].iloc[0] == pytest.approx(0.0018)
+    assert table["ratio"].iloc[0] == pytest.approx(1.0)
+
+
 def test_actual_versus_expected_flags_under_prediction() -> None:
     """Above one the model under-predicts; below one it over-predicts."""
     frame = pd.DataFrame(

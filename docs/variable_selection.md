@@ -1,7 +1,7 @@
 # Variable selection
 
 Which covariates enter the model, how they were chosen, and what was discarded at
-each step. The procedure follows [`nmds`](../../nmds), including its thresholds; the
+each step. The procedure follows `nmds`, including its thresholds; the
 method is taken from it, not the code.
 
 Read [data_preparation.md](data_preparation.md) first for how the data reaches this
@@ -190,7 +190,7 @@ A covariate with **no** declared prior answers to its own sign instead: the sign
 coefficient beside the loan block at step 7. If the full model turns it around, it is
 removed. This is the marginal/conditional reversal rule the first run used on
 `credit_spread` and `term_spread`, set out under
-[the covariates given up](#credit_spread-and-term_spread--collinearity-the-textbook-case):
+[the covariates given up](#credit_spread-and-term_spread-collinearity-the-textbook-case):
 a covariate whose conditional effect contradicts its own is carrying something other than
 what its name says. The executable version measures "its own" as the step-7 coefficient,
 fitted on the training half beside the loan block, rather than by reading a table of

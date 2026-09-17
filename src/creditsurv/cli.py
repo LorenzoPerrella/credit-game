@@ -565,6 +565,7 @@ def report(
     from creditsurv.backtest.runner import backtest_split
     from creditsurv.data.panel import WEIGHT
     from creditsurv.models.aft import coefficient_table
+    from creditsurv.models.lifetime_pd import origination_book
     from creditsurv.reporting import backtesting, calibration, methodology
     from creditsurv.reporting.calibration import covariate_steps
 
@@ -610,7 +611,7 @@ def report(
     ]
 
     typer.echo("Writing calibration report...")
-    book = _origination_book(split.train, macro, loans)
+    book = origination_book(split.train, macro, loans)
     written.append(
         calibration.generate(
             fitted,
@@ -634,6 +635,126 @@ def report(
     typer.echo("\nWritten:")
     for path in [*written, coefficients]:
         typer.echo(f"  {path}")
+
+
+@app.command()
+def views(
+    as_of: Annotated[
+        str, typer.Option(help="The reporting date the fit was made at.")
+    ] = DEFAULT_AS_OF,
+    moratorium: MoratoriumOption = "exclude",
+    loans: Annotated[int, typer.Option(help="Origination profiles for the projections.")] = 500,
+    horizon: Annotated[int, typer.Option(help="Months for the term structure.")] = 60,
+    model: Annotated[bool, typer.Option(help="The views that need the fitted model.")] = True,
+    portfolio: Annotated[bool, typer.Option(help="The views of the book itself.")] = True,
+) -> None:
+    """Compute the tables behind the documentation site, and write them to ``docs/tables``.
+
+    **Never fits.** The model views score the fit ``creditsurv report`` saved -- the Weibull of
+    the selected specification, and every other family the report compared when its fit is in
+    the cache -- once on the training half and once on the test window, and open every table
+    by segment. The portfolio views read the ingested book and the cells. The selection views
+    are the record ``creditsurv select`` wrote.
+
+    The tables are aggregates, small enough to commit: the site is built from them in CI,
+    where the data they come from cannot go.
+    """
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.backtest.runner import predicted_hazard
+    from creditsurv.config import tables_dir
+    from creditsurv.data.aggregate import MoratoriumPolicy
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.panel import AGE, EVENT, WEIGHT
+    from creditsurv.data.store import cells_path, fit_fingerprint, load_fit
+    from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
+    from creditsurv.models.aft import FitResult as Fitted
+    from creditsurv.models.lifetime_pd import origination_book
+    from creditsurv.views.model import (
+        calibration_views,
+        coefficient_view,
+        covariates_over_time,
+        projection_views,
+    )
+    from creditsurv.views.portfolio import portfolio_views
+    from creditsurv.views.selection import selection_views
+    from creditsurv.views.tables import write_views
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    destination = tables_dir()
+    reporting_date = pd.Period(as_of, freq="M")
+
+    if model:
+        covariates, formula = default_covariates(), default_formula()
+        typer.echo("Splitting the cells...")
+        split, macro = _split(moratorium, reporting_date)
+        fingerprint = fit_fingerprint(
+            **_fit_description(split.train, formula, as_of=as_of, moratorium=moratorium)
+        )
+        fitted = load_fit(fingerprint)
+        if not isinstance(fitted, Fitted):
+            typer.echo(
+                f"No cached fit {fingerprint} of this specification. Run `creditsurv report` "
+                "first: views never fit."
+            )
+            raise typer.Exit(1)
+
+        typer.echo("Scoring the training half and the test window...")
+        train_hazard = predicted_hazard(fitted, split.train, covariates).to_numpy()
+        test_hazard = predicted_hazard(fitted, split.test, covariates).to_numpy()
+        families = {fitted.distribution: train_hazard}
+        for distribution in CONVERGENT_DISTRIBUTIONS:
+            if distribution == fitted.distribution:
+                continue
+            other = load_fit(
+                fit_fingerprint(
+                    **_fit_description(
+                        split.train,
+                        formula,
+                        as_of=as_of,
+                        moratorium=moratorium,
+                        distribution=distribution,
+                    )
+                )
+            )
+            if isinstance(other, Fitted):
+                typer.echo(f"  and the cached {distribution} fit")
+                families[distribution] = predicted_hazard(other, split.train, covariates).to_numpy()
+
+        typer.echo("Calibration, backtest, coefficients and projections by segment...")
+        tables = [
+            *calibration_views(
+                split, train_hazard=train_hazard, test_hazard=test_hazard, families=families
+            ),
+            coefficient_view(
+                fitted, split.train, [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL]
+            ),
+            covariates_over_time(split, TIME_VARYING_CONTINUOUS),
+            *projection_views(
+                fitted,
+                origination_book(split.train, macro, loans),
+                macro,
+                covariates,
+                horizon_months=horizon,
+            ),
+        ]
+        write_views(tables, destination, fit=fingerprint)
+        typer.echo(f"  {len(tables)} views of fit {fingerprint}")
+        del split, train_hazard, test_hazard, families, tables
+
+    if portfolio:
+        typer.echo("The book by segment, the lending, the vintage curves and the macro series...")
+        cells = pd.read_parquet(cells_path(moratorium), columns=["orig_month", AGE, WEIGHT, EVENT])
+        write_views(
+            portfolio_views(cells, load_macro_panel(), policy=MoratoriumPolicy(moratorium)),
+            destination,
+        )
+        del cells
+
+    write_views(selection_views(reports_dir()), destination)
+    typer.echo(f"Written: {destination}")
 
 
 @app.command()
@@ -799,6 +920,42 @@ def check_calendar(moratorium: MoratoriumOption = "exclude") -> None:
     typer.echo(f"Written: {destination}")
 
 
+def _fit_description(
+    encoded: pd.DataFrame,
+    formula: str,
+    *,
+    as_of: str,
+    moratorium: str,
+    distribution: str = "weibull",
+    weights_col: str | None = "n",
+    ancillary: str | None = None,
+    likelihood: Likelihood | None = None,
+) -> dict[str, object]:
+    """What a report's fit is cached under, and so how any command finds it again.
+
+    The moratorium policy is in it because the two treatments can produce panels of similar
+    size, and a censor fit silently reused for exclude would compare a model with itself.
+    The ancillary formula and the likelihood enter only when they are not the defaults, so
+    the report's own Weibull keeps the name it has always had.
+    """
+    from creditsurv.models.aft import Likelihood as Likelihoods
+
+    described: dict[str, object] = {
+        "as_of": as_of,
+        "moratorium": moratorium,
+        "formula": formula,
+        "distribution": distribution,
+        "weights_col": weights_col,
+        "rows": len(encoded),
+        "loan_months": int(encoded[weights_col].sum()) if weights_col else len(encoded),
+    }
+    if ancillary is not None:
+        described["ancillary"] = ancillary
+    if likelihood is not None and likelihood is not Likelihoods.INTERVAL_CENSORED:
+        described["likelihood"] = likelihood.value
+    return described
+
+
 def _fit_once(
     train: pd.DataFrame,
     covariates: list[str],
@@ -828,18 +985,7 @@ def _fit_once(
     from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
     from creditsurv.models.aft import fit_aft
 
-    described = {
-        "as_of": as_of,
-        # In the fingerprint because the two treatments can produce panels of similar
-        # size, and a censor fit silently reused for exclude would compare a model with
-        # itself.
-        "moratorium": moratorium,
-        "formula": formula,
-        "distribution": "weibull",
-        "weights_col": WEIGHT,
-        "rows": len(train),
-        "loan_months": int(train[WEIGHT].sum()),
-    }
+    described = _fit_description(train, formula, as_of=as_of, moratorium=moratorium)
     fingerprint = fit_fingerprint(**described)
 
     if reuse:
@@ -881,19 +1027,16 @@ def _cached_fit(*, as_of: str, moratorium: str) -> Callable[..., FitResult]:
         from creditsurv.models import aft
 
         likelihood = likelihood or aft.Likelihood.INTERVAL_CENSORED
-        described: dict[str, object] = {
-            "as_of": as_of,
-            "moratorium": moratorium,
-            "formula": formula,
-            "distribution": distribution,
-            "weights_col": weights_col,
-            "rows": len(encoded),
-            "loan_months": int(encoded[weights_col].sum()) if weights_col else len(encoded),
-        }
-        if ancillary is not None:
-            described["ancillary"] = ancillary
-        if likelihood is not aft.Likelihood.INTERVAL_CENSORED:
-            described["likelihood"] = likelihood.value
+        described = _fit_description(
+            encoded,
+            formula,
+            as_of=as_of,
+            moratorium=moratorium,
+            distribution=distribution,
+            weights_col=weights_col,
+            ancillary=ancillary,
+            likelihood=likelihood,
+        )
         fingerprint = fit_fingerprint(**described)
         cached = load_fit(fingerprint)
         if isinstance(cached, aft.FitResult) and cached.log_likelihood < 0:
@@ -946,30 +1089,6 @@ def _selection_start(as_of: str, moratorium: str) -> pd.Series | None:
     typer.echo("  starting from the selection's fit of the specification it chose")
     params: pd.Series = fitted.fitter.params_
     return params
-
-
-def _origination_book(encoded: pd.DataFrame, macro: pd.DataFrame, size: int) -> pd.DataFrame:
-    """The commonest origination profiles, as a book to be scored from today.
-
-    Calibration asks what the regressors are worth on a book, so the book has to be
-    one that exists. Cells at age zero are exactly the origination profiles the
-    portfolio was written in, and their counts say how much of it each accounts for
-    -- so the largest ``size`` of them, carried with their weights, describe the book
-    far better than the same number of individual loans drawn arbitrarily.
-
-    They are then dated to the present: age zero at the last macro period, which asks
-    what these profiles would be worth if written today rather than replaying the
-    history they were actually written in.
-    """
-    from creditsurv.data.panel import AGE, LOAN_ID, WEIGHT
-
-    book = encoded.loc[encoded[AGE] == 0].nlargest(size, WEIGHT).reset_index(drop=True)
-    book[AGE] = 0
-    book["period"] = macro.index.max() + 1
-    # Named here rather than left to the projection, because the weights have to be
-    # indexed by the same label the scored results come back under.
-    book[LOAN_ID] = [f"row_{index:09d}" for index in range(len(book))]
-    return book
 
 
 if __name__ == "__main__":  # pragma: no cover

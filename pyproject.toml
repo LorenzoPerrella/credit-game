@@ -36,6 +36,14 @@ dev = [
     "types-requests>=2.31",
     "nbconvert>=7.17.1",
     "ipykernel>=7.3.0",
+    "plotly>=7.1.0",
+    "mkdocs>=1.6,<2",
+]
+# MkDocs 2 removes the plugin and theme systems the site is built on.
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.7.7",
+    "plotly>=7.1.0",
 ]
 
 [build-system]
@@ -71,7 +79,7 @@ warn_unreachable = true
 # lifelines and autograd ship no type information. Everything the project
 # itself exposes stays strictly typed; only the third-party surface is relaxed.
 [[tool.mypy.overrides]]
-module = ["lifelines.*", "autograd.*", "formulaic.*", "scipy.*", "pyarrow.*"]
+module = ["lifelines.*", "autograd.*", "formulaic.*", "scipy.*", "pyarrow.*", "plotly.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
