@@ -246,6 +246,12 @@ a difference between them is not a defect of either.
 0.718 to 1.154 and 0.705 to 1.014. Neither fails a criterion the other passes, so by the
 rule above `exclude` stands.
 
+Those decile ranges took each decile's expected rate as a plain mean of its cells' hazards,
+not weighted by loan-months, which was corrected later. On the selected model's test window
+the correction moved the lowest ratio by 0.001 and the riskiest decile's by 0.13, so both
+policies' ranges still start near 0.7, well below the 0.80 the criterion needs, and the
+comparison the rule reads is unchanged. The ranges themselves have not been recomputed.
+
 Two measurements say the prior deserved to be the prior. Censoring lost **26% of the test
 window's defaults**, 56,413 against 76,380, for 3% less exposure: loans that took a
 moratorium and genuinely defaulted afterwards, exactly the ones censoring was feared to
@@ -534,7 +540,7 @@ measurement taken once.
 Four times the cells is not four times the work; it is another machine's worth of memory.
 A stock lifelines fit holds about 680 bytes a training row, 45-50 GB for this table, so
 fits run through `creditsurv.models.blocks` a block at a time, and the panel is never
-held beside its training and test halves. [CLAUDE.md](../CLAUDE.md) keeps the rules that
+held beside its training and test halves. [CLAUDE.md](https://github.com/LorenzoPerrella/credit-game/blob/main/CLAUDE.md) keeps the rules that
 follow from it.
 
 ## Reproducing

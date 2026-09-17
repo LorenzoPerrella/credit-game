@@ -171,12 +171,23 @@ per quarter; the decisive one is that parquet row counts still match the manifes
 
 ## Documentation
 
-`docs/data_dictionary.md` (record layout, a real loan traced through five layers),
-`docs/data_preparation.md` (40 GB to a fittable table), `docs/variable_selection.md`
-(what survived, what was given up, and what `nmds` would have decided),
-`docs/portfolio.md`, and the generated reports under `docs/reports/` -- among them
-`moratorium.md`, where the event definition was chosen, and `selection.md`, where the
-specification was.
+The site (`mkdocs.yml`, published to GitHub Pages from `main`) opens with short section pages
+-- `docs/index.md`, `data.md`, `portfolio.md`, `methodology.md`, `model.md`,
+`calibration.md`, `validation.md`, `decisions.md`, `reproduce.md` -- over the long documents
+they summarise: `docs/data_dictionary.md` (record layout, a real loan traced through five
+layers), `docs/data_preparation.md` (40 GB to a fittable table), `docs/variable_selection.md`
+(what survived, what was given up, and what `nmds` would have decided), and the generated
+reports under `docs/reports/` -- among them `moratorium.md`, where the event definition was
+chosen, and `selection.md`, where the specification was.
+
+**Figures, tables and numbers on the site are placed, never typed.** A page writes
+`<!-- figure: name -->`, `<!-- table: name -->` or `<!-- value: name -->`; the hook in
+`creditsurv.site.hooks` fills them at build time from `docs/tables`, the aggregates
+`creditsurv views` computes locally from the cached fit and the parquet. CI cannot read the
+data, so those tables are committed, and the build fails on a placeholder naming nothing, a
+view the manifest lacks, or model views from more than one fit. `creditsurv views` never
+fits: it stops when the report's fit is not in the cache. Scoring the training half for it
+takes the footprint near 15 GB, so nothing else heavy runs beside it.
 
 ## Open
 
@@ -194,9 +205,11 @@ Weibull led by 623,126. Switching family means `creditsurv select` with log-logi
 `docs/variable_selection.md`.
 
 **The backtest fails its decile criterion.** Overall actual over expected 0.920 and Gini
-0.561 pass; the deciles run 0.597 to 0.995, every one below 1, so the model overpredicts
-throughout and most in the safer deciles. The criteria were fixed before the run, so the
-model is not to be tuned to them on the test window.
+0.561 pass; the deciles run 0.598 to 1.064: over-prediction in the safer deciles, down to
+0.598 in the second, and a riskiest decile slightly under-predicted. The report first read
+0.597 to 0.995, every decile below one, because each decile's expected rate was a plain mean
+of cell hazards rather than weighted by loan-months. The criteria were fixed before the run,
+so the model is not to be tuned to them on the test window.
 
 **`occupancy` changes the hazard's shape, a little.** Its curves cross at 90 months, which
 no scale factor reconciles, and letting occupancy into the shape parameter is significant --

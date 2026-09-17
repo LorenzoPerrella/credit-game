@@ -1,0 +1,90 @@
+site_name: credit-game
+site_description: Lifetime PD with parametric survival models, fitted on the whole Freddie Mac book.
+site_url: https://lorenzoperrella.github.io/credit-game/
+repo_url: https://github.com/LorenzoPerrella/credit-game
+repo_name: LorenzoPerrella/credit-game
+edit_uri: blob/main/docs/
+
+# The views are read by the hook at build time and turned into figures; the parquet files
+# themselves are not published.
+exclude_docs: |
+  tables/
+
+hooks:
+  - src/creditsurv/site/hooks.py
+
+theme:
+  name: material
+  custom_dir: overrides
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to the dark palette
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to the light palette
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+extra_javascript:
+  - javascripts/figures.js
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Home: index.md
+  - Data:
+      - In short: data.md
+      - Data dictionary: data_dictionary.md
+      - Data preparation: data_preparation.md
+      - The moratorium decision: reports/moratorium.md
+  - Portfolio: portfolio.md
+  - Methodology:
+      - In short: methodology.md
+      - Variable selection: variable_selection.md
+      - The selection record: reports/selection.md
+      - Methodology report: reports/methodology.md
+  - Model:
+      - In short: model.md
+      - Calibration report: reports/calibration.md
+  - Calibration & backtest:
+      - In short: calibration.md
+      - Backtest report: reports/backtesting.md
+  - Validation response: validation.md
+  - Decision log: decisions.md
+  - Reproduce: reproduce.md
