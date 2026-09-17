@@ -109,6 +109,7 @@ The checks the independent validation asked for, each a command of its own:
 uv run creditsurv aggregate --moratorium censor   # the other event definition (D1)
 uv run creditsurv moratorium                      # both fitted and backtested, side by side
 uv run creditsurv aggregate --report-incomplete   # the loans the cells leave out (D4)
+uv run creditsurv aggregate --report-exits        # what censoring codes 16 and 96 rests on (D5)
 uv run creditsurv check-calendar                  # defaults by month, cells against files (M1)
 ```
 
