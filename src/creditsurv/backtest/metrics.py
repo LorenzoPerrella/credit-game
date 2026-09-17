@@ -191,12 +191,18 @@ def weighted_calibration(
     frame["bucket"] = exposure_buckets(
         frame["predicted"].to_numpy(), frame["exposure"].to_numpy(), n_buckets=n_buckets
     )
+    # The expected rate is the expected defaults over the loan-months, as the actual rate is.
+    # A plain mean of the cells' hazards gave a cell of three loan-months the say of one of
+    # thirty thousand; on the test window it put the riskiest decile at 0.929 where it is
+    # 1.064, and every decile below one.
+    frame["expected_defaults"] = frame["predicted"] * frame["exposure"]
 
     grouped = frame.groupby("bucket", observed=True).agg(
         loan_months=("exposure", "sum"),
         events=("events", "sum"),
-        expected=("predicted", "mean"),
+        expected_defaults=("expected_defaults", "sum"),
     )
+    grouped["expected"] = grouped.pop("expected_defaults") / grouped["loan_months"]
     grouped["actual"] = grouped["events"] / grouped["loan_months"]
     grouped["difference"] = grouped["actual"] - grouped["expected"]
     grouped["ratio"] = np.where(
