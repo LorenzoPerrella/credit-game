@@ -305,3 +305,40 @@ def test_an_unreadable_cached_fit_is_a_miss_not_an_error(
     path.write_bytes(b"not a pickle")
 
     assert load_fit("deadbeefdeadbeef") is None
+
+
+def test_the_distribution_reading_follows_the_numbers() -> None:
+    """The first version of this section asserted that a family fitting worse and turning a
+    prior around is rejected twice over, and the run it was published with had the
+    log-logistic fitting better. The reading is now written from the tables."""
+    from creditsurv.reporting.methodology import _against_kaplan_meier, _comparison_reading
+
+    months = pd.Index([1.0, 2.0, 3.0])
+    weibull = pd.DataFrame(
+        {"predicted": [0.99, 0.98, 0.90], "deviation": [0.0, -0.01, -0.03]}, index=months
+    )
+    loglogistic = pd.DataFrame(
+        {"predicted": [0.99, 0.98, 0.92], "deviation": [0.0, -0.005, -0.01]}, index=months
+    )
+    against = pd.DataFrame(
+        [
+            _against_kaplan_meier("weibull", weibull),
+            _against_kaplan_meier("loglogistic", loglogistic),
+        ]
+    )
+    regression = pd.DataFrame(
+        {
+            "distribution": ["loglogistic", "weibull"],
+            "delta_aic": [0.0, 83961.0],
+            "signs_against_prior": ["nfci_lagged", ""],
+        }
+    )
+
+    reading = _comparison_reading(regression, against, "weibull")
+
+    assert "**loglogistic** has the better likelihood, by 83,961 AIC points" in reading
+    assert "turns `nfci_lagged` against its declared prior" in reading
+    assert "Against Kaplan-Meier the **loglogistic** is closer" in reading
+    assert "kept against a better likelihood" in reading
+    assert against.loc[0, "deviation_at_last_month"] == pytest.approx(-3.0)
+    assert against.loc[0, "last_month"] == 3

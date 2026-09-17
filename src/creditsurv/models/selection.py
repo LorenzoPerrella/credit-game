@@ -46,7 +46,7 @@ from creditsurv.data.panel import EVENT, duration_view
 from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS, FitResult, Likelihood, fit_aft
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from lifelines.fitters import ParametricUnivariateFitter
 
@@ -125,6 +125,8 @@ def distribution_comparison(
     likelihood: Likelihood = Likelihood.INTERVAL_CENSORED,
     weights_col: str | None = None,
     fitted: FitResult | None = None,
+    fit: Callable[..., FitResult] = fit_aft,
+    fits: dict[str, FitResult] | None = None,
 ) -> pd.DataFrame:
     """Compare regression fits on identical episodes.
 
@@ -136,7 +138,10 @@ def distribution_comparison(
 
     ``fitted`` supplies a model already estimated on this panel, and is reused instead
     of refitting its distribution. On a table of this size a fit is hours, so silently
-    recomputing a model the caller already holds is not a small waste.
+    recomputing a model the caller already holds is not a small waste. ``fit`` is how the
+    others are estimated -- :func:`fit_aft`, or a cached version of it -- and ``fits``, when
+    given, receives every family's fit, so a caller can hold them against Kaplan-Meier
+    without estimating any of them twice.
 
     Each family is also held to the expected signs. A family that fits worse *and* points a
     declared prior the wrong way is rejected twice, for independent reasons: the
@@ -148,7 +153,7 @@ def distribution_comparison(
         if fitted is not None and fitted.distribution == distribution:
             result = fitted
         else:
-            result = fit_aft(
+            result = fit(
                 encoded,
                 covariates,
                 formula,
@@ -156,6 +161,8 @@ def distribution_comparison(
                 likelihood=likelihood,
                 weights_col=weights_col,
             )
+        if fits is not None:
+            fits[distribution] = result
         rows.append(
             {
                 "distribution": distribution,
@@ -267,6 +274,7 @@ def shape_depends_on_covariates(
     likelihood: Likelihood = Likelihood.INTERVAL_CENSORED,
     weights_col: str | None = None,
     fitted: FitResult | None = None,
+    fit: Callable[..., FitResult] = fit_aft,
 ) -> pd.DataFrame:
     """Test whether the hazard's shape varies with covariates.
 
@@ -284,7 +292,7 @@ def shape_depends_on_covariates(
     default specification by construction -- same panel, same formula, no ancillary --
     so refitting it is pure duplication.
     """
-    restricted = fitted or fit_aft(
+    restricted = fitted or fit(
         encoded,
         covariates,
         formula,
@@ -296,7 +304,7 @@ def shape_depends_on_covariates(
     # shape coefficients added at zero, which is where Newton converges in a few steps --
     # 0.7 minutes against 4.2 from cold on four quarters of the book -- instead of SLSQP's
     # hundred-odd evaluations from nothing, 91 minutes on the whole training half.
-    full = fit_aft(
+    full = fit(
         encoded,
         covariates,
         formula,

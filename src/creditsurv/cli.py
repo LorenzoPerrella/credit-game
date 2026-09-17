@@ -26,10 +26,12 @@ from creditsurv.config import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
     import pandas as pd
 
     from creditsurv.backtest.splits import Split
-    from creditsurv.models.aft import FitResult
+    from creditsurv.models.aft import FitResult, Likelihood
 
 #: The reporting date every command cuts at, unless one is given. Late on purpose: a
 #: credit model wants every loan-month it can get in training, and the test window only
@@ -603,6 +605,7 @@ def report(
             reports_dir=destination,
             weights_col=WEIGHT,
             extra_fits=extra_fits,
+            fit=_cached_fit(as_of=as_of, moratorium=moratorium),
         )
     ]
 
@@ -851,6 +854,65 @@ def _fit_once(
     path = save_fit(fitted, fingerprint, {**described, "minutes": fitted.elapsed_seconds / 60})
     typer.echo(f"  saved to {path}")
     return fitted
+
+
+def _cached_fit(*, as_of: str, moratorium: str) -> Callable[..., FitResult]:
+    """``fit_aft``, saved the moment each fit lands and read back when asked for again.
+
+    For the extra fits a report makes -- the other distribution families and the shape
+    test -- which ran 78 and 25 minutes on the training half and used to be thrown away, so
+    that regenerating a report's prose cost them again. The fingerprint has the fields
+    ``_fit_once`` uses, plus the ancillary formula and the likelihood when they are not the
+    defaults, so the Weibull the report already holds is found under its own name.
+    """
+
+    def fit(
+        encoded: pd.DataFrame,
+        covariates: Sequence[str],
+        formula: str,
+        *,
+        distribution: str = "weibull",
+        likelihood: Likelihood | None = None,
+        weights_col: str | None = None,
+        ancillary: str | None = None,
+        initial_point: pd.Series | None = None,
+    ) -> FitResult:
+        from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
+        from creditsurv.models import aft
+
+        likelihood = likelihood or aft.Likelihood.INTERVAL_CENSORED
+        described: dict[str, object] = {
+            "as_of": as_of,
+            "moratorium": moratorium,
+            "formula": formula,
+            "distribution": distribution,
+            "weights_col": weights_col,
+            "rows": len(encoded),
+            "loan_months": int(encoded[weights_col].sum()) if weights_col else len(encoded),
+        }
+        if ancillary is not None:
+            described["ancillary"] = ancillary
+        if likelihood is not aft.Likelihood.INTERVAL_CENSORED:
+            described["likelihood"] = likelihood.value
+        fingerprint = fit_fingerprint(**described)
+        cached = load_fit(fingerprint)
+        if isinstance(cached, aft.FitResult) and cached.log_likelihood < 0:
+            typer.echo(f"  reusing the cached {distribution} fit {fingerprint}")
+            return cached
+        result = aft.fit_aft(
+            encoded,
+            covariates,
+            formula,
+            distribution=distribution,
+            likelihood=likelihood,
+            weights_col=weights_col,
+            ancillary=ancillary,
+            initial_point=initial_point,
+        )
+        save_fit(result, fingerprint, {**described, "minutes": result.elapsed_seconds / 60})
+        return result
+
+    return fit
 
 
 def _selection_start(as_of: str, moratorium: str) -> pd.Series | None:

@@ -20,13 +20,16 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from creditsurv.features import MACRO_DERIVED
+from creditsurv.config import TIME_VARYING_CONTINUOUS
+from creditsurv.features import MACRO_DERIVED, MACRO_SOURCES
 from creditsurv.models.aft import coefficient_table
 from creditsurv.models.lifetime_pd import (
+    ADVERSE,
     conditional_pd,
     extend_macro,
     pd_term_structure,
     project_panel,
+    scenario_legs,
     scenario_lifetime_pd,
     survival_along_path,
 )
@@ -260,20 +263,18 @@ the two appear.
 
     report.heading("Macroeconomic scenarios").text(
         f"""
-The adverse path is shaped like 2008 rather than scaled to it: unemployment climbs
-four points over a year and stays there, house prices fall a fifth over two years,
-volatility jumps thirty points within a quarter and settles ten above where it began,
-and the price level ends two per cent below the baseline. The baseline is a random
-walk from the last observation, which is **not a forecast** and is not offered as
-one: it is what makes the relative effect of a scenario interpretable without
-smuggling in a view on the economy.
+The adverse path is shaped like 2008 rather than scaled to it, and it moves only series the
+fitted model reads: each leg is listed below with the move it makes, the month it gets
+there, where it stands at three years and the covariates it feeds. The baseline is a random
+walk from the last observation, which is **not a forecast** and is not offered as one: it is
+what makes the relative effect of a scenario interpretable without smuggling in a view on
+the economy.
 
-Only series the fitted model reads are shocked. The first version of this path also
-tightened credit conditions and raised mortgage rates, which no covariate in the
-formula reads, and left volatility and inflation flat, although in the published fit
-volatility carried the largest effect of any macro covariate. Two legs of the scenario
-did nothing and two covariates never moved. A test now fails whenever the shocked
-series and the formula part company, so a change to either has to change the other.
+Twice the scenario and the specification parted company, and twice the report kept
+describing a path the model did not see: first two legs fed no covariate and two
+covariates had no leg, then the reselection removed volatility and added financial
+conditions, the policy rate, sentiment and housing starts. A test now fails whenever the
+shocked series and the formula part, and this table is built from the scenario itself.
 
 Because the covariates are time-varying, the scenario is applied by projecting the
 covariate paths and chaining conditional survival, not by re-scoring frozen
@@ -285,6 +286,9 @@ the question.
 
 **Adverse lifetime PD is {uplift:.2f}x the baseline.**
 """
+    ).table(
+        scenario_legs(ADVERSE, {name: MACRO_SOURCES[name] for name in TIME_VARYING_CONTINUOUS}),
+        caption="The adverse legs: moves are proportional where shown in per cent",
     ).figure(scenario_figure, "Distribution of lifetime PD under each scenario")
     report.table(
         scenarios.describe().reset_index(names="statistic"),

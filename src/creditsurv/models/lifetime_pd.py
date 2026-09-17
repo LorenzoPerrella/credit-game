@@ -49,7 +49,7 @@ from creditsurv.features import add_macro_covariates
 from creditsurv.models.aft import episode_hazards
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from creditsurv.models.aft import FitResult
 
@@ -230,6 +230,36 @@ ADVERSE = Scenario(
     },
     proportional=frozenset({"hpi", "cpi", "policy_rate", "sentiment", "housing_starts"}),
 )
+
+
+def scenario_legs(scenario: Scenario, sources: Mapping[str, Sequence[str]]) -> pd.DataFrame:
+    """One row per shocked series: how far it moves, how soon, and what reads it.
+
+    ``sources`` maps each covariate the model reads to the series it is built from. The
+    calibration report used to describe the adverse path in prose, and the prose outlived
+    the path: after the reselection it still promised a volatility spike to a model that no
+    longer read volatility. A table built from the scenario cannot describe another one.
+    """
+    rows = []
+    for series, path in scenario.shocks.items():
+        shock = np.asarray(path, dtype=float)
+        peak = int(np.argmax(np.abs(shock)))
+        proportional = series in scenario.proportional
+
+        def shown(value: float, *, as_share: bool = proportional) -> str:
+            return f"{value:+.0%}" if as_share else f"{value:+.1f}"
+
+        readers = sorted(name for name, used in sources.items() if series in used)
+        rows.append(
+            {
+                "series": series,
+                "move": shown(float(shock[peak])),
+                "month reached": peak + 1,
+                "by month 36": shown(float(shock[min(len(shock), 36) - 1])),
+                "read by": ", ".join(readers) if readers else "nothing",
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def extend_macro(macro: pd.DataFrame, months: int, scenario: Scenario = BASELINE) -> pd.DataFrame:

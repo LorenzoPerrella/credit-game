@@ -318,3 +318,39 @@ def test_the_configuration_is_what_the_last_selection_chose() -> None:
     assert list(TIME_VARYING_CONTINUOUS) == summary["time_varying_continuous"]
     assert dict(CATEGORICAL_REFERENCE) == summary["categorical"]
     assert set(ELIMINATED) == set(summary["eliminated"])
+
+
+def test_an_extra_fit_is_estimated_once_and_read_back_after(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The report's extra fits ran 78 and 25 minutes on the training half and were thrown
+    away, so regenerating a report's prose cost them again."""
+    from creditsurv.cli import _cached_fit
+    from creditsurv.data.panel import WEIGHT
+    from creditsurv.models import aft
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    calls: list[str] = []
+    real = aft.fit_aft
+
+    def counted(*args: object, **kwargs: object) -> aft.FitResult:
+        calls.append(str(kwargs.get("distribution")))
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(aft, "fit_aft", counted)
+    fit = _cached_fit(as_of="2008-12", moratorium="exclude")
+    formula = "fico_s + cltv_drift"
+
+    first = fit(
+        train, ["fico_s", "cltv_drift"], formula, distribution="loglogistic", weights_col=WEIGHT
+    )
+    again = fit(
+        train, ["fico_s", "cltv_drift"], formula, distribution="loglogistic", weights_col=WEIGHT
+    )
+    other = fit(
+        train, ["fico_s", "cltv_drift"], formula, distribution="weibull", weights_col=WEIGHT
+    )
+
+    assert calls == ["loglogistic", "weibull"]
+    assert again.fitter.params_.equals(first.fitter.params_)
+    assert other.distribution == "weibull"

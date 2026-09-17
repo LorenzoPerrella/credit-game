@@ -390,3 +390,21 @@ def test_the_shape_test_relaxes_the_covariate_whose_curves_cross() -> None:
         "C(occupancy, Treatment('owner_occupied'))",
     )
     assert shape_formula(["fico_s", "purpose"], {"purpose": "purchase"}) == ("fico_s", "fico_s")
+
+
+def test_the_comparison_fits_through_the_function_it_is_given(encoded: pd.DataFrame) -> None:
+    """The report passes a cached fit, so a family already estimated costs nothing again;
+    and it keeps every family's fit, to hold each against Kaplan-Meier."""
+    calls: list[str] = []
+
+    def counted(*args: object, **kwargs: object) -> FitResult:
+        calls.append(str(kwargs["distribution"]))
+        return fit_aft(*args, **kwargs)  # type: ignore[arg-type]
+
+    weibull = fit_aft(encoded, COVARIATES, FORMULA)
+    kept: dict[str, FitResult] = {}
+    distribution_comparison(encoded, COVARIATES, FORMULA, fitted=weibull, fit=counted, fits=kept)
+
+    assert calls == ["loglogistic"]
+    assert set(kept) == {"weibull", "loglogistic"}
+    assert kept["weibull"] is weibull
