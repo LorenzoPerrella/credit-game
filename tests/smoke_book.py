@@ -10,7 +10,7 @@ The point is that the pipeline then runs for real -- ingest, aggregation, fit,
 reports -- rather than a stub of it. What it cannot check is whether the estimates
 are any good; the test suite answers that, on a book whose parameters are known.
 
-    uv run python scripts/smoke_book.py
+    uv run python tests/smoke_book.py
 
 Writes into ``CREDITSURV_DATA_DIR`` if that is set, and the project's ``data/``
 otherwise.
@@ -18,13 +18,10 @@ otherwise.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
-
 from creditsurv.data.fred import load_macro_panel
 from creditsurv.data.ingest import archive_dir
+
+# Run as a script from tests/, so the fixtures beside it import directly.
 from fixtures import write_book_archives
 
 

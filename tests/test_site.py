@@ -235,8 +235,10 @@ CONFIG = cast("MkDocsConfig", None)
 FILES = cast("Files", None)
 
 
-def _page(meta: dict[str, object] | None = None) -> Page:
-    return cast("Page", SimpleNamespace(file=SimpleNamespace(src_uri="page.md"), meta=meta or {}))
+def _page() -> Page:
+    return cast(
+        "Page", SimpleNamespace(file=SimpleNamespace(src_uri="page.md"), url="calibration/")
+    )
 
 
 @pytest.fixture
@@ -260,7 +262,11 @@ def test_the_hook_puts_numbers_and_tables_in_the_markdown_and_figures_in_the_htm
     assert "| Segment |" in rendered
     assert "<!-- figure: ae_by_year -->" in rendered
     assert 'id="figure-ae_by_year"' in html
-    assert page.meta["plotly"] is True
+    # plotly.js once, relative to the page, before the script that draws the figure.
+    assert html.count("<script src=") == 1
+    assert html.index('<script src="../javascripts/plotly.min.js">') < html.index(
+        "figure-ae_by_year"
+    )
 
 
 @pytest.mark.usefixtures("hooked")

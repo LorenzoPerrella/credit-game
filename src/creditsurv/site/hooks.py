@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from mkdocs.exceptions import PluginError
+from mkdocs.utils import get_relative_url
 
 from creditsurv.site.content import TABLES, VALUES, Sources, to_markdown
 from creditsurv.site.figures import FIGURES, render
@@ -63,7 +64,8 @@ def placeholders(markdown: str) -> list[tuple[str, str]]:
     return found
 
 
-#: Where the build writes plotly.js, loaded in the head of the pages that draw a figure.
+#: Where the build writes plotly.js. A page that draws a figure loads it once, just before its
+#: first figure: every figure is drawn by an inline script that needs it already loaded.
 PLOTLY_JS: Final = "javascripts/plotly.min.js"
 
 _state: dict[str, Sources] = {}
@@ -123,18 +125,23 @@ def on_page_markdown(markdown: str, page: Page, config: MkDocsConfig, files: Fil
         _require(kind, name, VALUES[name].views, page)
         return VALUES[name].read(_sources())
 
-    replaced = substitute(markdown, replace)
-    if figures:
-        page.meta["plotly"] = True
-    return replaced
+    return substitute(markdown, replace)
 
 
 def on_page_content(html: str, page: Page, config: MkDocsConfig, files: Files) -> str:
+    loaded = False
+
     def replace(match: re.Match[str]) -> str:
+        nonlocal loaded
         kind, name = match.groups()
         if kind != "figure":
             return match.group(0)
-        return render(FIGURES[name].build(_sources()), name)
+        figure = render(FIGURES[name].build(_sources()), name)
+        if loaded:
+            return figure
+        loaded = True
+        script = get_relative_url(PLOTLY_JS, page.url)
+        return f'<script src="{script}"></script>\n{figure}'
 
     return PLACEHOLDER.sub(replace, html)
 
