@@ -669,16 +669,23 @@ def select(
         observation_months,
     )
     from creditsurv.data.store import cells_identity, load_cells
-    from creditsurv.models.procedure import CANDIDATE_CATEGORICAL, Fits, run_selection
+    from creditsurv.models.procedure import (
+        BASE_CATEGORICAL,
+        CANDIDATE_CATEGORICAL,
+        LOAN_CONTINUOUS,
+        LOAN_ORDINAL,
+        Fits,
+        run_selection,
+    )
     from creditsurv.reporting import selection
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     reporting_date = pd.Period(as_of, freq="M")
     candidates = [
-        *STATIC_CONTINUOUS,
-        *ORDINAL,
+        *LOAN_CONTINUOUS,
+        *LOAN_ORDINAL,
         *MACRO_CANDIDATES,
-        *CATEGORICAL_REFERENCE,
+        *BASE_CATEGORICAL,
         *CANDIDATE_CATEGORICAL,
     ]
 

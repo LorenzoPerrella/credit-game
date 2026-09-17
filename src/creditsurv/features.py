@@ -252,6 +252,9 @@ BIN_EDGES: dict[str, tuple[float, ...]] = {
     "term_spread": (-3.0, -0.5, 0.0, 0.5, 1.0, 2.0, 4.0),
     "credit_spread": (0.0, 1.5, 2.0, 2.5, 3.0, 4.0, 7.0),
     "inflation": (-0.05, 0.0, 0.02, 0.03, 0.05, 0.10),
+    # Year-on-year CPI inflation now, less at origination. Whole points either side of zero;
+    # the outer bands reach past the exposure's 1st and 99th percentiles, -3.7 and +6.0.
+    "inflation_gap": (-0.10, -0.02, -0.01, 0.0, 0.01, 0.02, 0.04, 0.12),
     "equity_return": (-0.7, -0.2, 0.0, 0.1, 0.2, 0.4, 1.5),
     "vix": (8.0, 14.0, 18.0, 22.0, 28.0, 40.0, 90.0),
     "sentiment": (50.0, 65.0, 75.0, 85.0, 95.0, 115.0),

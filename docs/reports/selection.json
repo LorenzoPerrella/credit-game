@@ -8,11 +8,15 @@
   },
   "eliminated": {
     "credit_spread": "step 6: variance inflation 11.9, above 10",
-    "term_spread": "step 9: 1 sd effect -0.123 on even and +0.004 on odd origination years, beside policy_rate_gap (+0.134), both interest rates",
+    "equity_return": "step 8: reversed sign: -0.08563 in the full model, +0.4305 beside the loan block alone",
+    "hpi_growth": "step 9: 1 sd effect -0.004 on even and +0.015 on odd origination years, beside cltv_drift (-0.179), both housing",
+    "inflation": "step 8: reversed sign: -8.333 in the full model, +10.04 beside the loan block alone",
+    "rate_gap": "step 8: reversed sign: +0.01812 in the full model, -0.1903 beside the loan block alone",
+    "term_spread": "step 9: 1 sd effect -0.058 on even and +0.013 on odd origination years, beside policy_rate_gap (+0.119), both interest rates",
     "vix": "step 8: wrong sign: +0.009349 where - is expected",
     "vix_gap": "step 8: wrong sign: +0.00254 where - is expected"
   },
-  "formula": "fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + inflation + equity_return + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N'))",
+  "formula": "fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + policy_rate_gap + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N'))",
   "moratorium": "exclude",
   "ordinal": [
     "term_years"
@@ -26,11 +30,7 @@
     "cltv_drift",
     "unemp_gap",
     "nfci_lagged",
-    "rate_gap",
-    "hpi_growth",
     "policy_rate_gap",
-    "inflation",
-    "equity_return",
     "sentiment",
     "starts_growth",
     "inflation_gap"

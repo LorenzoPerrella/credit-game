@@ -263,6 +263,31 @@ def test_an_unstable_covariate_goes_only_beside_a_larger_one_of_its_dimension() 
     assert _not_identified(table[table["covariate"] != "nfci_lagged"]) is None
 
 
+def test_the_selection_starts_from_candidates_the_configuration_cannot_change() -> None:
+    """The configured specification is the selection's output. Read back as its input, a
+    covariate removed once could never be considered again, and one admitted from the
+    candidates would enter the next run twice."""
+    from creditsurv.config import (
+        CATEGORICAL_REFERENCE,
+        MACRO_CANDIDATES,
+        ORDINAL,
+        STATIC_CONTINUOUS,
+        TIME_VARYING_CONTINUOUS,
+    )
+    from creditsurv.models.procedure import (
+        BASE_CATEGORICAL,
+        CANDIDATE_CATEGORICAL,
+        LOAN_CONTINUOUS,
+        LOAN_ORDINAL,
+    )
+
+    assert set(STATIC_CONTINUOUS) <= set(LOAN_CONTINUOUS)
+    assert set(ORDINAL) <= set(LOAN_ORDINAL)
+    assert set(TIME_VARYING_CONTINUOUS) <= set(MACRO_CANDIDATES)
+    assert set(CATEGORICAL_REFERENCE) <= set(BASE_CATEGORICAL) | set(CANDIDATE_CATEGORICAL)
+    assert not set(BASE_CATEGORICAL) & set(CANDIDATE_CATEGORICAL)
+
+
 def test_the_configuration_is_what_the_last_selection_chose() -> None:
     """The validation's F1: the specification was copied by hand from a procedure nothing
     re-ran. Once ``creditsurv select`` has written its record, the configuration has to

@@ -202,21 +202,33 @@ BASELINE = Scenario(name="baseline")
 #: 2005 and 2009. It was drift rather than a decision: the scenario predated the
 #: specification by three days. ``tests/test_scenarios.py`` now fails if the two part.
 #:
-#: Every shape is 2008-09's. Unemployment climbs four points over a year and holds;
-#: house prices fall a fifth over two years; implied volatility spikes thirty points in
-#: a quarter and decays to ten above where it started; consumer prices fall two percent
-#: over a year, which is the deflation of 2009 and what the inflation coefficient reads
-#: as stress. ``cpi`` is proportional for the same reason ``hpi`` is: it is a level
-#: index, and a two percent fall means the same thing at any value of it.
+#: The selection on the whole training half then replaced the specification, and the same
+#: test caught the scenario out again: ``vix`` was gone from the model, and ``nfci_lagged``,
+#: ``policy_rate_gap``, ``sentiment`` and ``starts_growth`` had arrived with no path. The
+#: volatility leg is removed and four legs are added, each the move its series made from
+#: July 2007 to its extreme.
+#:
+#: Unemployment climbs four points over a year and holds; house prices fall a fifth over
+#: two years; consumer prices fall two percent over a year, the deflation of 2009, which
+#: ``inflation_gap`` reads as stress. Financial conditions tighten by 3.4 over sixteen
+#: months, as the NFCI did to November 2008, and ease back over the next year. The policy
+#: rate is cut by 95% over thirty months, as 5.26% became 0.11% by 2010 -- proportional,
+#: so it meets the zero bound instead of crossing it. Consumer sentiment falls 39% over
+#: sixteen months, as 90.4 became 55.3, and housing starts 65% over twenty-one, as 1.35
+#: million became 478 thousand; both are levels, and proportional for the same reason
+#: ``hpi`` and ``cpi`` are.
 ADVERSE = Scenario(
     name="adverse",
     shocks={
         "unemployment_rate": [*np.linspace(0.0, 4.0, 12), *([4.0] * 24)],
         "hpi": [*np.linspace(0.0, -0.20, 24), *([-0.20] * 12)],
-        "vix": [*np.linspace(0.0, 30.0, 4), *np.linspace(30.0, 10.0, 12), *([10.0] * 20)],
         "cpi": [*np.linspace(0.0, -0.02, 12), *([-0.02] * 24)],
+        "nfci": [*np.linspace(0.0, 3.4, 16), *np.linspace(3.4, 0.0, 12), *([0.0] * 8)],
+        "policy_rate": [*np.linspace(0.0, -0.95, 30), *([-0.95] * 6)],
+        "sentiment": [*np.linspace(0.0, -0.39, 16), *([-0.39] * 20)],
+        "housing_starts": [*np.linspace(0.0, -0.65, 21), *([-0.65] * 15)],
     },
-    proportional=frozenset({"hpi", "cpi"}),
+    proportional=frozenset({"hpi", "cpi", "policy_rate", "sentiment", "housing_starts"}),
 )
 
 

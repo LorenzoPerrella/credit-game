@@ -53,7 +53,7 @@ trusting any model fitted across it:
   busiest month in the dataset, as the 30-year rate reaches its then-lowest point.
 - **2004–2008** — volumes fall by two thirds as rates rise, then the crisis.
 - **2009–2012** — a second refinancing wave, on much tighter underwriting.
-- **2020–2021** — the largest by amount: **4.4 million loans and $1.27 trillion in 2021**,
+- **2020–2021** — the largest by amount: **4,391,112 loans and $1.27 trillion in 2021**,
   at the lowest rates in the series.
 - **2022–2024** — the sharpest contraction in the dataset, as rates rise again.
 

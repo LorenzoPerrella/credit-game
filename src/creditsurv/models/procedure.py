@@ -44,12 +44,9 @@ import numpy as np
 import pandas as pd
 
 from creditsurv.config import (
-    CATEGORICAL_REFERENCE,
     ECONOMIC_DIMENSION,
     MACRO_CANDIDATES,
     MACRO_ELIMINATION_PRIORITY,
-    ORDINAL,
-    STATIC_CONTINUOUS,
 )
 from creditsurv.data.panel import WEIGHT
 from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
@@ -73,6 +70,16 @@ log = logging.getLogger(__name__)
 #: reference levels. Admitted to the key for the validation's M3; step 7 is where they meet
 #: the same test as every other candidate, whatever it says.
 CANDIDATE_CATEGORICAL: Final[dict[str, str]] = {"has_mi": "N", "first_time_buyer": "N"}
+
+#: The loan block the selection starts from and protects from variance inflation, fixed
+#: here as ``config.MACRO_CANDIDATES`` fixes the macro block. ``config.STATIC_CONTINUOUS``,
+#: ``config.ORDINAL`` and ``config.CATEGORICAL_REFERENCE`` hold what survived. Were the
+#: candidates read back from them, a covariate the selection once removed could never be
+#: considered again, and ``has_mi`` and ``first_time_buyer``, admitted by the first run under
+#: this rule, would enter the next one twice.
+LOAN_CONTINUOUS: Final[tuple[str, ...]] = ("fico_s", "orig_ltv", "dti")
+LOAN_ORDINAL: Final[tuple[str, ...]] = ("term_years",)
+BASE_CATEGORICAL: Final[dict[str, str]] = {"purpose": "purchase", "occupancy": "owner_occupied"}
 
 #: Correlation above which a pair is reported at step 5.
 CORRELATION_THRESHOLD: Final = 0.8
@@ -224,8 +231,8 @@ class SelectionRecord:
         return {
             "as_of": self.as_of,
             "moratorium": self.moratorium,
-            "static_continuous": [name for name in continuous if name in STATIC_CONTINUOUS],
-            "ordinal": [name for name in continuous if name in ORDINAL],
+            "static_continuous": [name for name in continuous if name in LOAN_CONTINUOUS],
+            "ordinal": [name for name in continuous if name in LOAN_ORDINAL],
             "time_varying_continuous": [name for name in continuous if name in MACRO_CANDIDATES],
             "categorical": dict(self.selected.categorical),
             "eliminated": self.eliminated,
@@ -237,10 +244,10 @@ def run_selection(
     train: pd.DataFrame,
     fits: Fits,
     *,
-    static: Sequence[str] = STATIC_CONTINUOUS,
-    ordinal: Sequence[str] = ORDINAL,
+    static: Sequence[str] = LOAN_CONTINUOUS,
+    ordinal: Sequence[str] = LOAN_ORDINAL,
     macro: Sequence[str] = MACRO_CANDIDATES,
-    base_categorical: Mapping[str, str] = CATEGORICAL_REFERENCE,
+    base_categorical: Mapping[str, str] = BASE_CATEGORICAL,
     candidate_categorical: Mapping[str, str] = CANDIDATE_CATEGORICAL,
     halves: np.ndarray | None = None,
 ) -> SelectionRecord:

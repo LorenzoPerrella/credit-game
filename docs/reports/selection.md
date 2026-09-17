@@ -17,14 +17,18 @@ whole population and its first 94%, which needs the test window.
 
 ## Chosen
 
-`fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + inflation + equity_return + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N'))`
+`fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + policy_rate_gap + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N'))`
 
 **Every candidate removed, with the step and the reason**
 
 | covariate | why it was removed |
 |---|---|
 | credit_spread | step 6: variance inflation 11.9, above 10 |
-| term_spread | step 9: 1 sd effect -0.123 on even and +0.004 on odd origination years, beside policy_rate_gap (+0.134), both interest rates |
+| equity_return | step 8: reversed sign: -0.08563 in the full model, +0.4305 beside the loan block alone |
+| hpi_growth | step 9: 1 sd effect -0.004 on even and +0.015 on odd origination years, beside cltv_drift (-0.179), both housing |
+| inflation | step 8: reversed sign: -8.333 in the full model, +10.04 beside the loan block alone |
+| rate_gap | step 8: reversed sign: +0.01812 in the full model, -0.1903 beside the loan block alone |
+| term_spread | step 9: 1 sd effect -0.058 on even and +0.013 on odd origination years, beside policy_rate_gap (+0.119), both interest rates |
 | vix | step 8: wrong sign: +0.009349 where - is expected |
 | vix_gap | step 8: wrong sign: +0.00254 where - is expected |
 
@@ -78,6 +82,9 @@ time, and the likelihood ratio the candidate earns.
 |---|---|---|---|---|---|
 | 1 | vix_gap | 0.0025 | 5.71e-207 | wrong sign: +0.00254 where - is expected | 21 |
 | 2 | vix | 0.0093 | 0.0000 | wrong sign: +0.009349 where - is expected | 20 |
+| 3 | rate_gap | 0.0181 | 2.12e-109 | reversed sign: +0.01812 in the full model, -0.1903 beside the loan block alone | 19 |
+| 4 | equity_return | -0.0856 | 2.34e-132 | reversed sign: -0.08563 in the full model, +0.4305 beside the loan block alone | 18 |
+| 5 | inflation | -8.3325 | 0.0000 | reversed sign: -8.333 in the full model, +10.04 beside the loan block alone | 17 |
 
 ### 9. Stability
 
@@ -88,37 +95,42 @@ An unstable covariate with no such partner is kept, and left visible here.
 
 | covariate | dimension | effect_all | effect_even | effect_odd | stable | round |
 |---|---|---|---|---|---|---|
-| fico_s | credit quality | 0.4227 | 0.4265 | 0.4136 | True | 1 |
-| orig_ltv | leverage at origination | -0.2004 | -0.1895 | -0.2066 | True | 1 |
-| dti | debt burden | -0.1732 | -0.1726 | -0.1688 | True | 1 |
-| term_years | term | -0.2386 | -0.2424 | -0.2277 | True | 1 |
-| cltv_drift | housing | -0.1590 | -0.1150 | -0.1718 | True | 1 |
-| unemp_gap | labour | -0.1068 | -0.1283 | -0.0843 | True | 1 |
-| nfci_lagged | financial stress | -0.0225 | -0.0270 | -0.0145 | True | 1 |
-| rate_gap | interest rates | 0.0278 | 0.0115 | 0.0737 | True | 1 |
-| hpi_growth | housing | 0.0275 | 0.0299 | 0.0338 | True | 1 |
-| policy_rate_gap | interest rates | 0.1342 | 0.0862 | 0.1999 | True | 1 |
-| term_spread | interest rates | -0.0458 | -0.1230 | 0.0042 | False | 1 |
-| inflation | prices | -0.1594 | -0.2295 | -0.0996 | True | 1 |
-| equity_return | asset prices | -0.0176 | 0.0049 | -0.0283 | False | 1 |
-| sentiment | confidence | 0.0234 | -0.0054 | 0.0338 | False | 1 |
-| starts_growth | housing | 0.0771 | 0.0687 | 0.0779 | True | 1 |
-| inflation_gap | prices | 0.1583 | 0.2309 | 0.0969 | True | 1 |
-| fico_s | credit quality | 0.4253 | 0.4356 | 0.4134 | True | 2 |
-| orig_ltv | leverage at origination | -0.2019 | -0.1943 | -0.2065 | True | 2 |
-| dti | debt burden | -0.1726 | -0.1726 | -0.1689 | True | 2 |
-| term_years | term | -0.2361 | -0.2382 | -0.2279 | True | 2 |
-| cltv_drift | housing | -0.1602 | -0.1255 | -0.1718 | True | 2 |
-| unemp_gap | labour | -0.1070 | -0.1289 | -0.0843 | True | 2 |
-| nfci_lagged | financial stress | -0.0185 | -0.0179 | -0.0149 | True | 2 |
-| rate_gap | interest rates | 0.0263 | 0.0012 | 0.0737 | True | 2 |
-| hpi_growth | housing | 0.0401 | 0.0612 | 0.0326 | True | 2 |
-| policy_rate_gap | interest rates | 0.1564 | 0.1412 | 0.1978 | True | 2 |
-| inflation | prices | -0.1438 | -0.1773 | -0.1008 | True | 2 |
-| equity_return | asset prices | -0.0244 | -0.0166 | -0.0277 | True | 2 |
-| sentiment | confidence | 0.0326 | 0.0231 | 0.0330 | True | 2 |
-| starts_growth | housing | 0.0752 | 0.0659 | 0.0781 | True | 2 |
-| inflation_gap | prices | 0.1488 | 0.1910 | 0.0974 | True | 2 |
+| fico_s | credit quality | 0.4353 | 0.4418 | 0.4266 | True | 1 |
+| orig_ltv | leverage at origination | -0.2032 | -0.1914 | -0.2110 | True | 1 |
+| dti | debt burden | -0.1767 | -0.1785 | -0.1724 | True | 1 |
+| term_years | term | -0.2429 | -0.2508 | -0.2334 | True | 1 |
+| cltv_drift | housing | -0.1788 | -0.1637 | -0.1837 | True | 1 |
+| unemp_gap | labour | -0.0909 | -0.0999 | -0.0821 | True | 1 |
+| nfci_lagged | financial stress | -0.0025 | -0.0061 | -0.0002 | True | 1 |
+| hpi_growth | housing | 0.0045 | -0.0042 | 0.0147 | False | 1 |
+| policy_rate_gap | interest rates | 0.1204 | 0.0845 | 0.1545 | True | 1 |
+| term_spread | interest rates | -0.0143 | -0.0590 | 0.0166 | False | 1 |
+| sentiment | confidence | 0.0888 | 0.0953 | 0.0759 | True | 1 |
+| starts_growth | housing | 0.0756 | 0.0684 | 0.0842 | True | 1 |
+| inflation_gap | prices | 0.0559 | 0.0861 | 0.0210 | True | 1 |
+| fico_s | credit quality | 0.4348 | 0.4423 | 0.4248 | True | 2 |
+| orig_ltv | leverage at origination | -0.2030 | -0.1915 | -0.2107 | True | 2 |
+| dti | debt burden | -0.1765 | -0.1787 | -0.1716 | True | 2 |
+| term_years | term | -0.2426 | -0.2511 | -0.2324 | True | 2 |
+| cltv_drift | housing | -0.1801 | -0.1624 | -0.1876 | True | 2 |
+| unemp_gap | labour | -0.0916 | -0.0994 | -0.0850 | True | 2 |
+| nfci_lagged | financial stress | -0.0039 | -0.0048 | -0.0047 | True | 2 |
+| policy_rate_gap | interest rates | 0.1187 | 0.0860 | 0.1488 | True | 2 |
+| term_spread | interest rates | -0.0155 | -0.0580 | 0.0127 | False | 2 |
+| sentiment | confidence | 0.0887 | 0.0954 | 0.0755 | True | 2 |
+| starts_growth | housing | 0.0766 | 0.0675 | 0.0874 | True | 2 |
+| inflation_gap | prices | 0.0560 | 0.0860 | 0.0215 | True | 2 |
+| fico_s | credit quality | 0.4344 | 0.4418 | 0.4252 | True | 3 |
+| orig_ltv | leverage at origination | -0.2033 | -0.1932 | -0.2105 | True | 3 |
+| dti | debt burden | -0.1758 | -0.1763 | -0.1722 | True | 3 |
+| term_years | term | -0.2412 | -0.2456 | -0.2335 | True | 3 |
+| cltv_drift | housing | -0.1816 | -0.1683 | -0.1862 | True | 3 |
+| unemp_gap | labour | -0.0938 | -0.1080 | -0.0833 | True | 3 |
+| nfci_lagged | financial stress | -0.0037 | -0.0047 | -0.0051 | True | 3 |
+| policy_rate_gap | interest rates | 0.1250 | 0.1118 | 0.1440 | True | 3 |
+| sentiment | confidence | 0.0895 | 0.0961 | 0.0743 | True | 3 |
+| starts_growth | housing | 0.0766 | 0.0681 | 0.0875 | True | 3 |
+| inflation_gap | prices | 0.0563 | 0.0831 | 0.0203 | True | 3 |
 
 ## Fits
 
@@ -144,14 +156,20 @@ An unstable covariate with no such partner is kept, and left visible here.
 | training half | fico_s + orig_ltv + dti + term_years + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) | 0.0 | - | True |
 | training half | fico_s + orig_ltv + dti + term_years + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(first_time_buyer, Treatment('N')) | 0.0 | - | True |
 | training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + term_spread + inflation + equity_return + vix + sentiment + starts_growth + vix_gap + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 0.0 | - | True |
-| training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + term_spread + inflation + equity_return + vix + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 38.3 | 4.0 | False |
-| training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + term_spread + inflation + equity_return + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 45.0 | 5.0 | False |
+| training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + term_spread + inflation + equity_return + vix + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 0.0 | - | True |
 | training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + term_spread + inflation + equity_return + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 0.0 | - | True |
-| even origination years | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + term_spread + inflation + equity_return + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 18.2 | 4.0 | False |
-| odd origination years | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + term_spread + inflation + equity_return + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 20.6 | 4.0 | False |
-| training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + inflation + equity_return + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 44.8 | 5.0 | False |
-| even origination years | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + inflation + equity_return + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 17.5 | 4.0 | False |
-| odd origination years | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + rate_gap + hpi_growth + policy_rate_gap + inflation + equity_return + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 19.6 | 4.0 | False |
+| training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + hpi_growth + policy_rate_gap + term_spread + inflation + equity_return + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 34.9 | 4.0 | False |
+| training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + hpi_growth + policy_rate_gap + term_spread + inflation + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 33.4 | 4.0 | False |
+| training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + hpi_growth + policy_rate_gap + term_spread + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 51.9 | 12.0 | False |
+| training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + hpi_growth + policy_rate_gap + term_spread + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 0.0 | - | True |
+| even origination years | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + hpi_growth + policy_rate_gap + term_spread + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 15.4 | 4.0 | False |
+| odd origination years | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + hpi_growth + policy_rate_gap + term_spread + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 17.3 | 4.0 | False |
+| training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + policy_rate_gap + term_spread + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 23.8 | 3.0 | False |
+| even origination years | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + policy_rate_gap + term_spread + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 14.7 | 4.0 | False |
+| odd origination years | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + policy_rate_gap + term_spread + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 16.5 | 4.0 | False |
+| training half | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + policy_rate_gap + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 29.2 | 4.0 | False |
+| even origination years | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + policy_rate_gap + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 14.0 | 4.0 | False |
+| odd origination years | fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + policy_rate_gap + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N')) | 15.6 | 4.0 | False |
 
 ---
 
