@@ -155,6 +155,12 @@ flowchart TD
   the objective goes negative and flat, and an undamped step once landed there. A step is
   taken only to a value a likelihood can have, damped until it lowers the objective.
 
+## The rules this model is judged by
+
+Windows, the family rule, the materiality threshold, the anchoring, the acceptance criteria
+and how far the cell key may grow are fixed in [rules written first](rules.md), before the
+runs that produce the numbers they judge.
+
 ## Where to read more
 
 - [Variable selection](variable_selection.md): the procedure, the results on the training

@@ -79,6 +79,7 @@ nav:
   - Portfolio: portfolio.md
   - Methodology:
       - In short: methodology.md
+      - Rules written first: rules.md
       - Variable selection: variable_selection.md
       - The selection record: reports/selection.md
       - Methodology report: reports/methodology.md
