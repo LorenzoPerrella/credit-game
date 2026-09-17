@@ -275,15 +275,22 @@ ORDINAL: Final[tuple[str, ...]] = ("term_years",)
 #: carry. It is recoverable the same way ``cltv_drift`` is -- from a banded
 #: ``orig_spread`` plus the mortgage-rate path, both functions of the key -- which is
 #: the cheapest of the candidate additions and the one to weigh first.
-#: **One covariate per economic dimension**, and that rule is the outcome of getting
-#: it wrong twice. Housing, labour, financial stress, prices -- four dimensions, four
-#: covariates. Everything else tried duplicated one of them and was not identified
-#: beside it. See ``ELIMINATED`` for the measurements.
+#: **The output of ``creditsurv select``, not a choice made here.** Steps 5 to 9 on the
+#: training half kept seven of the fifteen macro candidates, and
+#: ``tests/test_procedure.py`` fails if this tuple and ``docs/reports/selection.json``
+#: part. One per economic dimension except housing, where ``starts_growth``, the
+#: construction cycle, held its sign beside ``cltv_drift`` on both halves of the book (1 sd
+#: effect +0.068 and +0.088 against -0.168 and -0.186). The first run, done by hand before
+#: the validation, kept ``vix`` and ``inflation``; the selection removed both. See
+#: ``ELIMINATED``.
 TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
     "cltv_drift",
     "unemp_gap",
-    "vix",
-    "inflation",
+    "nfci_lagged",
+    "policy_rate_gap",
+    "sentiment",
+    "starts_growth",
+    "inflation_gap",
 )
 
 #: Every macro-derived covariate available, including the ones the default model does
@@ -310,7 +317,41 @@ MACRO_CANDIDATES: Final[tuple[str, ...]] = (
     "vix",
     "sentiment",
     "starts_growth",
+    # Added for the validation's S5: ``vix`` and ``inflation`` enter as levels at the
+    # observation date, identical for every loan in a month, so their coefficients are
+    # calendar effects by construction. Their moves since origination vary across loans
+    # in the same month. Both forms are candidates and the selection decides.
+    "vix_gap",
+    "inflation_gap",
 )
+
+#: The economic dimension each candidate measures, fixed before any selection result.
+#:
+#: The stability rule of step 9 removes a covariate that is small, changes sign when the
+#: sample does, and sits beside a larger covariate of the **same** dimension. Which
+#: covariates share a dimension therefore has to be decided in advance: decided after the
+#: fits, the rule would be a way of dropping whatever came out inconvenient.
+ECONOMIC_DIMENSION: Final[dict[str, str]] = {
+    "fico_s": "credit quality",
+    "orig_ltv": "leverage at origination",
+    "dti": "debt burden",
+    "term_years": "term",
+    "cltv_drift": "housing",
+    "hpi_growth": "housing",
+    "starts_growth": "housing",
+    "unemp_gap": "labour",
+    "vix": "financial stress",
+    "vix_gap": "financial stress",
+    "nfci_lagged": "financial stress",
+    "credit_spread": "financial stress",
+    "rate_gap": "interest rates",
+    "policy_rate_gap": "interest rates",
+    "term_spread": "interest rates",
+    "inflation": "prices",
+    "inflation_gap": "prices",
+    "equity_return": "asset prices",
+    "sentiment": "confidence",
+}
 
 #: Order in which collinear macro covariates are given up, most expendable first.
 #:
@@ -325,71 +366,49 @@ MACRO_CANDIDATES: Final[tuple[str, ...]] = (
 #:
 #: See docs/variable_selection.md for the measured tables behind each.
 ELIMINATED: Final[dict[str, str]] = {
-    # --- not identified beside a larger covariate carrying the same information ---
+    # The keys are the selection record's and are tested against it; the reasons carry its
+    # numbers. The first run's arguments for eliminating by hand are in
+    # docs/variable_selection.md, kept as history.
     #
-    # These four passed the sign and collinearity screens and were eliminated by a rule
-    # those screens do not contain: a covariate whose standardised effect is small
-    # **and** which sits beside a larger correlated one carrying the same economic
-    # information is not identified, and its sign is noise.
-    #
-    # The evidence is that the sign moves when the sample does. Restricting the panel
-    # to everything before 2024-12 -- dropping 6.3% of exposure -- flipped all three of
-    # these that had a sign at all, while every covariate with a standardised effect
-    # above 0.1 held to within a few percent. In log survival time per standard
-    # deviation:
-    #
-    #     vix          -0.32  stable      hpi_growth       -0.09  flipped
-    #     cltv_drift   -0.29  stable      nfci_lagged      +0.05  flipped
-    #     inflation    +0.13  stable      policy_rate_gap  -0.04  flipped
-    #     unemp_gap    -0.09  stable      rate_gap         -0.01  ~zero
-    #
-    "hpi_growth": (
-        "not identified beside cltv_drift, which is built from the *same* house price "
-        "index: the information enters twice and the second time is residual. 1sd "
-        "effect -0.09 against -0.29, and the sign flips with the sample"
-    ),
-    "nfci_lagged": (
-        "not identified beside vix (rho +0.55), which carries financial stress with "
-        "six times the effect and holds its sign"
-    ),
-    "policy_rate_gap": (
-        "not identified beside rate_gap (rho -0.79); both effects are inside the noise"
-    ),
-    "rate_gap": (
-        "conditional effect -0.0066 per standard deviation, which is zero. Its 4.8x "
-        "marginal ordering is the macro cycle, not the refinancing incentive, and the "
-        "argument made earlier for revising its expected sign on the strength of that "
-        "ordering is RETRACTED"
-    ),
-    # --- eliminated earlier, by the sign and content screens ---
+    # --- step 6: collinearity, in the priority fixed before any fit ---
     "credit_spread": (
-        "marginal/conditional sign reversal: alone it orders default 4.1x in the "
-        "right direction, and flips once nfci_lagged is present -- which is built "
-        "from 105 indicators including this very spread"
+        "variance inflation 11.9, above 10 -- the first candidate over the threshold. The "
+        "first run had it at 8.41 and removed it by hand for a sign reversal"
     ),
+    # --- step 8: backwards against a declared prior ---
+    "vix_gap": "wrong sign: +0.00254 in the full model, where stress should shorten survival",
+    "vix": (
+        "wrong sign: +0.00935 in the full model once vix_gap is gone, against -0.0198 beside "
+        "the loan block alone. The first run's largest effect: part of it was the 2020 "
+        "moratoria, as the validation suspected (S5), and the rest is shared with nfci_lagged"
+    ),
+    # --- step 8: its sign reversed against its own ---
+    "rate_gap": "reversed: -0.190 beside the loan block alone, +0.018 in the full model",
+    "equity_return": "reversed: +0.431 beside the loan block alone, -0.086 in the full model",
+    "inflation": (
+        "reversed: +10.04 beside the loan block alone, -8.33 in the full model, against "
+        "inflation_gap's +6.9 there -- together the pair was reading inflation at origination"
+    ),
+    # --- step 9: not identified beside a larger covariate of the same dimension ---
     "term_spread": (
-        "marginal/conditional sign reversal: 2.9x alone in the right direction, "
-        "flips against policy_rate_gap (rho -0.69), its other view of the same cycle"
+        "1 sd effect -0.058 on even and +0.013 on odd origination years, beside "
+        "policy_rate_gap at +0.119"
     ),
-    "equity_return": (
-        "no marginal signal: 1.4x across its whole range and unordered, against "
-        "8.7x for fico_s -- yet p = 0.0000, which is what 2.5 billion loan-months "
-        "does to a p-value"
-    ),
-    "sentiment": "no marginal signal: 2.0x and unordered, same story",
-    "starts_growth": (
-        "U-shaped: 16.8 bp when construction collapses, 5.3 bp in the middle, "
-        "15.1 bp when it booms. The information is real and a linear term cannot "
-        "carry it; re-entering it banded would"
+    "hpi_growth": (
+        "1 sd effect -0.004 on even and +0.015 on odd origination years, beside cltv_drift "
+        "at -0.179, which is built from the same house price index"
     ),
 }
 
 MACRO_ELIMINATION_PRIORITY: Final[tuple[str, ...]] = (
     "equity_return",
     "vix",
+    # A level gives way before its own gap form, for the reason at MACRO_CANDIDATES.
+    "vix_gap",
     "sentiment",
     "term_spread",
     "inflation",
+    "inflation_gap",
     "starts_growth",
     "policy_rate_gap",
     "credit_spread",
@@ -401,11 +420,15 @@ MACRO_ELIMINATION_PRIORITY: Final[tuple[str, ...]] = (
 )
 
 #: Categorical covariates mapped to their treatment-coding reference level.
-#: ``channel``, ``region`` and ``first_time_buyer`` are screened and mapped but not
-#: in the key: together they would multiply the cell count by sixteen.
+#: ``has_mi`` and ``first_time_buyer`` entered the key with the validation (M3), at 1.19x
+#: the cells where an unmeasured sixteenfold had kept them out, and the model with the
+#: selection, whose screen beside the loan block put them at z = -46 and +26. ``channel``
+#: and ``region`` are mapped but not in the key.
 CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
     "purpose": "purchase",
     "occupancy": "owner_occupied",
+    "has_mi": "N",
+    "first_time_buyer": "N",
 }
 
 

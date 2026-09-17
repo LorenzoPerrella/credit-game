@@ -150,21 +150,22 @@ def predicted_survival_curve(
     which is the same construction Kaplan-Meier applies to empirical hazards, and
     therefore directly comparable with it.
     """
-    frame = encoded.loc[:, list(covariates)]
     ages = encoded[age_col].to_numpy(dtype=int)
-    hazard = episode_hazards(result, frame, ages)
+    hazard = episode_hazards(result, encoded, ages, columns=list(covariates))
 
-    if weights_col is None:
-        mean_hazard = pd.Series(hazard, index=encoded.index).groupby(ages).mean()
-    else:
-        # On aggregated cells the average has to be over loans at risk, not over
-        # distinct covariate combinations: a rare combination would otherwise weigh
-        # as much as one carrying a million loan-months.
-        weight = encoded[weights_col].to_numpy(dtype=float)
-        totals = pd.DataFrame({"w": weight, "wh": weight * hazard}).groupby(ages).sum()
-        mean_hazard = totals["wh"] / totals["w"]
-    survival = np.cumprod(1.0 - mean_hazard.to_numpy())
-    return pd.Series(survival, index=mean_hazard.index.to_numpy() + 1.0, name="predicted")
+    # On aggregated cells the average has to be over loans at risk, not over distinct
+    # covariate combinations: a rare combination would otherwise weigh as much as one
+    # carrying a million loan-months. Added up with bincount, because a group-by first
+    # builds a frame of the weights and products -- another 1 GB on the training half of
+    # the exact key -- to produce a few hundred sums.
+    weight = (
+        np.ones(len(ages)) if weights_col is None else encoded[weights_col].to_numpy(dtype=float)
+    )
+    at_risk = np.bincount(ages, weights=weight)
+    present = np.flatnonzero(at_risk > 0)
+    mean_hazard = np.bincount(ages, weights=weight * hazard)[present] / at_risk[present]
+    survival = np.cumprod(1.0 - mean_hazard)
+    return pd.Series(survival, index=present + 1.0, name="predicted")
 
 
 def km_band_contains(

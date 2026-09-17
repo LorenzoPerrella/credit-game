@@ -8,6 +8,7 @@ import pytest
 
 from creditsurv.data.panel import (
     PanelValidationError,
+    cells_to_episodes,
     duration_view,
     model_frame,
     to_counting_process,
@@ -207,3 +208,187 @@ def test_duration_view_takes_both_paths() -> None:
     panel = make_panel({1: (3, True), 2: (5, False)})
     assert "n" not in duration_view(panel).columns
     assert duration_view(panel.assign(n=2.0), weights_col="n")["n"].sum() == 4.0
+
+
+def test_the_episode_frame_is_built_narrow(macro: pd.DataFrame) -> None:
+    """This frame is the largest object the pipeline holds, and its size decides
+    whether an exact calendar key is affordable at all.
+
+    It reached 5.9 GB on the production table, of which 44% was three categorical
+    columns stored as Python strings. Narrowing is not tidiness: at the cell counts an
+    exact key implies, it is the difference between fitting and not.
+    """
+    cells = pd.DataFrame(
+        {
+            "orig_month": [2006 * 12] * 6,
+            "purpose": ["purchase", "refinance_cashout"] * 3,
+            "fico_s": [0.4] * 6,
+            "orig_ltv": [85.0] * 6,
+            "age": [0, 1, 2, 3, 4, 5],
+            "event": [False] * 5 + [True],
+            "n": [100] * 6,
+        }
+    )
+
+    everything = cells_to_episodes(cells, macro)
+    narrow = cells_to_episodes(cells, macro, covariates=["cltv_drift", "unemp_gap"])
+
+    assert isinstance(everything["purpose"].dtype, pd.CategoricalDtype)
+    assert everything["cltv_drift"].dtype == np.float32
+    assert "sentiment" in everything.columns
+    assert "sentiment" not in narrow.columns, "an unrequested covariate must not be built"
+    assert narrow.memory_usage(deep=True).sum() < everything.memory_usage(deep=True).sum()
+
+
+def test_an_infinite_upper_bound_survives_single_precision(macro: pd.DataFrame) -> None:
+    """Censored rows carry an infinite upper bound, and float32 has no room for the
+    hazard of it silently becoming finite -- which would turn every censored row into
+    an observed default."""
+    cells = pd.DataFrame(
+        {
+            "orig_month": [2006 * 12] * 4,
+            "fico_s": [0.4] * 4,
+            "orig_ltv": [85.0] * 4,
+            "age": [0, 1, 2, 3],
+            "event": [False, False, False, True],
+            "n": [10] * 4,
+        }
+    )
+
+    episodes = cells_to_episodes(cells, macro)
+
+    censored = episodes[~episodes["event"].astype(bool)]
+    assert np.isinf(censored["upper_bound"]).all()
+    assert np.isfinite(episodes.loc[episodes["event"].astype(bool), "upper_bound"]).all()
+
+
+def test_a_quarterly_cell_table_is_read_but_warns(macro: pd.DataFrame) -> None:
+    """Reconstructing the month from the quarter runs about two months early, which
+    is a defect rather than a convention -- so an older table is still readable and
+    says so."""
+    cells = pd.DataFrame(
+        {
+            "vintage": ["2006Q1"] * 4,
+            "fico_s": [0.4] * 4,
+            "orig_ltv": [85.0] * 4,
+            "age": [0, 1, 2, 3],
+            "event": [False, False, False, True],
+            "n": [10] * 4,
+        }
+    )
+
+    with pytest.warns(UserWarning, match="two months early"):
+        episodes = cells_to_episodes(cells, macro)
+
+    assert len(episodes) == 4
+
+
+def _calendar_cells() -> pd.DataFrame:
+    """Three vintages around a reporting date, categorical as a loaded table is.
+
+    The 1997 cells cannot have their macro covariates built -- the stub panel opens that
+    January, and the lag reaches back before it -- so they are dropped, and must be
+    dropped the same way however the table is expanded.
+    """
+    vintages = [1997 * 12, 2006 * 12, 2007 * 12]
+    return pd.DataFrame(
+        {
+            "orig_month": [month for month in vintages for _ in range(6)],
+            "purpose": pd.Categorical(["purchase", "refinance_cashout"] * 9),
+            "fico_s": [0.4] * 18,
+            "orig_ltv": [85.0] * 18,
+            "age": list(range(6)) * 3,
+            "event": ([False] * 5 + [True]) * 3,
+            "n": [100] * 18,
+        }
+    )
+
+
+def test_expanding_a_selection_is_expanding_everything_and_keeping_it(
+    macro: pd.DataFrame,
+) -> None:
+    """``where`` exists so the halves can be built without the whole panel, and must not
+    change a row of what they contain."""
+    from creditsurv.data.panel import observation_months
+
+    cells = _calendar_cells()
+    selected = observation_months(cells).to_numpy() <= 2007 * 12 + 2
+
+    everything = cells_to_episodes(cells, macro)
+    chosen = cells_to_episodes(cells, macro, where=selected)
+
+    assert len(everything) < len(cells), "the incomplete 1997 cells must be exercised"
+    expected = everything[everything["period"] <= pd.Period("2007-03", freq="M")]
+    pd.testing.assert_frame_equal(chosen, expected.reset_index(drop=True))
+
+
+def test_the_step_is_read_off_the_whole_table(macro: pd.DataFrame) -> None:
+    """A selection holding ages 0 and 12 is not a table of year-long episodes."""
+    cells = pd.DataFrame(
+        {
+            "orig_month": [2006 * 12] * 4,
+            "fico_s": [0.4] * 4,
+            "orig_ltv": [85.0] * 4,
+            "age": [0, 1, 2, 12],
+            "event": [False] * 4,
+            "n": [10] * 4,
+        }
+    )
+
+    chosen = cells_to_episodes(cells, macro, where=np.array([True, False, False, True]))
+
+    assert ((chosen["age_stop"] - chosen["age_start"]) == 1.0).all()
+
+
+def test_expansion_leaves_the_cell_table_untouched(macro: pd.DataFrame) -> None:
+    """The episodes are built on a shallow copy, so the caller's table must not change."""
+    cells = _calendar_cells()
+    cells["purpose"] = cells["purpose"].astype(str)
+    before = cells.copy()
+
+    cells_to_episodes(cells, macro)
+
+    pd.testing.assert_frame_equal(cells, before)
+
+
+def test_month_ordinals_become_the_periods_their_labels_name() -> None:
+    from creditsurv.data.panel import _months_to_periods
+
+    months = pd.Series([1999 * 12, 2006 * 12 + 11, 2026 * 12 + 2])
+
+    expected = pd.PeriodIndex(["1999-01", "2006-12", "2026-03"], freq="M")
+    assert _months_to_periods(months).equals(expected)
+
+
+def test_loans_entering_late_are_measured_not_silently_absorbed() -> None:
+    """A loan first seen at age two cannot be placed in a duration distribution.
+
+    It is absorbed as if at risk from origination, which dilutes the early hazard. The
+    first version did that silently, believing the panel is reported contiguously from
+    origination; the validation measured 4,605,963 loan-months absorbed that way.
+    """
+    from creditsurv.data.panel import net_entries
+
+    contiguous = make_panel({1: (4, False), 2: (4, True)})
+    late = pd.DataFrame({"loan_id": 3, "age": [2, 3], "event": False, "covariate": 1.5})
+    panel = pd.concat([contiguous, late], ignore_index=True).assign(n=1.0)
+
+    assert net_entries(panel).to_dict() == {2: 1.0}
+    assert net_entries(contiguous.assign(n=1.0)).empty
+    with pytest.warns(UserWarning, match="after age zero"):
+        to_loan_level_weighted(panel)
+
+
+def test_blocks_of_a_selection_are_the_selected_rows() -> None:
+    """Half of the panel read in blocks is that half, and no copy of it is made first."""
+    from creditsurv.data.panel import model_blocks
+
+    panel = to_interval_censored(make_panel({1: (5, True), 2: (6, False), 3: (4, False)})).assign(
+        n=1.0
+    )
+    selected = panel["loan_id"].to_numpy() != 2
+
+    blocks = list(model_blocks(panel, ["covariate"], rows=3, weights_col="n", where=selected))
+
+    expected = model_frame(panel[selected], ["covariate"]).assign(n=1.0)
+    pd.testing.assert_frame_equal(pd.concat(blocks), expected)

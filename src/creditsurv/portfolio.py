@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from creditsurv.data.aggregate import PathSpec, _connect, _resolve
+from creditsurv.data.panel import EVENT, WEIGHT
 
 if TYPE_CHECKING:
     import duckdb
@@ -256,3 +257,50 @@ def _to_period(keys: pd.Series) -> pd.PeriodIndex:
     """YYYYMM integers to a monthly PeriodIndex."""
     text = keys.astype(int).astype(str)
     return pd.PeriodIndex(text.str[:4] + "-" + text.str[4:], freq="M")
+
+
+def book_summary(
+    lending: pd.DataFrame,
+    outstanding: pd.DataFrame,
+    *,
+    performance_rows: int,
+    cells: pd.DataFrame | None,
+) -> dict[str, object]:
+    """The numbers ``docs/portfolio.md`` opens with, each saying what it counts.
+
+    The validation's S7 crossed that document's default count, 1,906,460, with another
+    document's 1,938,519. Each was right about a different run of a different panel, and
+    neither said which. Three loan-month counts are given because they count three things:
+    every row of the performance files, the rows reporting a balance, and the loan-months
+    the model is estimated on.
+
+    The modelled figures are summed from the cells rather than re-derived in SQL. The first
+    version counted the cleaned book before the categorical mappings drop a loan, and its
+    1,537,129 defaults were 443 more than the 1,536,686 every report works from. ``cells``
+    is ``None`` before the book has been aggregated, and so are those two figures.
+    """
+    years = pd.PeriodIndex(lending["period"]).year
+    modelled_months = None if cells is None else int(cells[WEIGHT].sum())
+    modelled_defaults = (
+        None
+        if cells is None
+        else int(cells[WEIGHT].to_numpy()[cells[EVENT].to_numpy(dtype=bool)].sum())
+    )
+    return {
+        "vintages": f"{int(years.min())} - {int(years.max())}",
+        "loans_originated": int(lending["loans"].sum()),
+        "amount_originated": float(lending["amount"].sum()),
+        "performance_rows": int(performance_rows),
+        "loan_months_outstanding": int(outstanding["contracts"].sum()),
+        "peak_contracts_outstanding": int(outstanding["contracts"].max()),
+        "peak_balance_outstanding": float(outstanding["balance"].max()),
+        "loan_months_modelled": modelled_months,
+        "defaults_modelled": modelled_defaults,
+        "definition": (
+            "Performance rows: every row of the performance files, as the ingest manifest "
+            "counted them. Loan-months outstanding: the rows reporting a positive balance at "
+            "a non-negative age. Loan-months and defaults modelled: summed from the cells -- "
+            "complete cases with every categorical code mapped, cut at the first terminating "
+            "month, a moratorium not counted as a default."
+        ),
+    }

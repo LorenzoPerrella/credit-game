@@ -18,9 +18,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from creditsurv.data.panel import WEIGHT, validate_episodes
+import numpy as np
+
+from creditsurv.data.panel import (
+    WEIGHT,
+    cells_to_episodes,
+    episode_step,
+    observation_months,
+    validate_episodes,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import pandas as pd
 
 PERIOD = "period"
@@ -86,6 +96,49 @@ def cell_split(cells: pd.DataFrame, as_of: pd.Period) -> Split:
     if train.empty:
         message = f"No exposure at or before {as_of}."
         raise ValueError(message)
+    return Split(as_of=as_of, train=train, test=test)
+
+
+def split_cells(
+    cells: pd.DataFrame,
+    macro: pd.DataFrame,
+    as_of: pd.Period,
+    *,
+    covariates: Sequence[str] | None = None,
+) -> Split:
+    """:func:`cell_split` of the expanded panel, without the whole panel ever existing.
+
+    Expanding every cell and then splitting holds the panel and both of its halves at
+    once: on the exact calendar key, about 6 GB for the panel and 6 GB more for the
+    halves, on a 16 GB machine, before a single fit. The month a cell observes is fixed
+    by its origination month and its age, so dividing the cells first gives the same
+    halves -- which a test holds to the row -- and each half is expanded on its own.
+    """
+    cut = as_of.year * 12 + as_of.month - 1
+    before = observation_months(cells).to_numpy() <= cut
+    if not before.any():
+        message = f"No exposure at or before {as_of}."
+        raise ValueError(message)
+
+    # Each half is taken out first and the table let go before either is expanded. Expanding
+    # from the whole table held it beside the growing half, and the comparison of moratorium
+    # policies that did so peaked at a 17.3 GB footprint on a 16 GB machine. The caller that
+    # passes a table it does not keep frees it here.
+    step = episode_step(cells)
+    train_cells = cells.iloc[np.flatnonzero(before)]
+    test_cells = cells.iloc[np.flatnonzero(~before)]
+    del cells
+
+    train = cells_to_episodes(train_cells, macro, covariates=covariates, step=step)
+    del train_cells
+    if train.empty:
+        message = f"No exposure at or before {as_of}."
+        raise ValueError(message)
+    test = (
+        cells_to_episodes(test_cells, macro, covariates=covariates, step=step)
+        if len(test_cells)
+        else train.iloc[:0].copy()
+    )
     return Split(as_of=as_of, train=train, test=test)
 
 

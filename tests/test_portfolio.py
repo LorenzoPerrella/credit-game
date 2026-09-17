@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pandas as pd
 import pytest
 
 from creditsurv.data.ingest import Quarter, ingest_quarter
+from creditsurv.data.panel import EVENT, WEIGHT
 from creditsurv.portfolio import (
+    book_summary,
     covariate_evolution,
     default_rate_by_period,
     origination_mix,
@@ -108,3 +111,42 @@ def test_a_quarter_with_no_valid_quantiles_is_skipped(tmp_path: Path) -> None:
 
     assert len(table) == 1
     assert "score_q50" not in table.columns or table["score_q50"].isna().all()
+
+
+def test_the_book_summary_counts_what_it_says_it_counts() -> None:
+    """S7: two documents gave two default counts, each right about a different run. Every
+    number in the portfolio table says what it counts, and the modelled ones are summed from
+    the cells -- a count re-derived in SQL once disagreed with the reports by 443."""
+    lending = pd.DataFrame(
+        {
+            "period": pd.PeriodIndex(["1999-03", "2026-01"], freq="M"),
+            "loans": [3, 2],
+            "amount": [300.0, 250.0],
+        }
+    )
+    outstanding = pd.DataFrame({"contracts": [3, 5, 4], "balance": [300.0, 520.0, 410.0]})
+    cells = pd.DataFrame({WEIGHT: [3, 4, 4], EVENT: [False, True, False]})
+
+    summary = book_summary(lending, outstanding, performance_rows=13, cells=cells)
+
+    assert summary["vintages"] == "1999 - 2026"
+    assert summary["loans_originated"] == 5
+    assert summary["performance_rows"] == 13
+    assert summary["loan_months_outstanding"] == 12
+    assert summary["peak_contracts_outstanding"] == 5
+    assert summary["peak_balance_outstanding"] == 520.0
+    assert summary["loan_months_modelled"] == 11
+    assert summary["defaults_modelled"] == 4
+    assert "definition" in summary
+
+
+def test_the_book_summary_has_no_modelled_figures_before_aggregation() -> None:
+    lending = pd.DataFrame(
+        {"period": pd.PeriodIndex(["2001-01"], freq="M"), "loans": [1], "amount": [100.0]}
+    )
+    outstanding = pd.DataFrame({"contracts": [1], "balance": [100.0]})
+
+    summary = book_summary(lending, outstanding, performance_rows=1, cells=None)
+
+    assert summary["loan_months_modelled"] is None
+    assert summary["defaults_modelled"] is None

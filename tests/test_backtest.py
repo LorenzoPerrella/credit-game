@@ -15,6 +15,7 @@ import pytest
 
 from creditsurv.backtest.metrics import (
     actual_versus_expected,
+    covered_months,
     population_stability_index,
     stability_report,
     weighted_calibration,
@@ -301,3 +302,140 @@ def test_score_refuses_an_empty_test_half(panel: pd.DataFrame) -> None:
 
     with pytest.raises(ValueError, match="No exposure after"):
         score(fitted, split.test.iloc[:0], COVARIATES, as_of=AS_OF)
+
+
+# --------------------------------------------------------------------------------------
+# Acceptance, and the in-sample dispersion an out-of-time number is read against
+# --------------------------------------------------------------------------------------
+
+
+def test_a_backtest_inside_every_threshold_passes() -> None:
+    from creditsurv.backtest.runner import ACCEPTANCE, BacktestResult
+
+    result = BacktestResult(
+        as_of=AS_OF,
+        loan_months=1_000_000,
+        expected_defaults=100.0,
+        actual_defaults=102.0,
+        gini=0.55,
+        calibration=pd.DataFrame({"ratio": [0.90, 1.00, 1.10, 1.20]}),
+    )
+
+    assert ACCEPTANCE.passed(result)
+    assert ACCEPTANCE.assess(result)["passed"].all()
+
+
+@pytest.mark.parametrize(
+    ("overall", "gini", "deciles", "failing"),
+    [
+        (0.75, 0.55, [0.90, 1.00], "actual / expected, overall"),
+        (1.00, 0.40, [0.90, 1.00], "Gini, exposure-weighted"),
+        # The first out-of-time result this model produced fails here and only here: its
+        # overall 0.84 sits inside the band, its lowest decile at 0.54 does not. A single
+        # overall figure would have passed a model whose calibration fails by decile.
+        (1.00, 0.55, [0.54, 1.00], "actual / expected, every decile"),
+    ],
+)
+def test_each_criterion_fails_on_its_own(
+    overall: float, gini: float, deciles: list[float], failing: str
+) -> None:
+    """A criterion that cannot fail is not a criterion, so each is shown failing while
+    the other two hold."""
+    from creditsurv.backtest.runner import ACCEPTANCE, BacktestResult
+
+    result = BacktestResult(
+        as_of=AS_OF,
+        loan_months=1_000_000,
+        expected_defaults=100.0,
+        actual_defaults=100.0 * overall,
+        gini=gini,
+        calibration=pd.DataFrame({"ratio": deciles}),
+    )
+    table = ACCEPTANCE.assess(result).set_index("criterion")
+
+    assert not ACCEPTANCE.passed(result)
+    assert not bool(table.loc[table.index == failing, "passed"].iloc[0])
+    assert int(table["passed"].sum()) == len(table) - 1
+
+
+def test_the_in_sample_years_arrive_beside_the_out_of_time_result(panel: pd.DataFrame) -> None:
+    """An out-of-time actual-over-expected means nothing without the dispersion the model
+    shows on data it has already seen, so the backtest carries both."""
+    split, _, result = run_backtest(_encoded(panel), AS_OF, COVARIATES, FORMULA)
+
+    table = result.in_sample_by_year
+    training_years = set(pd.PeriodIndex(split.train["period"]).year)
+
+    assert set(table["group"]) == training_years
+    assert table["exposure"].sum() == pytest.approx(float(split.train["n"].sum()))
+    assert (table["group"] <= AS_OF.year).all(), "in-sample must stop at the reporting date"
+
+
+def test_splitting_the_cells_first_gives_the_halves_splitting_the_panel_would(
+    macro: pd.DataFrame,
+) -> None:
+    """The halves are built from the cells so the whole panel never exists beside them.
+
+    Expanding everything and then splitting holds the panel and both halves at once --
+    ~12 GB on the exact calendar key -- and the two routes must agree to the row,
+    including on the cells too early for their macro history to be built.
+    """
+    from creditsurv.backtest.splits import split_cells
+    from creditsurv.data.panel import cells_to_episodes
+
+    vintages = [1997 * 12, 2006 * 12, 2007 * 12]
+    cells = pd.DataFrame(
+        {
+            "orig_month": [month for month in vintages for _ in range(8)],
+            "purpose": pd.Categorical(["purchase", "refinance_cashout"] * 12),
+            "fico_s": [0.4] * 24,
+            "orig_ltv": [85.0] * 24,
+            "age": list(range(8)) * 3,
+            "event": ([False] * 7 + [True]) * 3,
+            "n": [50] * 24,
+        }
+    )
+    as_of = pd.Period("2007-03", freq="M")
+
+    halves = split_cells(cells, macro, as_of)
+    reference = cell_split(cells_to_episodes(cells, macro), as_of)
+
+    pd.testing.assert_frame_equal(halves.train, reference.train)
+    pd.testing.assert_frame_equal(halves.test, reference.test)
+
+
+def test_group_totals_are_the_totals_a_group_by_gives() -> None:
+    """The table is added up with bincount now, and must not move by a row or a digit."""
+    rng = np.random.default_rng(11)
+    size = 5_000
+    predicted = pd.Series(rng.uniform(0.0, 0.01, size))
+    exposure = pd.Series(rng.integers(1, 50, size).astype(float))
+    observed = pd.Series(rng.binomial(1, 0.005, size) * exposure)
+    by = pd.Series(
+        pd.Categorical(rng.choice(["b", "a", "c"], size), categories=["c", "b", "a", "unused"])
+    )
+
+    table = actual_versus_expected(predicted, observed, exposure, by)
+
+    frame = pd.DataFrame(
+        {"group": by, "expected": predicted * exposure, "events": observed, "exposure": exposure}
+    )
+    columns = ["expected", "events", "exposure"]
+    reference = frame.groupby("group", observed=True)[columns].sum().reset_index()
+    pd.testing.assert_frame_equal(table[["group", *columns]], reference, rtol=1e-12)
+
+
+def test_months_the_release_barely_covers_are_set_aside_by_name() -> None:
+    """The published backtest plunged to zero in its last month, on 8 loan-months of
+    exposure, and read as the model diverging. Such months leave the picture, named."""
+    table = pd.DataFrame(
+        {
+            "group": pd.PeriodIndex(["2026-01", "2026-02", "2026-03", "2026-04"], freq="M"),
+            "exposure": [12_000_000.0, 3_900_000.0, 51_341.0, 8.0],
+        }
+    )
+
+    covered, thin = covered_months(table)
+
+    assert list(covered["group"].astype(str)) == ["2026-01", "2026-02"]
+    assert list(thin["group"].astype(str)) == ["2026-03", "2026-04"]

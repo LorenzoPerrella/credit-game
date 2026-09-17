@@ -28,6 +28,7 @@ import logging
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
 from typing import Final, TypeAlias
@@ -46,8 +47,74 @@ PathSpec: TypeAlias = str | Path | Sequence[str] | None
 DEFAULT_DELINQUENCY: Final = 3
 
 #: Zero-balance codes that end a loan through credit loss rather than repayment.
+#:
+#: ``16`` is a reperforming loan sale -- a loan that went bad, was cured, and was then
+#: sold. It is creditworthy information but not a loss at the point of sale, and by the
+#: time it appears the 90+ event has almost always already fired; it is classified as
+#: repayment rather than left to fall through. ``96`` is an administrative removal.
+#: Both were previously unclassified and so treated as ordinary censoring, which
+#: violated this module's own rule that every CASE lists its branches.
 DEFAULT_ZERO_BALANCE: Final = ("02", "03", "09", "15")
-PREPAYMENT_ZERO_BALANCE: Final = "01"
+PREPAYMENT_ZERO_BALANCE: Final = ("01", "16", "96")
+
+
+class MoratoriumPolicy(StrEnum):
+    """What to do with a delinquency the borrower was not required to cure.
+
+    The event definition is "90+ days delinquent, or a loss zero-balance code", and
+    for two years that was not a statement about credit. **The CARES Act required
+    loans in forbearance to be reported as delinquent**, so a payment holiday granted
+    by statute reads identically to a borrower who has stopped paying. Natural-disaster
+    forbearance does the same on a smaller scale.
+
+    The scale is not marginal. On 2019Q3, **87% of all 90+ rows carry an accommodation
+    marker** and only 13% are clean credit delinquency. Across the whole book it is 17%
+    of events, peaking at 90.4 bp a month in May 2020 against a 2019 baseline of 3.07 --
+    a factor of 29, where the 2008 crisis managed 24.5 bp. Of the loans first reaching
+    90+ in 2020, **99.5% returned to performing**.
+
+    Two defensible treatments, and they are not equivalent, so both are available and
+    the choice is settled by measuring the difference rather than by argument:
+
+    ``EXCLUDE``
+        An accommodated month is **not an event**, and the loan stays under
+        observation. Keeps the exposure at risk, and a loan that later defaults for
+        real -- without a marker -- is still caught. Assumes the accommodation itself
+        carries no information about credit risk.
+
+    ``CENSOR``
+        Observation **ends** at the accommodation, as it does at a prepayment or a
+        modification. Assumes nothing about why it was granted, and pays for that by
+        losing the subsequent exposure and any genuine default that follows.
+
+    ``IGNORE``
+        The behaviour before this was found: an accommodation is a default. Kept only
+        so the contaminated model can be reproduced for comparison.
+    """
+
+    EXCLUDE = "exclude"
+    CENSOR = "censor"
+    IGNORE = "ignore"
+
+
+#: The markers that say a delinquency was not a failure to pay.
+#:
+#: Read from the data rather than the layout: on 2019Q3 the fields take
+#: ``delinquency_due_to_disaster`` Y, ``borrower_assistance_plan`` F/T/R and
+#: ``payment_deferral_flag`` P/C.
+#:
+#: ``F`` is forbearance, a payment holiday. ``P`` and ``C`` are deferrals, where the
+#: missed payments move to the end of the loan. Those are accommodations.
+#:
+#: ``T`` and ``R`` are **not** on this list and the distinction matters: a trial period
+#: plan and a repayment plan are loss mitigation, which *follows* genuine distress
+#: rather than substituting for it. Treating them as accommodations would excuse real
+#: defaults.
+MORATORIUM_MARKERS: Final[str] = (
+    "COALESCE(delinquency_due_to_disaster = 'Y', FALSE) "
+    "OR COALESCE(borrower_assistance_plan = 'F', FALSE) "
+    "OR COALESCE(payment_deferral_flag IN ('P', 'C'), FALSE)"
+)
 
 #: Modification flags. ``Y`` is the month the loan was modified, ``P`` every month
 #: after it -- a prior modification.
@@ -157,10 +224,27 @@ def _region_case() -> str:
     return f"CASE {whens} ELSE 'Other' END AS region"
 
 
-def _state_of_the_book_sql() -> str:
-    """The loan-month panel, cleaned and truncated, before any aggregation."""
+def _state_of_the_book_sql(
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE, *, complete_only: bool = True
+) -> str:
+    """The loan-month panel, cleaned and truncated, before any aggregation.
+
+    ``complete_only`` drops loans missing a credit score, loan-to-value or debt-to-income,
+    as the cells do. Off, they are kept, so :func:`incomplete_cases` can say what is lost.
+    """
+    complete = (
+        "WHERE o.credit_score IS NOT NULL AND o.orig_ltv IS NOT NULL AND o.dti IS NOT NULL"
+        if complete_only
+        else ""
+    )
     default_codes = ", ".join(f"'{code}'" for code in DEFAULT_ZERO_BALANCE)
+    prepayment_codes = ", ".join(f"'{code}'" for code in PREPAYMENT_ZERO_BALANCE)
     modification_flags = ", ".join(f"'{flag}'" for flag in MODIFICATION_FLAGS)
+    # Under EXCLUDE an accommodated month is not an event but the loan stays at risk;
+    # under CENSOR it ends observation the way a modification does.
+    accommodated = "FALSE" if policy is MoratoriumPolicy.IGNORE else f"({MORATORIUM_MARKERS})"
+    excluded = accommodated if policy is MoratoriumPolicy.EXCLUDE else "FALSE"
+    censoring = accommodated if policy is MoratoriumPolicy.CENSOR else "FALSE"
     return f"""
     WITH perf AS (
         SELECT
@@ -178,13 +262,19 @@ def _state_of_the_book_sql() -> str:
             -- catch it because they write an empty string where the real files
             -- leave the field absent.
             COALESCE(
-                COALESCE(TRY_CAST(current_loan_delinquency_status AS INTEGER)
-                         >= {DEFAULT_DELINQUENCY}, FALSE)
-                OR COALESCE(zero_balance_code IN ({default_codes}), FALSE),
+                (
+                    COALESCE(TRY_CAST(current_loan_delinquency_status AS INTEGER)
+                             >= {DEFAULT_DELINQUENCY}, FALSE)
+                    OR COALESCE(zero_balance_code IN ({default_codes}), FALSE)
+                )
+                -- A delinquency the borrower was not required to cure is not a
+                -- failure to pay. See MoratoriumPolicy.
+                AND NOT ({excluded}),
                 FALSE
             )                                                           AS defaulted,
-            COALESCE(zero_balance_code = '{PREPAYMENT_ZERO_BALANCE}', FALSE) AS prepaid,
-            COALESCE(modification_flag IN ({modification_flags}), FALSE)  AS modified
+            COALESCE(zero_balance_code IN ({prepayment_codes}), FALSE)   AS prepaid,
+            COALESCE(modification_flag IN ({modification_flags}), FALSE)
+                OR ({censoring})                                    AS ends_observation
         FROM read_parquet(?)
         WHERE TRY_CAST(loan_age AS INTEGER) >= 0
     ),
@@ -200,18 +290,20 @@ def _state_of_the_book_sql() -> str:
         SELECT
             loan_identifier,
             MIN(CASE WHEN defaulted OR prepaid THEN period_key END) AS terminal_period,
-            MIN(CASE WHEN modified THEN period_key END)             AS modified_period
+            MIN(CASE WHEN ends_observation THEN period_key END)     AS ended_period
         FROM perf GROUP BY loan_identifier
     ),
     -- Default and prepayment happen *during* their month, so that month is kept and
-    -- carries the flag. A modification is different: the flagged row already reports
-    -- the restarted age, so keeping it would file a distressed month at age zero.
-    -- Observation ends the month before.
+    -- carries the flag. The two censoring conditions are different and end observation
+    -- the month *before*: a modification's flagged row already reports the restarted
+    -- age, so keeping it would file a distressed month at age zero, and an
+    -- accommodation's flagged month is the one the delinquency counter is already
+    -- misreporting.
     truncated AS (
         SELECT p.*, t.terminal_period
         FROM perf p LEFT JOIN terminal t USING (loan_identifier)
         WHERE (t.terminal_period IS NULL OR p.period_key <= t.terminal_period)
-          AND (t.modified_period IS NULL OR p.period_key < t.modified_period)
+          AND (t.ended_period IS NULL OR p.period_key < t.ended_period)
     ),
     orig AS (
         SELECT
@@ -226,7 +318,9 @@ def _state_of_the_book_sql() -> str:
             TRY_CAST(original_upb AS DOUBLE)                            AS orig_upb,
             TRY_CAST(original_interest_rate AS DOUBLE)                  AS note_rate,
             TRY_CAST(original_loan_term AS INTEGER)                     AS orig_term,
-            TRY_CAST(mortgage_insurance_percentage AS DOUBLE)           AS mi_percent,
+            -- 999 is "not available" for MI exactly as for LTV and DTI. Untreated, has_mi
+            -- read a missing percentage as an insured loan.
+            NULLIF(TRY_CAST(mortgage_insurance_percentage AS DOUBLE), 999) AS mi_percent,
             -- Raw codes, deliberately. The mapping lives in _CATEGORICAL, where the
             -- choices are documented next to the frequencies that justify them, and
             -- an ELSE branch here would silently fold a "not available" code into a
@@ -235,6 +329,7 @@ def _state_of_the_book_sql() -> str:
             occupancy_status,
             channel,
             first_time_homebuyer_indicator,
+            super_conforming_flag,
             property_type,
             number_of_units,
             number_of_borrowers,
@@ -249,7 +344,7 @@ def _state_of_the_book_sql() -> str:
         COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE)  AS prepaid,
         o.*
     FROM truncated t JOIN orig o USING (loan_identifier)
-    WHERE o.credit_score IS NOT NULL AND o.orig_ltv IS NOT NULL AND o.dti IS NOT NULL
+    {complete}
     """
 
 
@@ -313,6 +408,9 @@ _CATEGORICAL: Final[dict[str, str]] = {
         "WHEN 'T' THEN 'third_party' END"
     ),
     "region": "region",
+    # In the cell key, so a 9 -- "not available" -- drops the loan. Measured across the
+    # whole book that is 19,053 of 49.2 million loans, 0.04%, and at most 0.92% of any
+    # vintage (1999): too small for the drop to be the informative loss D4 is about.
     "first_time_buyer": (
         "CASE first_time_homebuyer_indicator WHEN 'Y' THEN 'Y' WHEN 'N' THEN 'N' END"
     ),
@@ -326,8 +424,26 @@ _CATEGORICAL: Final[dict[str, str]] = {
         "CASE WHEN TRY_CAST(number_of_units AS INTEGER) = 1 THEN '1' "
         "WHEN TRY_CAST(number_of_units AS INTEGER) BETWEEN 2 AND 4 THEN '2-4' END"
     ),
-    "term_years": "CASE WHEN orig_term <= 190 THEN 15 ELSE 30 END",
-    "has_mi": "CASE WHEN mi_percent > 0 THEN 'Y' ELSE 'N' END",
+    # Both branches explicit. With an ELSE, a term that failed to parse became thirty years.
+    "term_years": "CASE WHEN orig_term <= 190 THEN 15 WHEN orig_term > 190 THEN 30 END",
+    # Both branches explicit, reading a mi_percent the 999 sentinel has been removed from.
+    # With an ELSE and no sentinel treatment, a percentage recorded as "not available"
+    # read as *insured*: 735 loans, negligible in number, and precisely the two rules
+    # this module states -- sentinels are real numbers, no ELSE -- broken in the covariate
+    # the cardinality argument had just been corrected to admit. Its content is real: the
+    # insured share runs from 6.8% of the 2010 vintage to 38.9% of 2023's.
+    "has_mi": "CASE WHEN mi_percent > 0 THEN 'Y' WHEN mi_percent = 0 THEN 'N' END",
+    # Screened like everything else rather than ingested and forgotten. It reached the
+    # parquet without appearing in any screening table or in DEGENERATE_FIELDS, which is
+    # the gap that let three performance fields disappear silently.
+    #
+    # Mapped from the field, not from the layout. The layout calls a blank "not super
+    # conforming" and the first mapping turned NULL into N, but across all 49.2 million
+    # loans the field holds exactly N (48,223,363) and Y (962,808) and never a blank: that
+    # mapping would have dropped 98% of the book the day the flag entered a key. It is not
+    # in one. No loan before 2008 is Y, because the category did not exist, so its N for
+    # those vintages records a date rather than a loan.
+    "super_conforming": "CASE super_conforming_flag WHEN 'Y' THEN 'Y' WHEN 'N' THEN 'N' END",
     "n_borrowers": (
         "CASE WHEN TRY_CAST(number_of_borrowers AS INTEGER) = 1 THEN '1' "
         "WHEN TRY_CAST(number_of_borrowers AS INTEGER) BETWEEN 2 AND 5 THEN '2+' END"
@@ -383,16 +499,49 @@ class CellSpec:
 #: Coarse by design: five bands a covariate, three categoricals, banded ages. Chosen
 #: from the measurement above as the point where the whole population fits in roughly
 #: a million cells. Variable selection may replace it.
+#: The classing actually used to build cells, as a **subset of** ``BIN_EDGES``.
+#:
+#: Two schemes used to coexist and only one was in the production path. The
+#: documentation justified a DTI break at 43, "a long-standing underwriting threshold",
+#: while the model used 45; it named LTV breaks at 85 and 95 that the model did not
+#: have. A reader checking the economic justification of the bands found a
+#: justification that did not describe the model.
+#:
+#: They are reconciled by making this grid a strict subset of the documented one -- a
+#: test enforces it -- so every boundary that exists is one the documentation argues
+#: for, and the coarsening is the only thing left to explain.
+#:
+#: **Why coarser rather than unified on the full set.** The cell count is the product
+#: of the band counts. BIN_EDGES gives 8 x 8 x 6 = 384 combinations against 80 here, a
+#: 4.8x multiplier, and it would land on top of the 3.11x the exact calendar key costs
+#: and the 1.23x of the two loan covariates -- seventeen times the table. The
+#: thresholds dropped are the finer ones; the MI break at 80 and the underwriting
+#: break at 43 survive, and those are the two the economics actually turns on.
+PRODUCTION_EDGES: Final[dict[str, tuple[float, ...]]] = {
+    "fico_s": (-2.4, -0.8, 0.0, 0.8, 1.2, 2.4),
+    "orig_ltv": (30.0, 70.0, 80.0, 90.0, 100.0),
+    "dti": (10.0, 28.0, 36.0, 43.0, 55.0),
+}
+
 DEFAULT_SPEC: Final = CellSpec(
-    continuous={
-        "fico_s": (-2.4, -0.8, 0.0, 0.8, 1.6, 2.4),
-        "orig_ltv": (30.0, 70.0, 80.0, 90.0, 100.0),
-        "dti": (10.0, 28.0, 36.0, 45.0, 55.0),
-    },
+    continuous=PRODUCTION_EDGES,
     # cltv_drift is absent on purpose: it is a function of orig_ltv and the macro
     # path, both recoverable from the key, so carrying it would multiply the
     # cardinality for information already there.
-    categorical=("purpose", "occupancy", "term_years"),
+    #
+    # has_mi and first_time_buyer are present because the argument that excluded them
+    # was wrong. It asserted a cost of "up to 16x the table" from the product of the
+    # level counts; the cell space is sparse and the measured cost of the two together
+    # is **1.23x**. Mortgage insurance is a classic credit predictor and already had an
+    # expected sign in the code. The claim that the loan side could not afford more
+    # covariates did not survive being measured.
+    categorical=(
+        "purpose",
+        "occupancy",
+        "term_years",
+        "has_mi",
+        "first_time_buyer",
+    ),
 )
 
 
@@ -413,6 +562,23 @@ def _not_null_filter(spec: CellSpec) -> str:
     return f"WHERE {conditions}"
 
 
+#: The loan's origination month, as an ordinal in months since year zero.
+#:
+#: This replaced the vintage *quarter*, and the difference is two months of calendar
+#: on every macro covariate in the model. Loans in a quarter are not all written in its
+#: first month -- the mean offset is **+2.15 months** -- so reconstructing the month
+#: from the quarter reads every macro series that much late, and pushes the backtest
+#: boundary two months inside the training half where ``assert_no_lookahead`` cannot
+#: see it, because it checks the distorted quantity.
+#:
+#: Verified by cross-correlating the true monthly default series against the
+#: reconstructed one: the maximum sat at a lag of **+2**, not 0.
+#:
+#: It costs 3.11x the cells, measured. The convention matches ``_months_to_periods``:
+#: ``year * 12 + (month - 1)``.
+_ORIGINATION_MONTH: Final = "(period_key // 100) * 12 + (period_key % 100) - 1 - age AS orig_month"
+
+
 def _select_columns(spec: CellSpec) -> str:
     """Every covariate column of the SELECT, as SQL.
 
@@ -425,6 +591,7 @@ def _select_columns(spec: CellSpec) -> str:
     ]
     columns += [f"{_CATEGORICAL[name]} AS {name}" for name in spec.categorical]
     columns.append(_age_expression(spec.episode_months))
+    columns.append(_ORIGINATION_MONTH)
     columns.append("event")
     return ",\n            ".join(columns)
 
@@ -458,6 +625,7 @@ def _cells_for_quarter(
     orig_path: str,
     vintage: str,
     spec: CellSpec,
+    policy: MoratoriumPolicy,
 ) -> pd.DataFrame:
     """Aggregate one vintage quarter.
 
@@ -465,12 +633,13 @@ def _cells_for_quarter(
     identifiers of 1999Q1 and 1999Q2 do not intersect at all. So a quarter can be
     collapsed on its own and the results concatenated, which keeps memory flat.
 
-    The vintage is attached as a constant rather than derived, because it is already
-    known from the file name. With vintage and age in the key the observation month
-    follows, which is what lets the macro series stay out of the key entirely.
+    The vintage is attached as a constant too, but only as a label: the key carries
+    the **origination month**, derived from the data as ``period - age``. With the
+    month and the age in the key the observation month follows exactly, which is what
+    lets the macro series stay out of the key entirely and be read at the right date.
     """
     query = f"""
-    WITH book AS ({_state_of_the_book_sql()}), classed AS (
+    WITH book AS ({_state_of_the_book_sql(policy)}), classed AS (
         SELECT
             {_select_columns(spec)}
         FROM book
@@ -493,12 +662,18 @@ def build_cells(
     orig_source: PathSpec = None,
     *,
     spec: CellSpec = DEFAULT_SPEC,
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
     connection: duckdb.DuckDBPyConnection | None = None,
 ) -> pd.DataFrame:
     """Aggregate the parquet panel into weighted cells, one quarter at a time.
 
-    The key is the coarse-classed covariates together with vintage quarter, loan age
-    and the event flag. The weight is the loan-month count.
+    The key is the coarse-classed covariates together with the origination month, the
+    loan age and the event flag. The weight is the loan-month count.
+
+    ``policy`` decides what a delinquency the borrower was not required to cure counts
+    as. It is a parameter rather than a constant because the two defensible treatments
+    are not equivalent and the choice is settled by measuring the difference -- see
+    :class:`MoratoriumPolicy`.
     """
     perf = _resolve(perf_source, "perf")
     orig = _resolve(orig_source, "orig")
@@ -511,15 +686,55 @@ def build_cells(
     frames = []
     for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
         vintage = Path(perf_path).stem
-        cells = _cells_for_quarter(con, perf_path, orig_path, vintage, spec)
+        cells = _compact(_cells_for_quarter(con, perf_path, orig_path, vintage, spec, policy))
         frames.append(cells)
         _LOGGER.info("%s: %d cells from %d loan-months", vintage, len(cells), int(cells["n"].sum()))
 
     # Vintage is in the key and constant within a quarter, so the pieces are already
     # disjoint: concatenating needs no second group-by.
-    combined = pd.concat(frames, ignore_index=True)
+    combined = _concatenate(frames)
     _LOGGER.info("Collapsed to %d cells", len(combined))
     return combined
+
+
+def _compact(cells: pd.DataFrame) -> pd.DataFrame:
+    """One quarter's cells, in the types they should have come back in.
+
+    DuckDB returns text as Python strings, one object per value. On the quarter-keyed
+    table three such columns were 44% of the episode frame; the exact key carries five
+    over some 66 million cells. So they become categorical as each quarter arrives,
+    before a table of strings can exist, and the origination month -- an ordinal near
+    24,000 -- is kept as a 32-bit integer.
+    """
+    for column in cells.columns:
+        if cells[column].dtype == object:
+            cells[column] = cells[column].astype("category")
+    if "orig_month" in cells.columns:
+        cells["orig_month"] = cells["orig_month"].astype("int32")
+    return cells
+
+
+def _concatenate(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """Stack the quarters, keeping every categorical column categorical.
+
+    pandas keeps a categorical through ``concat`` only when every piece declares the
+    same levels, and otherwise turns the whole column back into strings: one quarter
+    without an investor loan would undo :func:`_compact` for the entire table. The
+    levels are unified first, and sorted, so they do not depend on reading order.
+    """
+    if not frames:
+        message = "No cells to concatenate."
+        raise ValueError(message)
+    categorical = [
+        column
+        for column in frames[0].columns
+        if isinstance(frames[0][column].dtype, pd.CategoricalDtype)
+    ]
+    for column in categorical:
+        levels = sorted({level for frame in frames for level in frame[column].cat.categories})
+        for frame in frames:
+            frame[column] = frame[column].cat.set_categories(levels)
+    return pd.concat(frames, ignore_index=True)
 
 
 def cardinality_report(
@@ -553,3 +768,184 @@ def cardinality_report(
             }
         ]
     )
+
+
+#: Origination fields whose absence drops a loan before the categorical keys are read.
+_COMPLETE_CASE_FIELDS: Final[tuple[str, ...]] = ("credit_score", "orig_ltv", "dti")
+
+
+def incomplete_cases(
+    perf_source: PathSpec = None,
+    orig_source: PathSpec = None,
+    *,
+    spec: CellSpec = DEFAULT_SPEC,
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> pd.DataFrame:
+    """The loans the cells leave out, vintage by vintage, and how they default.
+
+    The validation's D4. A loan missing its credit score, loan-to-value or debt-to-income,
+    or carrying a categorical code no mapping names, is dropped rather than imputed:
+    imputing an underwriting characteristic invents the thing being measured. Dropping is
+    harmless only if what goes is small or looks like what stays, and neither can be
+    assumed -- the validation found the share varying by two orders of magnitude across
+    vintages, almost all of it missing debt-to-income, and the dropped loans riskier.
+
+    One row per vintage: loans, how many are dropped, how many lack each field (a loan can
+    lack several), and the ever-default rate of the loans kept and of those dropped, under
+    ``policy``'s event definition. A pass over every performance file, quarter by quarter.
+    """
+    perf = _resolve(perf_source, "perf")
+    orig = _resolve(orig_source, "orig")
+    if not perf or not orig:
+        message = "No ingested quarters found. Run `creditsurv ingest` first."
+        raise FileNotFoundError(message)
+
+    missing = {field: f"{field} IS NULL" for field in _COMPLETE_CASE_FIELDS}
+    missing.update({name: f"({_CATEGORICAL[name]}) IS NULL" for name in spec.categorical})
+    flags = ", ".join(f"BOOL_OR({condition}) AS no_{name}" for name, condition in missing.items())
+    dropped = " OR ".join(f"no_{name}" for name in missing)
+    counts = ", ".join(f"COUNT(*) FILTER (WHERE no_{name}) AS no_{name}" for name in missing)
+
+    con = connection or _connect()
+    frames = []
+    for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
+        vintage = Path(perf_path).stem
+        query = f"""
+        WITH book AS ({_state_of_the_book_sql(policy, complete_only=False)}),
+        loans AS (
+            SELECT loan_identifier, BOOL_OR(event) AS defaulted, {flags}
+            FROM book
+            GROUP BY loan_identifier
+        ),
+        judged AS (SELECT *, ({dropped}) AS dropped FROM loans)
+        SELECT
+            '{vintage}' AS vintage,
+            COUNT(*) AS loans,
+            COUNT(*) FILTER (WHERE dropped) AS dropped,
+            {counts},
+            AVG(CASE WHEN NOT dropped THEN defaulted::INTEGER END) AS default_rate_kept,
+            AVG(CASE WHEN dropped THEN defaulted::INTEGER END) AS default_rate_dropped
+        FROM judged
+        """
+        frames.append(con.execute(query, [perf_path, orig_path]).df())
+        _LOGGER.info("%s: incomplete cases counted", vintage)
+
+    table = pd.concat(frames, ignore_index=True)
+    table["dropped_share"] = table["dropped"] / table["loans"]
+    table["relative_risk"] = table["default_rate_dropped"] / table["default_rate_kept"]
+    return table
+
+
+#: Zero-balance codes that end a loan without a loss and without the borrower choosing to
+#: repay: a reperforming loan sale (16) and a removal (96). Both are censoring, and
+#: :func:`credit_adjacent_exits` measures what that classification rests on.
+CREDIT_ADJACENT_EXITS: Final = ("16", "96")
+
+
+def credit_adjacent_exits(
+    perf_source: PathSpec = None,
+    orig_source: PathSpec = None,
+    *,
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
+    codes: tuple[str, ...] = CREDIT_ADJACENT_EXITS,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> pd.DataFrame:
+    """How the loans leaving by a reperforming sale or a removal were treated, by vintage.
+
+    The validation's D5: code 16 is credit by definition, since a reperforming loan was
+    delinquent once, and counting its sale as censoring could lose a default. Whether it
+    does depends on what the book did first. A loan that reached 90 days has already
+    defaulted and been cut there, and one that was modified was censored at the
+    modification; only a loan still performing when it was sold is censored at the sale.
+
+    One row per vintage and code, over every loan carrying the code, under ``policy``'s
+    event definition: how many defaulted first, were censored earlier, or were censored at
+    the exit itself. A pass over every performance file, quarter by quarter.
+    """
+    perf = _resolve(perf_source, "perf")
+    orig = _resolve(orig_source, "orig")
+    if not perf or not orig:
+        message = "No ingested quarters found. Run `creditsurv ingest` first."
+        raise FileNotFoundError(message)
+    listed = ", ".join(f"'{code}'" for code in codes)
+
+    con = connection or _connect()
+    frames = []
+    for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
+        vintage = Path(perf_path).stem
+        query = f"""
+        WITH book AS ({_state_of_the_book_sql(policy, complete_only=False)}),
+        outcome AS (
+            SELECT loan_identifier, BOOL_OR(event) AS defaulted, BOOL_OR(prepaid) AS exited
+            FROM book
+            GROUP BY loan_identifier
+        ),
+        coded AS (
+            SELECT loan_identifier, MIN(zero_balance_code) AS code
+            FROM read_parquet(?)
+            WHERE zero_balance_code IN ({listed})
+            GROUP BY loan_identifier
+        ),
+        judged AS (
+            SELECT
+                c.code,
+                COALESCE(o.defaulted, FALSE) AS defaulted,
+                COALESCE(o.exited, FALSE) AND NOT COALESCE(o.defaulted, FALSE) AS at_exit
+            FROM coded c LEFT JOIN outcome o USING (loan_identifier)
+        )
+        SELECT
+            '{vintage}' AS vintage,
+            code,
+            COUNT(*) AS loans,
+            COUNT(*) FILTER (WHERE defaulted) AS defaulted_first,
+            COUNT(*) FILTER (WHERE NOT defaulted AND NOT at_exit) AS censored_earlier,
+            COUNT(*) FILTER (WHERE at_exit) AS censored_at_exit
+        FROM judged
+        GROUP BY code
+        ORDER BY code
+        """
+        frames.append(con.execute(query, [perf_path, orig_path, perf_path]).df())
+        _LOGGER.info("%s: exits by code counted", vintage)
+    return pd.concat(frames, ignore_index=True)
+
+
+def defaults_by_month(
+    perf_source: PathSpec = None,
+    orig_source: PathSpec = None,
+    *,
+    spec: CellSpec = DEFAULT_SPEC,
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> pd.Series:
+    """Defaults by calendar month, counted on the loan-months the cells are built from.
+
+    The reference for the validation's M1 test. A cell carries its origination month and
+    its age, and the month its defaults happened in is their sum; this counts the same
+    defaults without the cells, under the same rules -- the complete-case filter, the
+    categorical keys, the moratorium policy -- so the two series have to agree to the unit.
+    """
+    perf = _resolve(perf_source, "perf")
+    orig = _resolve(orig_source, "orig")
+    if not perf or not orig:
+        message = "No ingested quarters found. Run `creditsurv ingest` first."
+        raise FileNotFoundError(message)
+    spec.validate()
+
+    con = connection or _connect()
+    frames = []
+    for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
+        query = f"""
+        WITH book AS ({_state_of_the_book_sql(policy)}), classed AS (
+            SELECT {_select_columns(spec)}, period_key FROM book
+        )
+        SELECT
+            (period_key // 100) * 12 + (period_key % 100) - 1 AS month,
+            SUM(CAST(event AS INTEGER)) AS defaults
+        FROM classed
+        {_not_null_filter(spec)}
+        GROUP BY 1
+        """
+        frames.append(con.execute(query, [perf_path, orig_path]).df())
+    counts = pd.concat(frames, ignore_index=True).groupby("month")["defaults"].sum()
+    return counts.astype("int64").rename("defaults")

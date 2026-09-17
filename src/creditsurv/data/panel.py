@@ -29,6 +29,7 @@ an infinite upper bound.
 
 from __future__ import annotations
 
+import warnings
 from itertools import pairwise
 from typing import TYPE_CHECKING, Final
 
@@ -38,7 +39,7 @@ import pandas as pd
 from creditsurv.features import MACRO_DERIVED, add_macro_family
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
 LOAN_ID: Final = "loan_id"
 AGE: Final = "age"
@@ -150,6 +151,37 @@ def model_frame(panel: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFrame:
     return panel.loc[:, columns].copy()
 
 
+def model_blocks(
+    panel: pd.DataFrame,
+    covariates: Sequence[str],
+    *,
+    rows: int,
+    weights_col: str | None = None,
+    where: np.ndarray | pd.Series | None = None,
+) -> Iterator[pd.DataFrame]:
+    """:func:`model_frame` a block of ``rows`` at a time, with the weight alongside.
+
+    For :func:`creditsurv.models.blocks.fit_interval_censoring_in_blocks`. The whole
+    narrowed frame is never built: on the production panel it would be a second copy of
+    the largest object the pipeline holds. ``where`` reads only the rows it selects -- one
+    half of the panel for a stability check, say -- without copying that half either.
+    """
+    if rows <= 0:
+        message = "rows must be positive."
+        raise ValueError(message)
+    positions = None if where is None else np.flatnonzero(np.asarray(where, dtype=bool))
+    count = len(panel) if positions is None else len(positions)
+    for start in range(0, count, rows):
+        if positions is None:
+            block = panel.iloc[start : start + rows]
+        else:
+            block = panel.iloc[positions[start : start + rows]]
+        frame = model_frame(block, covariates)
+        if weights_col is not None:
+            frame[weights_col] = block[weights_col].to_numpy()
+        yield frame
+
+
 def aggregate_episodes(
     panel: pd.DataFrame,
     covariates: Sequence[str],
@@ -241,6 +273,43 @@ def to_loan_level(panel: pd.DataFrame) -> pd.DataFrame:
     return loans.reset_index()
 
 
+#: Share of loan-months arriving after age zero above which the reconstruction warns.
+#: The validation measured 4,605,963 on the whole book, under 0.2%, which moves nothing.
+#: A portfolio bought seasoned would be mostly late entry, and its curve would be wrong
+#: with nothing else to say so.
+LATE_ENTRY_TOLERANCE: Final = 0.01
+
+
+def _at_risk_by_age(
+    episodes: pd.DataFrame, *, weight: str, age: str, event: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Loan-months at risk and defaulting at each age, from zero to the oldest."""
+    ages = episodes[age].to_numpy(dtype=int)
+    exposure = episodes[weight].to_numpy(dtype=float)
+    defaulted = exposure * episodes[event].to_numpy(dtype=bool)
+    at_risk: np.ndarray = np.bincount(ages, weights=exposure)
+    defaults: np.ndarray = np.bincount(ages, weights=defaulted, minlength=len(at_risk))
+    return at_risk, defaults
+
+
+def net_entries(
+    episodes: pd.DataFrame, *, weight: str = WEIGHT, age: str = AGE, event: str = EVENT
+) -> pd.Series:
+    """Loan-months at risk at an age that were not at risk at the age before.
+
+    ``R(a + 1) - [R(a) - d(a)]`` where it is positive, indexed by the age of arrival. A
+    closed cohort has none: what is at risk next month is what was at risk this month,
+    less what defaulted or left. This panel is not closed -- the validation found up to
+    63% of the 1999 vintage first reported above age zero -- and only the net flow is
+    visible: a month in which some loans leave and others arrive shows the difference.
+    """
+    at_risk, defaults = _at_risk_by_age(episodes, weight=weight, age=age, event=event)
+    arriving = np.maximum(at_risk[1:] - (at_risk[:-1] - defaults[:-1]), 0.0)
+    ages = np.arange(1, len(at_risk))
+    present = arriving > 0
+    return pd.Series(arriving[present], index=ages[present], name="net_entries")
+
+
 def to_loan_level_weighted(
     episodes: pd.DataFrame, *, weight: str = WEIGHT, age: str = AGE, event: str = EVENT
 ) -> pd.DataFrame:
@@ -248,8 +317,10 @@ def to_loan_level_weighted(
 
     Aggregation destroys the loan id -- a cell is a count of loan-months, not a
     subject -- so :func:`to_loan_level` cannot run. The duration distribution is
-    still recoverable, and exactly rather than approximately, from the counts at
-    risk at each age.
+    still recoverable from the counts at risk at each age: exactly, for loans observed
+    from origination. A loan first observed later cannot be placed in a duration
+    distribution at all; it is absorbed, :func:`net_entries` measures how much, and a
+    warning says so above ``LATE_ENTRY_TOLERANCE``.
 
     Write ``R(a)`` for the loan-months observed at age ``a`` and ``d(a)`` for those
     ending in default. A loan at risk at ``a`` either defaults, leaves the window
@@ -266,27 +337,28 @@ def to_loan_level_weighted(
     Durations follow :func:`to_loan_level`: a loan last observed at age ``a`` has
     duration ``a + 1``.
     """
-    exposure = episodes[weight].to_numpy(dtype=float)
-    working = pd.DataFrame(
-        {
-            age: episodes[age].to_numpy(dtype=int),
-            "at_risk": exposure,
-            "defaults": exposure * episodes[event].to_numpy(dtype=bool),
-        }
-    )
-    counts = working.groupby(age, observed=True)[["at_risk", "defaults"]].sum()
-    counts = counts.reindex(range(int(counts.index.max()) + 1), fill_value=0.0)
-
-    at_risk = counts["at_risk"].to_numpy(dtype=float)
-    defaults = counts["defaults"].to_numpy(dtype=float)
+    at_risk, defaults = _at_risk_by_age(episodes, weight=weight, age=age, event=event)
     # The last age has no successor: everything still at risk there is censored.
     survivors = np.append(at_risk[1:], 0.0)
-    # A panel with gaps -- a loan absent for a month and back the next -- would make
-    # this negative. Freddie Mac reports contiguously, so clipping is a guard rather
-    # than a correction, but a silent negative weight would poison the fit.
-    censored = np.maximum(at_risk - defaults - survivors, 0.0)
+    leaving = at_risk - defaults - survivors
+    # Negative where more loan-months are at risk at a + 1 than survived a: loans entering
+    # the panel late. A duration distribution cannot say a loan was absent at the start,
+    # so they are absorbed -- counted as at risk from origination, which dilutes the
+    # hazard before they arrive -- because a negative weight would poison the fit. The
+    # first version clipped silently, believing Freddie Mac reports every loan
+    # contiguously from origination; the validation measured 4,605,963 loan-months
+    # absorbed that way. It still clips, and now says how much.
+    absorbed = float(np.maximum(-leaving, 0.0).sum())
+    share = absorbed / float(at_risk.sum())
+    if share > LATE_ENTRY_TOLERANCE:
+        warnings.warn(
+            f"{absorbed:,.0f} loan-months ({share:.2%}) enter the panel after age zero and "
+            "are counted as at risk from origination, which understates the early hazard.",
+            stacklevel=2,
+        )
+    censored = np.maximum(leaving, 0.0)
 
-    duration = counts.index.to_numpy(dtype=float) + 1.0
+    duration = np.arange(len(at_risk), dtype=float) + 1.0
     frame = pd.DataFrame(
         {
             "duration": np.concatenate([duration, duration]),
@@ -318,14 +390,20 @@ def duration_view(panel: pd.DataFrame, *, weights_col: str | None = None) -> pd.
 MAX_AGE_MONTHS: Final = 360
 
 
+#: pandas numbers monthly periods from January 1970; this module counts from year zero.
+_EPOCH_MONTHS: Final = 1970 * 12
+
+
 def _months_to_periods(months: pd.Series) -> pd.PeriodIndex:
     """Month ordinals since year zero, back to a monthly PeriodIndex.
 
-    Built from labels rather than through ``PeriodIndex(year=..., month=...)``, whose
-    keyword form is deprecated in pandas and absent from its type stubs.
+    From the ordinals directly. The first version formatted ``"YYYY-MM"`` labels and
+    parsed them back: the same periods, measured at 38 seconds for five million rows
+    against 0.02 -- eight minutes a column at the exact key's 66 million cells, with a
+    Python string per row while it ran.
     """
-    labels = (months // 12).astype(str) + "-" + (months % 12 + 1).astype(str).str.zfill(2)
-    return pd.PeriodIndex(labels, freq="M")
+    ordinals = months.to_numpy(dtype=np.int64) - _EPOCH_MONTHS
+    return pd.PeriodIndex(pd.arrays.PeriodArray(ordinals, dtype=pd.PeriodDtype("M")))
 
 
 def cells_to_episodes(
@@ -333,6 +411,9 @@ def cells_to_episodes(
     macro: pd.DataFrame,
     *,
     lag_months: int = 3,
+    covariates: Sequence[str] | None = None,
+    where: np.ndarray | pd.Series | None = None,
+    step: int | None = None,
 ) -> pd.DataFrame:
     """Turn aggregated cells into weighted episodes the fitter can read.
 
@@ -346,31 +427,60 @@ def cells_to_episodes(
     The width is read off the data rather than passed in, so a cell table can never
     disagree with the width it was built with.
 
-    Macro covariates are recomputed here from vintage and age, which is why they were
-    kept out of the grouping key: ``period = vintage + age``, so nothing was lost by
-    leaving them out and the cardinality was spared. See
+    Macro covariates are recomputed here from the origination month and the age, which
+    is why they were kept out of the grouping key: ``period = orig_month + age``, so
+    nothing was lost by leaving them out and the cardinality was spared. See
     :func:`creditsurv.features.add_macro_family` for the family and why it is free.
+
+    ``covariates`` narrows the macro family to what the caller will actually read.
+    Building all thirteen costs nine unused ``float64`` columns, and this frame is the
+    largest object the pipeline holds: on the production table it reached 5.9 GB, of
+    which **44% was three categorical columns stored as Python strings**. At the cell
+    counts an exact calendar key implies that is the difference between fitting and
+    not, so the frame is built narrow rather than trimmed afterwards.
+
+    ``where`` expands only the cells it selects, which is how the training and test
+    halves are built without the whole panel existing first -- see
+    :func:`creditsurv.backtest.splits.split_cells`. The caller's table is never written
+    to and never copied whole: the first version copied it outright, then copied the
+    result again to drop incomplete rows.
     """
     if cells.empty:
         message = "No cells to expand."
         raise PanelValidationError(message)
 
-    episodes = cells.copy()
     # Episodes are fixed width, so the stop is the start plus the step. The step is
     # read off the data -- the spacing of the distinct ages -- so a cell table can
-    # never disagree with the width it was built with.
-    ages = sorted(int(age) for age in episodes[AGE].unique())
-    step = min((b - a) for a, b in pairwise(ages)) if len(ages) > 1 else 1
+    # never disagree with the width it was built with. Off the whole table, not the
+    # selection: a selection holding ages 0 and 12 is not a table of year-long episodes.
+    if step is None:
+        step = episode_step(cells)
 
-    episodes[AGE_START] = episodes[AGE].astype(float)
-    episodes[AGE_STOP] = episodes[AGE_START] + float(step)
+    if where is None:
+        episodes = cells.copy(deep=False)
+    else:
+        selected = np.asarray(where, dtype=bool)
+        if len(selected) != len(cells):
+            message = f"where selects from {len(selected):,} rows, the table has {len(cells):,}."
+            raise PanelValidationError(message)
+        episodes = cells.iloc[np.flatnonzero(selected)].copy(deep=False)
+        if episodes.empty:
+            message = "No cells to expand."
+            raise PanelValidationError(message)
+    episodes.index = pd.RangeIndex(len(episodes))
+    for column in episodes.columns:
+        if episodes[column].dtype == object:
+            episodes[column] = episodes[column].astype("category")
 
-    quarter = episodes["vintage"].str.extract(r"(\d{4})Q(\d)")
-    orig_month = quarter[0].astype(int) * 12 + (quarter[1].astype(int) - 1) * 3
+    start_ages = episodes[AGE].to_numpy(dtype=np.float32)
+    episodes[AGE_START] = start_ages
+    episodes[AGE_STOP] = start_ages + np.float32(step)
+
+    orig_month = origination_months(episodes)
     # A period ordinal in months since year zero, so age can simply be added.
-    observation = orig_month + episodes[AGE_START].astype(int)
+    observation = orig_month + episodes[AGE].astype(int)
 
-    add_macro_family(episodes, macro, orig_month, observation, lag_months)
+    add_macro_family(episodes, macro, orig_month, observation, lag_months, names=covariates)
 
     # Calendar columns, so a split can be taken on time without recomputing them.
     # The episode is dated at its start: a band spans several months and has to be
@@ -380,11 +490,114 @@ def cells_to_episodes(
     episodes["period"] = _months_to_periods(observation)
 
     defaulted = episodes[EVENT].to_numpy(dtype=bool)
-    start = episodes[AGE_START].to_numpy(dtype=float)
-    stop = episodes[AGE_STOP].to_numpy(dtype=float)
+    start = episodes[AGE_START].to_numpy(dtype=np.float32)
+    stop = episodes[AGE_STOP].to_numpy(dtype=np.float32)
     episodes[LOWER_BOUND] = np.where(defaulted, start, stop)
-    episodes[UPPER_BOUND] = np.where(defaulted, stop, np.inf)
+    # Infinity has no float32 hazard: the upper bound stays float64 because lifelines
+    # compares it against one, and an overflow here would silently become a finite
+    # bound, turning every censored row into an observed default.
+    episodes[UPPER_BOUND] = np.where(defaulted, stop.astype(float), np.inf)
     episodes[EXACT_OBSERVATION] = False
 
-    required = [name for name in MACRO_DERIVED if name in episodes.columns]
-    return episodes.dropna(subset=required).reset_index(drop=True)
+    # Column by column. A frame of the required columns and its frame of flags were a copy
+    # of every macro column: 90 bytes a row with the fifteen candidates, 207 at the peak of
+    # an expansion that holds 97.
+    complete = np.ones(len(episodes), dtype=bool)
+    for name in (name for name in MACRO_DERIVED if name in episodes.columns):
+        complete &= episodes[name].notna().to_numpy()
+    if complete.all():
+        return episodes
+    kept = episodes.loc[complete].copy(deep=False)
+    kept.index = pd.RangeIndex(len(kept))
+    return kept
+
+
+def episode_step(cells: pd.DataFrame) -> int:
+    """The width of the table's episodes in months: the spacing of its distinct ages.
+
+    Read off the data, so a cell table can never disagree with the width it was built with.
+    A caller that is about to expand part of a table reads it here, from the whole table,
+    before letting the table go.
+    """
+    ages = sorted(int(age) for age in cells[AGE].unique())
+    return min((b - a) for a, b in pairwise(ages)) if len(ages) > 1 else 1
+
+
+def origination_months(cells: pd.DataFrame) -> pd.Series:
+    """The origination month of each cell, as an ordinal in months since year zero.
+
+    Two key shapes are accepted, and which one a table carries is the difference
+    between a correct calendar and one two months early:
+
+    * ``orig_month`` -- the month itself, which is what the aggregation now emits;
+    * ``vintage`` -- the origination *quarter*, which it used to. Reconstructing the
+      month from it takes the quarter's first month, and loans are not all written in
+      it: the mean offset is **+2.15 months**, so every macro covariate is read that
+      much late and the backtest boundary sits two months inside the training half.
+
+    The quarterly branch is kept so an older cell table can still be read, and it warns
+    rather than pretending the two are equivalent.
+    """
+    if "orig_month" in cells.columns:
+        return cells["orig_month"].astype(int)
+
+    warnings.warn(
+        "This cell table is keyed by origination quarter, so the observation month is "
+        "reconstructed from the quarter's first month and runs about two months early. "
+        "Re-run `creditsurv aggregate` to key it by origination month.",
+        stacklevel=2,
+    )
+    quarter = cells["vintage"].astype(str).str.extract(r"(\d{4})Q(\d)")
+    return quarter[0].astype(int) * 12 + (quarter[1].astype(int) - 1) * 3
+
+
+def observation_months(cells: pd.DataFrame) -> pd.Series:
+    """The month each cell observes, as an ordinal in months since year zero.
+
+    Origination month plus age, so a cell table can be divided in calendar time before
+    it is expanded.
+    """
+    return origination_months(cells) + cells[AGE].astype(int)
+
+
+def defaults_by_observation_month(cells: pd.DataFrame) -> pd.Series:
+    """Defaults by calendar month, read back from the cells as origination month plus age.
+
+    What the validation's M1 test compares with the defaults counted on the loan-months
+    (:func:`creditsurv.data.aggregate.defaults_by_month`). With the origination quarter in
+    the key the two peaked two months out of step; with the month in the key they must be
+    the same series. Every month from the first to the last is present, zero or not.
+    """
+    months = observation_months(cells).to_numpy()
+    defaulted = cells[EVENT].to_numpy(dtype=bool)
+    events = np.where(defaulted, cells[WEIGHT].to_numpy(dtype=float), 0.0)
+    first = int(months.min())
+    counts = np.bincount(months - first, weights=events)
+    index = pd.RangeIndex(first, first + len(counts), name="month")
+    return pd.Series(counts, index=index, name="defaults").round().astype("int64")
+
+
+def default_rate_by_observation_month(cells: pd.DataFrame) -> pd.DataFrame:
+    """The realised default rate of every calendar month, from the cells.
+
+    Loan-months at risk and defaults in each month, and their ratio in basis points. The
+    validation's D1 rested on this series: with forbearance counted as delinquency it
+    reached 90.4 bp in May 2020 against 3.07 bp through 2019, a factor of 29 that no credit
+    recession produces. Every month from the first to the last is present; a month with no
+    exposure has no rate.
+    """
+    months = observation_months(cells).to_numpy()
+    first = int(months.min())
+    exposure = np.bincount(months - first, weights=cells[WEIGHT].to_numpy(dtype=float))
+    defaults = defaults_by_observation_month(cells).to_numpy(dtype=float)
+    rate = np.full(len(exposure), np.nan)
+    np.divide(defaults, exposure, out=rate, where=exposure > 0)
+    ordinals = pd.Series(np.arange(first, first + len(exposure)))
+    return pd.DataFrame(
+        {
+            "period": _months_to_periods(ordinals),
+            "loan_months": exposure.round().astype("int64"),
+            "defaults": defaults.round().astype("int64"),
+            "rate_bp": rate * 1e4,
+        }
+    )

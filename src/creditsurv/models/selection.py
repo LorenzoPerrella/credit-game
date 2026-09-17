@@ -46,7 +46,7 @@ from creditsurv.data.panel import EVENT, duration_view
 from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS, FitResult, Likelihood, fit_aft
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from lifelines.fitters import ParametricUnivariateFitter
 
@@ -125,6 +125,8 @@ def distribution_comparison(
     likelihood: Likelihood = Likelihood.INTERVAL_CENSORED,
     weights_col: str | None = None,
     fitted: FitResult | None = None,
+    fit: Callable[..., FitResult] = fit_aft,
+    fits: dict[str, FitResult] | None = None,
 ) -> pd.DataFrame:
     """Compare regression fits on identical episodes.
 
@@ -136,14 +138,22 @@ def distribution_comparison(
 
     ``fitted`` supplies a model already estimated on this panel, and is reused instead
     of refitting its distribution. On a table of this size a fit is hours, so silently
-    recomputing a model the caller already holds is not a small waste.
+    recomputing a model the caller already holds is not a small waste. ``fit`` is how the
+    others are estimated -- :func:`fit_aft`, or a cached version of it -- and ``fits``, when
+    given, receives every family's fit, so a caller can hold them against Kaplan-Meier
+    without estimating any of them twice.
+
+    Each family is also held to the expected signs. A family that fits worse *and* points a
+    declared prior the wrong way is rejected twice, for independent reasons: the
+    validation's log-logistic fit on the specification before it was 623,126 AIC points
+    behind the Weibull and turned ``orig_ltv`` around.
     """
     rows = []
     for distribution in distributions:
         if fitted is not None and fitted.distribution == distribution:
             result = fitted
         else:
-            result = fit_aft(
+            result = fit(
                 encoded,
                 covariates,
                 formula,
@@ -151,6 +161,8 @@ def distribution_comparison(
                 likelihood=likelihood,
                 weights_col=weights_col,
             )
+        if fits is not None:
+            fits[distribution] = result
         rows.append(
             {
                 "distribution": distribution,
@@ -158,12 +170,28 @@ def distribution_comparison(
                 "aic": result.aic,
                 "n_episodes": result.n_episodes,
                 "seconds": round(result.elapsed_seconds, 2),
+                "signs_against_prior": ", ".join(signs_against_prior(result)),
             }
         )
 
     table = pd.DataFrame(rows).sort_values("aic").reset_index(drop=True)
     table["delta_aic"] = table["aic"] - table["aic"].min()
     return table
+
+
+def signs_against_prior(result: FitResult) -> list[str]:
+    """The covariates whose coefficient points against its declared expected sign.
+
+    Read on the scale parameter, where every AFT family in the comparison puts its
+    covariates and where a positive coefficient lengthens survival. Only the signs declared
+    in ``EXPECTED_SIGNS`` count; a covariate without one cannot be against it.
+    """
+    summary = result.fitter.summary.loc[result.fitter._primary_parameter_name]
+    return [
+        str(name)
+        for name, coefficient in summary["coef"].items()
+        if EXPECTED_SIGNS.get(str(name), 0) * float(coefficient) < 0
+    ]
 
 
 def exponential_is_rejected(result: FitResult) -> dict[str, float]:
@@ -176,7 +204,9 @@ def exponential_is_rejected(result: FitResult) -> dict[str, float]:
 
     lifelines parameterises the shape as ``log rho``, so the constant-hazard hypothesis
     is exactly ``log rho = 0`` and the test reads straight off the coefficient table.
-    On the whole population it returns ``z = 468``, which is not a close call.
+    On the whole population the statistic runs to the hundreds, which is not a close call;
+    ``docs/reports/methodology.md`` gives the run's own value, and is the only place a
+    number for it is written down.
 
     The wider point is worth keeping: **where families nest, compare them by a test
     rather than by information criteria**. Only families that do not nest --
@@ -213,6 +243,27 @@ def likelihood_ratio_test(
     return float(statistic), p_value
 
 
+#: The covariate the shape test lets into the shape parameter. ``occupancy`` is the one
+#: stratum whose survival curves cross -- investor loans default faster early and slower
+#: late, 0.9522 against 0.9533 surviving at 60 months and 0.9258 against 0.9246 at 91 --
+#: and no scale factor maps one such curve onto the other, so it is where a shape that
+#: varies has something to find. The report used to relax the first covariate of the
+#: specification, ``fico_s``, and so answered a question nobody had asked.
+SHAPE_COVARIATE: Final = "occupancy"
+
+
+def shape_formula(covariates: Sequence[str], references: dict[str, str]) -> tuple[str, str]:
+    """The covariate the shape test relaxes, and the ancillary formula that relaxes it.
+
+    ``SHAPE_COVARIATE``, against its treatment reference, when the specification has it;
+    the first covariate otherwise, so that a specification without it is still tested.
+    """
+    name = SHAPE_COVARIATE if SHAPE_COVARIATE in covariates else covariates[0]
+    if name in references:
+        return name, f"C({name}, Treatment('{references[name]}'))"
+    return name, name
+
+
 def shape_depends_on_covariates(
     encoded: pd.DataFrame,
     covariates: Sequence[str],
@@ -223,6 +274,7 @@ def shape_depends_on_covariates(
     likelihood: Likelihood = Likelihood.INTERVAL_CENSORED,
     weights_col: str | None = None,
     fitted: FitResult | None = None,
+    fit: Callable[..., FitResult] = fit_aft,
 ) -> pd.DataFrame:
     """Test whether the hazard's shape varies with covariates.
 
@@ -240,7 +292,7 @@ def shape_depends_on_covariates(
     default specification by construction -- same panel, same formula, no ancillary --
     so refitting it is pure duplication.
     """
-    restricted = fitted or fit_aft(
+    restricted = fitted or fit(
         encoded,
         covariates,
         formula,
@@ -248,7 +300,11 @@ def shape_depends_on_covariates(
         likelihood=likelihood,
         weights_col=weights_col,
     )
-    full = fit_aft(
+    # Started from the restricted model. The full one is the same scale coefficients with
+    # shape coefficients added at zero, which is where Newton converges in a few steps --
+    # 0.7 minutes against 4.2 from cold on four quarters of the book -- instead of SLSQP's
+    # hundred-odd evaluations from nothing, 91 minutes on the whole training half.
+    full = fit(
         encoded,
         covariates,
         formula,
@@ -256,6 +312,7 @@ def shape_depends_on_covariates(
         likelihood=likelihood,
         weights_col=weights_col,
         ancillary=ancillary_formula,
+        initial_point=restricted.fitter.params_,
     )
 
     added = int(full.fitter.params_.shape[0] - restricted.fitter.params_.shape[0])
@@ -349,6 +406,7 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
     # covariate listed here with no clear prior would be eliminated for disagreeing
     # with a guess, which is worse than not testing it.
     "vix": -1,  # high implied volatility is a stressed economy
+    "vix_gap": -1,  # volatility risen since origination is stress the loan was not written in
     "hpi_growth": +1,  # rising house prices build equity
     #
     # ``rate_gap`` and ``policy_rate_gap`` were briefly given revised signs here, on
@@ -370,6 +428,7 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
 AMBIGUOUS_SIGNS: Final[dict[str, str]] = {
     "term_spread": "a steep curve is both cheap short funding and an expected slowdown",
     "inflation": "erodes the real debt, squeezes the real income",
+    "inflation_gap": "the same two channels, measured against the loan's own start",
     "dti": "kept as negative, but it is measured at origination and never updated",
 }
 
@@ -386,26 +445,78 @@ def variance_inflation(
     Computed with least squares directly rather than through scikit-learn. `nmds`
     uses ``LinearRegression(normalize=True)``, which was removed in scikit-learn 1.2,
     so its implementation no longer runs; the method is worth taking, the code is not.
+
+    The regressions are posed on the weighted covariance matrix rather than on the rows.
+    With an intercept they are the same least-squares problems, and the matrix is added
+    up a block at a time by :func:`weighted_covariance`.
     """
-    values = frame.loc[:, list(columns)].to_numpy(dtype=float)
-    weights = frame[weight].to_numpy(dtype=float) if weight else np.ones(len(frame), dtype=float)
-    root = np.sqrt(weights)
+    return _inflation(weighted_covariance(frame, columns, weight=weight), columns)
 
+
+#: Rows added up at a time when accumulating weighted cross-products. The moments are
+#: sums, so the block size changes the memory and nothing else.
+MOMENT_BLOCK_ROWS: Final = 5_000_000
+
+
+def weighted_covariance(
+    frame: pd.DataFrame,
+    columns: Sequence[str],
+    *,
+    weight: str | None = None,
+    rows: int = MOMENT_BLOCK_ROWS,
+) -> pd.DataFrame:
+    """Exposure-weighted covariance of ``columns``, added up a block at a time.
+
+    A weight total, the weighted sums and the weighted cross-products are everything a
+    variance inflation factor or a correlation needs, and all three are sums. The first
+    version copied the covariates out whole and then again for every covariate it
+    regressed: on the training half of the exact key, tens of gigabytes to produce a
+    matrix a dozen entries wide.
+    """
+    names = list(columns)
+    total = 0.0
+    first = np.zeros(len(names))
+    second = np.zeros((len(names), len(names)))
+    for start in range(0, len(frame), rows):
+        block = frame.iloc[start : start + rows]
+        values = block.loc[:, names].to_numpy(dtype=float)
+        weights = block[weight].to_numpy(dtype=float) if weight else np.ones(len(block))
+        total += float(weights.sum())
+        first += weights @ values
+        second += values.T @ (values * weights[:, None])
+    mean = first / total
+    covariance = second / total - np.outer(mean, mean)
+    return pd.DataFrame(covariance, index=names, columns=names)
+
+
+def inflation_from_covariance(covariance: pd.DataFrame) -> pd.DataFrame:
+    """The VIF of every covariate in a covariance or correlation matrix, largest first.
+
+    For a matrix computed once and saved -- ``creditsurv select`` writes the correlation of
+    every candidate -- so the factors can be read back without the rows. They do not depend
+    on the scale of the covariates, so a correlation matrix gives what a covariance would.
+    """
+    return _inflation(covariance, [str(name) for name in covariance.columns])
+
+
+def _inflation(covariance: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
+    """The VIF of each of ``columns``, from their covariance, largest first.
+
+    ``R²`` of a covariate on the others is the share of its variance that their
+    covariances explain, which is what the regression on the rows computes.
+    """
+    names = list(columns)
+    matrix = covariance.loc[names, names].to_numpy(dtype=float)
     rows = []
-    for index, name in enumerate(columns):
-        target = values[:, index]
-        others = np.delete(values, index, axis=1)
-        design = np.column_stack([np.ones(len(others)), others])
-
-        coefficients, *_ = np.linalg.lstsq(design * root[:, None], target * root, rcond=None)
-        residual = target - design @ coefficients
-        weighted_mean = float((target * weights).sum() / weights.sum())
-
-        residual_ss = float((weights * residual**2).sum())
-        total_ss = float((weights * (target - weighted_mean) ** 2).sum())
-        r_squared = 1.0 - residual_ss / total_ss if total_ss > 0 else 0.0
+    for index, name in enumerate(names):
+        variance = float(matrix[index, index])
+        others = [position for position in range(len(names)) if position != index]
+        r_squared = 0.0
+        if others and variance > 0.0:
+            cross = matrix[others, index]
+            explained, *_ = np.linalg.lstsq(matrix[np.ix_(others, others)], cross, rcond=None)
+            r_squared = min(max(float(cross @ explained) / variance, 0.0), 1.0)
         inflation = 1.0 / (1.0 - r_squared) if r_squared < 1.0 else np.inf
-
         rows.append({"covariate": name, "vif": inflation, "tolerance": 1.0 - r_squared})
 
     return pd.DataFrame(rows).sort_values("vif", ascending=False).reset_index(drop=True)
@@ -432,9 +543,12 @@ def stepwise_vif(
     protected = {name: rank for rank, name in enumerate(priority)}
     surviving = list(columns)
     log: list[dict[str, object]] = []
+    # Once: every later step's covariance is a submatrix of this one, so no step reads
+    # the rows again.
+    covariance = weighted_covariance(frame, columns, weight=weight)
 
     while len(surviving) > 1:
-        inflation = variance_inflation(frame, surviving, weight=weight)
+        inflation = _inflation(covariance, surviving)
         worst = inflation.iloc[0]
         if float(worst["vif"]) <= threshold:
             break
@@ -455,138 +569,3 @@ def stepwise_vif(
         surviving.remove(victim)
 
     return pd.DataFrame(log, columns=["step", "removed", "vif", "remaining"]), surviving
-
-
-def univariate_screening(
-    encoded: pd.DataFrame,
-    candidates: Sequence[str],
-    *,
-    always_include: Sequence[str] = (),
-    distribution: str = "weibull",
-    weights_col: str | None = None,
-) -> pd.DataFrame:
-    """Fit one model per candidate covariate and report its significance.
-
-    A cheap first pass that removes covariates carrying nothing at all, before the
-    multivariate fit has to carry them. Following `nmds`, the covariates in
-    ``always_include`` are forced into every fit, so each candidate is judged on what
-    it adds rather than on what it happens to proxy.
-
-    It is a screen and not a decision: a covariate can be insignificant alone and
-    matter in combination, which is why the surviving set still goes through backward
-    elimination.
-    """
-    rows = []
-    for name in candidates:
-        terms = [*always_include, name]
-        formula = " + ".join(terms)
-        try:
-            result = fit_aft(
-                encoded, terms, formula, distribution=distribution, weights_col=weights_col
-            )
-        except Exception as error:  # a candidate that will not converge is a result
-            rows.append(
-                {
-                    "covariate": name,
-                    "coef": np.nan,
-                    "p": np.nan,
-                    "aic": np.nan,
-                    "note": type(error).__name__,
-                }
-            )
-            continue
-
-        summary = result.fitter.summary
-        key = ("lambda_", name)
-        if key not in summary.index:
-            continue
-        rows.append(
-            {
-                "covariate": name,
-                "coef": float(summary.loc[key, "coef"]),
-                "p": float(summary.loc[key, "p"]),
-                "aic": result.aic,
-                "note": "",
-            }
-        )
-
-    table = pd.DataFrame(rows)
-    if table.empty:
-        return table
-    table["keep"] = table["p"] <= PVALUE_THRESHOLD
-    return table.sort_values("p").reset_index(drop=True)
-
-
-def _wrong_sign(covariate: str, coefficient: float) -> bool:
-    expected = EXPECTED_SIGNS.get(covariate)
-    return expected is not None and coefficient * expected < 0
-
-
-def backward_elimination(
-    encoded: pd.DataFrame,
-    covariates: Sequence[str],
-    *,
-    categorical: Sequence[str] = (),
-    distribution: str = "weibull",
-    weights_col: str | None = None,
-    threshold: float = PVALUE_THRESHOLD,
-) -> tuple[pd.DataFrame, list[str], FitResult]:
-    """Remove one covariate at a time until every survivor earns its place.
-
-    Two criteria, applied together, as `nmds` does. A coefficient no more significant
-    than ``threshold`` goes; so does one whose sign is economically backwards, even
-    when it is significant. The second matters more than it looks: a wrong sign is not
-    a weak result but a symptom, usually of collinearity, and a model asserting that
-    higher credit scores default sooner will fit this sample and no other.
-
-    Returns the elimination log, the surviving covariates, and the final fit.
-    """
-    surviving = list(covariates)
-    log: list[dict[str, object]] = []
-
-    while True:
-        terms = [*surviving, *categorical]
-        formula = " + ".join([*surviving, *(f"C({name})" for name in categorical)])
-        result = fit_aft(
-            encoded, terms, formula, distribution=distribution, weights_col=weights_col
-        )
-        summary = result.fitter.summary.loc["lambda_"]
-
-        worst: tuple[str, float, str] | None = None
-        for name in surviving:
-            if name not in summary.index:
-                continue
-            coefficient = float(summary.loc[name, "coef"])
-            p_value = float(summary.loc[name, "p"])
-            if _wrong_sign(name, coefficient):
-                # A backwards sign outranks any p-value: it says the specification is
-                # wrong, not that the evidence is thin.
-                worst = (name, p_value, "wrong sign")
-                break
-            if p_value > threshold and (worst is None or p_value > worst[1]):
-                worst = (name, p_value, "insignificant")
-
-        if worst is None:
-            return (
-                pd.DataFrame(log, columns=["step", "removed", "p", "reason", "remaining"]),
-                surviving,
-                result,
-            )
-
-        name, p_value, reason = worst
-        log.append(
-            {
-                "step": len(log) + 1,
-                "removed": name,
-                "p": p_value,
-                "reason": reason,
-                "remaining": len(surviving) - 1,
-            }
-        )
-        surviving.remove(name)
-        if not surviving:
-            return (
-                pd.DataFrame(log, columns=["step", "removed", "p", "reason", "remaining"]),
-                surviving,
-                result,
-            )

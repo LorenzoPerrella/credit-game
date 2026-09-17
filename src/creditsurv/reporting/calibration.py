@@ -20,13 +20,16 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from creditsurv.features import DERIVED_COLUMNS
+from creditsurv.config import TIME_VARYING_CONTINUOUS
+from creditsurv.features import MACRO_DERIVED, MACRO_SOURCES
 from creditsurv.models.aft import coefficient_table
 from creditsurv.models.lifetime_pd import (
+    ADVERSE,
     conditional_pd,
     extend_macro,
     pd_term_structure,
     project_panel,
+    scenario_legs,
     scenario_lifetime_pd,
     survival_along_path,
 )
@@ -59,6 +62,25 @@ def _average(values: pd.Series, weights: pd.Series | None) -> float:
     return float(np.average(values.to_numpy(dtype=float), weights=aligned.to_numpy(dtype=float)))
 
 
+def covariate_steps(
+    frame: pd.DataFrame, names: Sequence[str], *, weights_col: str | None = None
+) -> dict[str, float]:
+    """One standard deviation of each covariate, in the data the model was fitted to.
+
+    Exposure-weighted when a weight is given: a row of the fitting panel stands for a
+    number of loan-months, so an unweighted deviation would describe the binning.
+    """
+    weights = None if weights_col is None else frame[weights_col].to_numpy(dtype=float)
+    steps: dict[str, float] = {}
+    for name in names:
+        if name not in frame.columns:
+            continue
+        values = frame[name].to_numpy(dtype=float)
+        mean = float(np.average(values, weights=weights))
+        steps[name] = float(np.sqrt(np.average((values - mean) ** 2, weights=weights)))
+    return steps
+
+
 def marginal_effects(
     fitted: FitResult,
     loans: pd.DataFrame,
@@ -68,6 +90,7 @@ def marginal_effects(
     *,
     horizon_months: int = 12,
     weights: pd.Series | None = None,
+    steps: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Change in PD from a one standard deviation move in each covariate.
 
@@ -82,9 +105,19 @@ def marginal_effects(
     the panel *recomputes* them from the macro series, so a shock applied to the
     loan record is overwritten and the covariate reports exactly zero effect --
     which is what the first version of this table showed for all four of them,
-    flatly contradicting their own coefficients.
+    flatly contradicting their own coefficients. Which covariates count as derived is
+    read from ``MACRO_DERIVED``; the validation found an older, pre-selection list in
+    its place, so ``inflation`` was shocked on the record and reported as exactly zero.
+
+    **The size of the move comes from the fitting data, not from the projection.**
+    Under the random-walk baseline a macro *level* such as ``vix`` is flat across the
+    whole projection and identical for every loan, so its deviation there is exactly
+    zero and the covariate was skipped -- the table omitted the macro covariate with the
+    largest standardised effect for that reason alone. ``steps`` carries one standard
+    deviation of each covariate in the data the model was fitted to (see
+    :func:`covariate_steps`); the projected panel is used only when it is not supplied.
     """
-    derived = set(DERIVED_COLUMNS)
+    derived = set(MACRO_DERIVED)
     extended = extend_macro(macro, horizon_months + 2)
     baseline_panel = project_panel(loans, extended, horizon_months=horizon_months)
     baseline = _average(
@@ -95,8 +128,11 @@ def marginal_effects(
     for name in continuous:
         if name not in baseline_panel.columns:
             continue
-        step = float(baseline_panel[name].std())
-        if step == 0.0:
+        if steps is not None and name in steps:
+            step = float(steps[name])
+        else:
+            step = float(baseline_panel[name].std())
+        if not np.isfinite(step) or step == 0.0:
             continue
 
         if name in derived:
@@ -134,11 +170,16 @@ def generate(
     reports_dir: Path,
     horizon_months: int = 60,
     weights: pd.Series | None = None,
+    steps: dict[str, float] | None = None,
 ) -> Path:
     """Write ``calibration.md`` and its figures.
 
     ``weights`` names how many loans each row of ``loans`` stands for, which is what
     an aggregated book carries instead of one row per loan.
+
+    ``steps`` is one standard deviation of each covariate in the data the model was
+    fitted to, from :func:`covariate_steps`. Without it the marginal-effects table takes
+    the deviation from the projected panel, where a macro level is flat and drops out.
     """
     figures = reports_dir / "figures"
     report = Report(
@@ -175,7 +216,9 @@ seasoning pattern mortgages are expected to show.
 """
     )
 
-    effects = marginal_effects(fitted, loans, macro, covariates, continuous, weights=weights)
+    effects = marginal_effects(
+        fitted, loans, macro, covariates, continuous, weights=weights, steps=steps
+    )
     report.heading("Marginal effects on probability of default").text(
         """
 Coefficients are not comparable across covariates measured in different units, and
@@ -220,11 +263,18 @@ the two appear.
 
     report.heading("Macroeconomic scenarios").text(
         f"""
-The adverse path is shaped like 2008 rather than scaled to it: unemployment climbs
-over a year and stays high, house prices fall for two years, credit tightens. The
-baseline is a random walk from the last observation, which is **not a forecast** and
-is not offered as one -- it is what makes the relative effect of a scenario
-interpretable without smuggling in a view on the economy.
+The adverse path is shaped like 2008 rather than scaled to it, and it moves only series the
+fitted model reads: each leg is listed below with the move it makes, the month it gets
+there, where it stands at three years and the covariates it feeds. The baseline is a random
+walk from the last observation, which is **not a forecast** and is not offered as one: it is
+what makes the relative effect of a scenario interpretable without smuggling in a view on
+the economy.
+
+Twice the scenario and the specification parted company, and twice the report kept
+describing a path the model did not see: first two legs fed no covariate and two
+covariates had no leg, then the reselection removed volatility and added financial
+conditions, the policy rate, sentiment and housing starts. A test now fails whenever the
+shocked series and the formula part, and this table is built from the scenario itself.
 
 Because the covariates are time-varying, the scenario is applied by projecting the
 covariate paths and chaining conditional survival, not by re-scoring frozen
@@ -236,6 +286,9 @@ the question.
 
 **Adverse lifetime PD is {uplift:.2f}x the baseline.**
 """
+    ).table(
+        scenario_legs(ADVERSE, {name: MACRO_SOURCES[name] for name in TIME_VARYING_CONTINUOUS}),
+        caption="The adverse legs: moves are proportional where shown in per cent",
     ).figure(scenario_figure, "Distribution of lifetime PD under each scenario")
     report.table(
         scenarios.describe().reset_index(names="statistic"),

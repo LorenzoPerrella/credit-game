@@ -4,7 +4,7 @@ Lifetime PD (probability of default) modelling with **parametric multivariate
 survival models**, **time-varying covariates** and **interval censoring**, built on
 [lifelines](https://lifelines.readthedocs.io).
 
-Fitted on the **Freddie Mac Single-Family Loan-Level Dataset**: 48.8 million loans,
+Fitted on the **Freddie Mac Single-Family Loan-Level Dataset**: 49.2 million loans,
 2.88 billion loan-months, 1999 to 2026. Macroeconomic covariates from FRED. No
 sampling — the whole population.
 
@@ -46,15 +46,21 @@ model gives none of the three.
 | | |
 |---|---|
 | Archives | 40 GB, 28 vintage years |
-| Loan-months | **2,876,284,955** |
+| Loan-months | **2,881,397,251** |
 | After ingest | 17 GB of parquet |
-| After aggregation | **15.8 M weighted cells** |
-| Compression | **159×** |
+| After aggregation | **63.6 M weighted cells** |
+| Compression | **40×** |
 
 Episodes that agree on every covariate and on their position in time are
 exchangeable, so they collapse into one row carrying a count, and the likelihood
 treats that count as a frequency weight. At this scale that is not an optimisation
 but the only thing that makes the problem tractable.
+
+The table is four times what it was before the independent validation, because the key
+now carries the exact origination month rather than the quarter, and two more loan
+characteristics. A stock lifelines fit on it would need 45-50 GB, so fits run block by
+block (`creditsurv.models.blocks`) on lifelines' own likelihood, and are polished to the
+optimum that lifelines' optimiser stops up to 5.9 standard errors short of.
 
 **Episodes are monthly**, set by how often the covariates move rather than by how much
 they compress: the time-varying covariates come from monthly series, so an episode
@@ -76,7 +82,8 @@ measurements behind that.
 | [Calibration](docs/reports/calibration.md) | Generated: what each regressor is worth, in PD |
 | [Backtesting](docs/reports/backtesting.md) | Generated: predicted against realised, after 2024 |
 
-Notebooks: [`01_portfolio.ipynb`](notebooks/01_portfolio.ipynb) carries the evidence;
+Notebooks: [`01_portfolio.ipynb`](notebooks/01_portfolio.ipynb) and
+[`02_lifetime_pd.ipynb`](notebooks/02_lifetime_pd.ipynb) carry the evidence;
 the statistics themselves live in the package, tested, so a notebook reads like a
 report rather than an implementation.
 
@@ -90,9 +97,20 @@ uv run creditsurv fetch-macro    # real FRED data, no API key
 uv run creditsurv ingest         # 40 GB of archives to parquet, ~30 min, idempotent
 uv run creditsurv portfolio      # describe the book before modelling it
 uv run creditsurv profile        # screen the covariates before aggregating
-uv run creditsurv aggregate      # collapse to weighted cells
-uv run creditsurv report         # one fit; writes all three reports
+uv run creditsurv aggregate --moratorium exclude  # collapse to weighted cells, ~40 min
+uv run creditsurv select         # the variable selection on the training half; resumes
+uv run creditsurv report --extra-fits  # one fit; writes all three reports
 uv run creditsurv prune-archives # reclaim the 40 GB, after verifying the parquet
+```
+
+The checks the independent validation asked for, each a command of its own:
+
+```bash
+uv run creditsurv aggregate --moratorium censor   # the other event definition (D1)
+uv run creditsurv moratorium                      # both fitted and backtested, side by side
+uv run creditsurv aggregate --report-incomplete   # the loans the cells leave out (D4)
+uv run creditsurv aggregate --report-exits        # what censoring codes 16 and 96 rests on (D5)
+uv run creditsurv check-calendar                  # defaults by month, cells against files (M1)
 ```
 
 `prune-archives` is the only irreversible step and is deliberately a separate command,
@@ -165,9 +183,11 @@ macro covariates came out economically backwards. Removing five others did not c
 flipped when the *sample* changed by 6%. All three were among the four smallest
 standardised effects, and each sat beside a larger correlated covariate carrying the
 same information. One pair was literal: `cltv_drift` is built from the house price
-index, so `hpi_growth` was that index entering a second time as a residual. The model
-now carries **one covariate per economic dimension**, and holds its coefficients to
-within 4.5% across samples that previously flipped them.
+index, so `hpi_growth` was that index entering a second time as a residual. The rule that
+came out of it -- a small covariate whose sign moves with the sample, beside a larger one
+of the same economic dimension, is not identified -- is now step 9 of `creditsurv select`,
+judged on loans originated in even and in odd years, and it removed `hpi_growth` and
+`term_spread` again on the whole training half.
 
 **Quarterly episodes once looked no better than monthly.** They compressed identically,
 which made no sense until the cause was clear: a monthly-varying covariate was still
@@ -197,9 +217,14 @@ verified, not assumed — so quarters are aggregated one at a time.
   actually occurred, which is what *predicted against realised* means and which a real
   deployment would not have had. Read as the performance of the whole system it would
   overstate what the system can do.
-- **Five macro covariates were given up**, and two expected signs turned out to be
-  wrong. Both are set out in [variable selection](docs/variable_selection.md), with the
-  measured evidence and a comparison against what `nmds` would have decided.
+- **Eight of fifteen macro candidates were given up** by `creditsurv select`, `vix` among
+  them, and the first run's revision of two expected signs was retracted. Both are set out
+  in [variable selection](docs/variable_selection.md), with the measured evidence and a
+  comparison against what `nmds` would have decided.
+- **HARP refinances are outside the model.** They carry no debt-to-income, so the
+  complete-case rule drops them: 18% of the 2009–2019 vintages, about three times as
+  likely to default as the loans kept. See
+  [data preparation](docs/data_preparation.md#what-dropping-removes).
 
 ---
 

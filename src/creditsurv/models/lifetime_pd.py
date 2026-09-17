@@ -49,7 +49,7 @@ from creditsurv.features import add_macro_covariates
 from creditsurv.models.aft import episode_hazards
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from creditsurv.models.aft import FitResult
 
@@ -190,17 +190,76 @@ class Scenario:
 #: unconditional backtest uses.
 BASELINE = Scenario(name="baseline")
 
-#: A recession resembling 2008 in shape rather than magnitude: unemployment climbs
-#: over a year and stays high, house prices fall for two years, credit tightens.
+#: A recession resembling 2008 in shape rather than magnitude, shocked on the series
+#: the fitted model actually reads.
+#:
+#: The first version shocked unemployment, house prices, financial conditions and the
+#: thirty-year mortgage rate. By the time the specification settled on ``cltv_drift``,
+#: ``unemp_gap``, ``vix`` and ``inflation``, two of those four legs fed no covariate at
+#: all and two of the model's covariates had no path -- ``vix``, the largest
+#: standardised effect, among them. The published "adverse lifetime PD 1.46x baseline"
+#: therefore understated the model's own sensitivity, which moves 6.6x in-sample between
+#: 2005 and 2009. It was drift rather than a decision: the scenario predated the
+#: specification by three days. ``tests/test_scenarios.py`` now fails if the two part.
+#:
+#: The selection on the whole training half then replaced the specification, and the same
+#: test caught the scenario out again: ``vix`` was gone from the model, and ``nfci_lagged``,
+#: ``policy_rate_gap``, ``sentiment`` and ``starts_growth`` had arrived with no path. The
+#: volatility leg is removed and four legs are added, each the move its series made from
+#: July 2007 to its extreme.
+#:
+#: Unemployment climbs four points over a year and holds; house prices fall a fifth over
+#: two years; consumer prices fall two percent over a year, the deflation of 2009, which
+#: ``inflation_gap`` reads as stress. Financial conditions tighten by 3.4 over sixteen
+#: months, as the NFCI did to November 2008, and ease back over the next year. The policy
+#: rate is cut by 95% over thirty months, as 5.26% became 0.11% by 2010 -- proportional,
+#: so it meets the zero bound instead of crossing it. Consumer sentiment falls 39% over
+#: sixteen months, as 90.4 became 55.3, and housing starts 65% over twenty-one, as 1.35
+#: million became 478 thousand; both are levels, and proportional for the same reason
+#: ``hpi`` and ``cpi`` are.
 ADVERSE = Scenario(
     name="adverse",
     shocks={
         "unemployment_rate": [*np.linspace(0.0, 4.0, 12), *([4.0] * 24)],
         "hpi": [*np.linspace(0.0, -0.20, 24), *([-0.20] * 12)],
-        "nfci": [*np.linspace(0.0, 1.5, 6), *([1.5] * 30)],
-        "mortgage_rate_30y": [*np.linspace(0.0, 1.0, 6), *([1.0] * 30)],
+        "cpi": [*np.linspace(0.0, -0.02, 12), *([-0.02] * 24)],
+        "nfci": [*np.linspace(0.0, 3.4, 16), *np.linspace(3.4, 0.0, 12), *([0.0] * 8)],
+        "policy_rate": [*np.linspace(0.0, -0.95, 30), *([-0.95] * 6)],
+        "sentiment": [*np.linspace(0.0, -0.39, 16), *([-0.39] * 20)],
+        "housing_starts": [*np.linspace(0.0, -0.65, 21), *([-0.65] * 15)],
     },
+    proportional=frozenset({"hpi", "cpi", "policy_rate", "sentiment", "housing_starts"}),
 )
+
+
+def scenario_legs(scenario: Scenario, sources: Mapping[str, Sequence[str]]) -> pd.DataFrame:
+    """One row per shocked series: how far it moves, how soon, and what reads it.
+
+    ``sources`` maps each covariate the model reads to the series it is built from. The
+    calibration report used to describe the adverse path in prose, and the prose outlived
+    the path: after the reselection it still promised a volatility spike to a model that no
+    longer read volatility. A table built from the scenario cannot describe another one.
+    """
+    rows = []
+    for series, path in scenario.shocks.items():
+        shock = np.asarray(path, dtype=float)
+        peak = int(np.argmax(np.abs(shock)))
+        proportional = series in scenario.proportional
+
+        def shown(value: float, *, as_share: bool = proportional) -> str:
+            return f"{value:+.0%}" if as_share else f"{value:+.1f}"
+
+        readers = sorted(name for name, used in sources.items() if series in used)
+        rows.append(
+            {
+                "series": series,
+                "move": shown(float(shock[peak])),
+                "month reached": peak + 1,
+                "by month 36": shown(float(shock[min(len(shock), 36) - 1])),
+                "read by": ", ".join(readers) if readers else "nothing",
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def extend_macro(macro: pd.DataFrame, months: int, scenario: Scenario = BASELINE) -> pd.DataFrame:

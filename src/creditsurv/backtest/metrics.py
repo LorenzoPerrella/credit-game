@@ -17,7 +17,7 @@ asks the equivalent question of the data that does exist, and is reported in its
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import pandas as pd
@@ -252,18 +252,51 @@ def actual_versus_expected(
     reads is the ratio: above one the model under-predicts, below one it
     over-predicts.
     """
-    frame = pd.DataFrame(
+    # Totals by bincount on the group codes. A group-by first builds a frame of four
+    # columns of doubles -- 2 GB on the training half of the exact key -- to fill a table
+    # of a few dozen rows.
+    codes, groups = pd.factorize(by, sort=True)
+    present = codes >= 0
+    codes = codes[present]
+    weights = exposure.to_numpy(dtype=float)[present]
+
+    def total(values: np.ndarray) -> np.ndarray:
+        summed: np.ndarray = np.bincount(codes, weights=values, minlength=len(groups))
+        return summed
+
+    grouped = pd.DataFrame(
         {
-            "group": by.to_numpy(),
-            "expected": predicted.to_numpy(dtype=float) * exposure.to_numpy(dtype=float),
-            "events": observed.to_numpy(dtype=float),
-            "exposure": exposure.to_numpy(dtype=float),
+            "group": groups,
+            "expected": total(predicted.to_numpy(dtype=float)[present] * weights),
+            "events": total(observed.to_numpy(dtype=float)[present]),
+            "exposure": total(weights),
         }
     )
-    grouped = frame.groupby("group", observed=True)[["expected", "events", "exposure"]].sum()
     grouped["expected_rate"] = grouped["expected"] / grouped["exposure"]
     grouped["actual_rate"] = grouped["events"] / grouped["exposure"]
     grouped["actual_over_expected"] = np.where(
         grouped["expected"] > 0, grouped["events"] / grouped["expected"], np.nan
     )
-    return grouped.reset_index()
+    return grouped
+
+
+#: A month of the test window holding less than this share of the median month's exposure
+#: is one the data release barely covers.
+THIN_MONTH_SHARE: Final = 0.10
+
+
+def covered_months(
+    over_time: pd.DataFrame, *, share: float = THIN_MONTH_SHARE
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The months of the test window the data covers, and the ones it barely does.
+
+    The last months of a release are reported for a sliver of the book: in the published
+    backtest March 2026 carried 51,341 loan-months and April 8, against about twelve million
+    in a full month. Their realised rates are noise -- April's was zero -- and drawn beside the
+    rest they read as the model diverging. A month below ``share`` of the median month's
+    exposure is set aside and named, never dropped silently; the totals keep it, since at
+    that weight it moves nothing.
+    """
+    floor = share * float(over_time["exposure"].median())
+    thin = over_time["exposure"] < floor
+    return over_time.loc[~thin].reset_index(drop=True), over_time.loc[thin].reset_index(drop=True)

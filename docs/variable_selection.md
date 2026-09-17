@@ -9,7 +9,7 @@ point, and [data_dictionary.md](data_dictionary.md) for what the fields mean.
 
 ## Why a procedure at all
 
-With 48.8 million loans and thirty-odd candidate covariates, almost anything will be
+With 49.2 million loans and thirty-odd candidate covariates, almost anything will be
 statistically significant. Significance is not the constraint — *stability* is. A
 specification chosen by searching this sample will fit this sample and will not
 survive the next vintage.
@@ -86,7 +86,7 @@ Decisions taken, and why:
 - **`property_type`: MH and CP merged into `other`**; `number_of_units`: 2, 3 and 4
   merged into `2-4`. Both tails are below 5%, which is the `nmds` rule.
 - **`occupancy_status`: all three levels kept**, although investor (4.8%) and second
-  home (3.3%) sit below the 5% rule. With 48.8 million loans that is 2.3 million and
+  home (3.3%) sit below the 5% rule. With 49.2 million loans that is 2.4 million and
   1.6 million loans respectively — the rule exists to stop a level having nothing to
   estimate from, and neither of these is anywhere near that. They are also
   economically distinct in a way that merging would destroy. **This is a departure
@@ -152,19 +152,20 @@ factor by weighted least squares directly.
 
 ### 7. Univariate screening — does it carry anything alone?
 
-`models.selection.univariate_screening`. **Threshold: p > 0.05 → discard.**
+`models.procedure.run_selection`. **Threshold: p > 0.05 → discard.**
 
-One model per candidate, with a fixed set of covariates forced into every fit
-(`always_include`), so each is judged on what it *adds* rather than on what it happens
-to proxy.
+One model per candidate, fitted beside the loan block and started from the loan block's
+own fit, so each is judged on what it *adds* rather than on what it happens to proxy. The
+sign each candidate takes here is also the one step 8 holds it to when it has no declared
+prior.
 
 A screen, not a decision. A covariate can be insignificant alone and matter in
 combination, which is why the survivors still face backward elimination.
 
-### 8. Backward elimination — two criteria, applied together
+### 8. Backward elimination — three criteria, in order
 
-`models.selection.backward_elimination`. **Thresholds: p > 0.05, and the expected
-sign.**
+`models.procedure.run_selection`. **Thresholds: the expected sign, a sign reversed
+against the covariate's own, and p > 0.05.**
 
 The sign constraint is the most useful thing in this procedure and the least common.
 A covariate whose coefficient comes out economically backwards is eliminated **even
@@ -185,11 +186,178 @@ coefficient lengthens survival and therefore *lowers* risk:
 | `nfci_lagged` | **−** | Tighter financial conditions fail sooner |
 | `mi_percent` | **+** | Insured loans are underwritten to a stricter standard |
 
-One covariate is removed per step, the model refitted, and the test repeated. A
-backwards sign outranks any p-value: it says the specification is wrong, not that the
-evidence is thin.
+A covariate with **no** declared prior answers to its own sign instead: the sign of its
+coefficient beside the loan block at step 7. If the full model turns it around, it is
+removed. This is the marginal/conditional reversal rule the first run used on
+`credit_spread` and `term_spread`, set out under
+[the covariates given up](#credit_spread-and-term_spread--collinearity-the-textbook-case):
+a covariate whose conditional effect contradicts its own is carrying something other than
+what its name says. The executable version measures "its own" as the step-7 coefficient,
+fitted on the training half beside the loan block, rather than by reading a table of
+marginal default rates by band, which conditions on nothing and was computed on every
+month including the test window.
 
-## Results of running it
+One covariate is removed per step, the model refitted, and the test repeated. A
+backwards sign outranks a reversal, and a reversal outranks any p-value: both say the
+specification is wrong, not that the evidence is thin.
+
+## Running it: `creditsurv select`
+
+The steps above were first carried out one at a time, and their outcome copied by hand
+into `config.TIME_VARYING_CONTINUOUS` and `config.ELIMINATED`. Every function they used
+was tested; nothing ran them in sequence, so the specification could be believed but not
+regenerated. The validation called that out (F1), and the sequence is now a command:
+`creditsurv select` runs steps 5 to 9 on the whole population and writes
+[`reports/selection.md`](reports/selection.md), with `selection.json` beside it.
+`tests/test_procedure.py` fails when the configuration and that record disagree.
+
+What changed on the way, each for a stated reason:
+
+- **The training half only.** The first run selected on everything, including the months
+  the backtest judges the model on. A specification chosen on them has already seen the
+  test.
+- **Stability across loans originated in even and odd years.** The first run compared
+  the whole population with its first 94%, a comparison that needs the test window. The
+  two halves each cover every calendar month, so a sign that moves between them moves
+  with the sample and not with the economy.
+- **The economic dimension of every candidate is fixed in `config.ECONOMIC_DIMENSION`**,
+  before any fit, because the stability rule below only removes a covariate beside a
+  larger one of the same dimension. Decided afterwards, the rule would drop whatever came
+  out inconvenient.
+- **`has_mi` and `first_time_buyer` are candidates.** They were kept out of the cell key
+  on a claim that loan characteristics cost sixteen times the table; measured, the two
+  together cost 1.19×. They go through the screen beside the loan block, whatever it
+  says (M3).
+- **`vix_gap` and `inflation_gap` sit beside `vix` and `inflation`.** A level at the
+  observation date is the same for every loan in a month, so its coefficient is a
+  calendar effect by construction; its move since origination is not (S5). In the
+  elimination priority a level gives way before its own gap form.
+- **The reversal rule is run, not only described.** The first version of the command
+  checked declared priors and p-values and nothing else, so its first complete run --
+  committed as it came out -- kept `rate_gap`, `inflation` and `equity_return`, three
+  covariates with no prior whose signs in the full model contradicted their own: `rate_gap`
+  −0.190 alone and +0.018 together, `inflation` +10.0 and −8.0, `equity_return` +0.43 and
+  −0.08. The rule was stated in this document before that run and applied by hand in the
+  first one; the omission was found by reading the run, and it is recorded here so the
+  reader can weigh that order of events.
+- **Every fit is polished to the optimum.** lifelines' optimiser stops on a change in the
+  mean log-likelihood, and on four quarters of the book it stopped up to 5.9 standard
+  errors short. A sign read off a fit that far from its optimum is not the fit's sign.
+
+The results of the selection on the training half come first. The **first run's** follow,
+on the quarter-keyed table before the validation, kept because the arguments in them -- the
+retraction included -- are the reasons the rules exist; its numbers and its specification
+are superseded.
+
+## Results on the training half
+
+`creditsurv select` under `exclude`, on **59,663,961 cells covering 2,345,846,897
+loan-months** up to 2024-12, with no sampling: the [report](reports/selection.md) and the
+[record](reports/selection.json) the configuration is tested against. Nineteen continuous
+candidates -- the loan block and fifteen macro series, `vix_gap` and `inflation_gap` among
+them beside their levels -- with `purpose` and `occupancy` in the base and `has_mi` and
+`first_time_buyer` screened beside it.
+
+| Step | Removed | Why |
+|---|---|---|
+| 5. Correlation | nothing | one pair at the threshold, `rate_gap` and `policy_rate_gap` at −0.800, reported |
+| 6. Variance inflation | `credit_spread` | 11.9 |
+| 7. Screen | nothing | every candidate at p = 0 beside the loan block |
+| 8. Backwards sign | `vix_gap`, then `vix` | +0.00254 and +0.00935, where negative is expected |
+| 8. Reversed sign | `rate_gap`, `equity_return`, `inflation` | −0.190 alone to +0.018 together, +0.431 to −0.086, +10.04 to −8.33 |
+| 9. Stability | `term_spread`, `hpi_growth` | sign changes between the halves, beside `policy_rate_gap` and `cltv_drift` |
+
+What remains, with the effect of one standard deviation on log survival time on the whole
+training half and on loans originated in even and in odd years, from the last round:
+
+| Covariate | Dimension | Whole | Even years | Odd years |
+|---|---|---|---|---|
+| `fico_s` | credit quality | +0.434 | +0.442 | +0.425 |
+| `orig_ltv` | leverage at origination | −0.203 | −0.193 | −0.211 |
+| `dti` | debt burden | −0.176 | −0.176 | −0.172 |
+| `term_years` | term | −0.241 | −0.246 | −0.234 |
+| `cltv_drift` | housing | −0.182 | −0.168 | −0.186 |
+| `unemp_gap` | labour | −0.094 | −0.108 | −0.083 |
+| `nfci_lagged` | financial stress | −0.004 | −0.005 | −0.005 |
+| `policy_rate_gap` | interest rates | +0.125 | +0.112 | +0.144 |
+| `sentiment` | confidence | +0.090 | +0.096 | +0.074 |
+| `starts_growth` | housing | +0.077 | +0.068 | +0.088 |
+| `inflation_gap` | prices | +0.056 | +0.083 | +0.020 |
+
+Plus `purpose`, `occupancy`, `has_mi` and `first_time_buyer`.
+
+**`vix` is out, and not by hand.** Beside the loan block alone it has the expected sign,
+−0.0198; in the full model it turns positive. With moratoria no longer counted as defaults,
+part of what made it the first run's largest effect has gone -- the validation suspected
+as much (S5) -- and what is left is shared with `nfci_lagged` and the macro block. Its gap
+form fared no better.
+
+**Where a level and its gap were both offered, the gap survived.** `inflation` reversed
+against its own sign while `inflation_gap` kept its: side by side, the level and the move
+since origination were between them reading mostly inflation at origination, a cohort
+effect. The level was the calendar effect the validation named; the gap varies across
+loans observed in the same month.
+
+**Three readings to hold loosely.** `nfci_lagged` is kept at an effect of −0.004 a standard
+deviation: stable and right-signed, and nearly nothing, so in a stress scenario it
+contributes its sign and little else. `policy_rate_gap` has no declared prior, and its
+positive sign -- a policy rate below where the loan was written shortens survival -- reads as
+the central bank cutting into recessions rather than as a payment channel a fixed-rate
+mortgage does not have. And housing carries two covariates, the position (`cltv_drift`)
+and the construction cycle (`starts_growth`); step 9 separates a pair only when the smaller
+changes sign, and neither did.
+
+**The first run's other eliminations were judgments, not rules.** `sentiment` was given up
+for having no marginal signal and `starts_growth` for a U-shaped marginal profile. Neither
+judgment has a threshold that could have been fixed in advance, so neither is part of the
+executable procedure, and both covariates are back. The U in `starts_growth` is still a
+reason to band it; that would be a new candidate, not a different reading of this one.
+
+**What `nmds` would have done differently.** It too would have removed `vix` and `vix_gap`
+on their signs. It would have kept `rate_gap`, `inflation` and `equity_return`, which have
+no prior and meet no rule of its, and `term_spread` and `hpi_growth`, since it has no
+stability step. The reversal and stability rules are this project's additions, argued in
+the sections that follow.
+
+### The distribution family, and why the Weibull was kept against a better likelihood
+
+`report --extra-fits` compares the families on the selected specification, and on this one
+they part ([methodology, section 3](reports/methodology.md)):
+
+| | Weibull | Log-logistic |
+|---|---|---|
+| AIC, episode scale | 83,961 points behind | **ahead** |
+| Declared priors turned around | none | `nfci_lagged` |
+| Mean distance from Kaplan-Meier | 1.26 points of survival | **1.21** |
+| Largest distance | 3.26 | **2.90** |
+| At 312 months | −3.20 | **−2.74** |
+
+On the specification before the validation the ranking was the other way round, by 623,126
+AIC points, with the log-logistic turning three priors. The ranking follows the specification,
+which is the age-period-cohort point made in the methodology report: which family fits cannot
+be separated from which covariates are in the model.
+
+The Weibull is kept, for now, for three reasons, none of which is that the likelihood does
+not matter.
+
+* **Changing the family is a new selection, not a swap.** Every rule in steps 8 and 9 reads
+  coefficients, and the coefficients are the family's. Under the log-logistic `nfci_lagged`
+  points the wrong way and step 8 would remove it; what that does to the rest cannot be
+  read off this run.
+* **Against Kaplan-Meier the log-logistic is closer, but not much.** 0.05 points of survival
+  on average and 0.46 at the longest horizon, where both families overstate cumulative
+  default -- the Weibull by 3.2 points. The criterion a lifetime PD depends on does not
+  separate them the way the AIC does.
+* **Its declining hazard at long ages is an extrapolation choice.** A log-logistic hazard
+  rises and then falls, which lowers lifetime PD precisely beyond the ages the data reach.
+  That can be right, and it should be chosen for that reason rather than inherited from an
+  AIC on the observed ages.
+
+What would settle it is `creditsurv select` run with log-logistic fits, and the two selected
+models read the same three ways. That is roughly fifteen hours on this machine, and it is
+listed as open in `CLAUDE.md`.
+
+## Results of the first run
 
 On the whole population: **15,858,492 cells covering 2,515,340,009 loan-months, with
 1,938,519 defaults.** No sampling at any step.
@@ -612,6 +780,19 @@ weakness rather than the weakness.
 
 Both are recorded as revisions. Neither is presented as a prior.
 
+Three further departures came with the validation, and none of them is `nmds`'s:
+
+| Decision | `nmds` | Here |
+|---|---|---|
+| Stability judged at all | No stability step | Signs across two halves of the book, by origination year |
+| Selection sample | The data it is given | The training half only, so the backtest stays out of sample |
+| Levels of market series | Coarse classes of the level | Level and gap since origination both offered; the gap is preferred |
+
+The first is the one worth defending. Without it the wrong signs of the first run would
+have been chased one at a time, each refit rotating the basis into the next set; with it
+they were explained. The second is not a departure from `nmds` so much as from how the
+first run used it.
+
 ## What this procedure does not do
 
 **No information value or weight of evidence.** `nmds` does not use them either.
@@ -635,3 +816,4 @@ is stated by hand.
 | Variance inflation | > 10 | `nmds` `stepwise_vif` |
 | Univariate significance | p > 0.05 | `nmds` `fit_single_aft` |
 | Backward elimination | p > 0.05 + sign | `nmds` `survival_backward` |
+| Stability | sign changes between halves, beside a larger covariate of the same dimension | this project (`nmds` has no stability step) |

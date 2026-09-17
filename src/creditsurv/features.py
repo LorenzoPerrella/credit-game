@@ -34,8 +34,9 @@ from creditsurv.config import MACRO_LAG_MONTHS
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-#: Published in arrears and revised, so lagged before entering any covariate.
-LAGGED_SERIES: tuple[str, ...] = (
+#: Published in arrears and later revised. The **publication lag**: a value for month t
+#: is not known in month t.
+PUBLICATION_LAGGED: tuple[str, ...] = (
     "unemployment_rate",
     "hpi",
     "nfci",
@@ -44,8 +45,21 @@ LAGGED_SERIES: tuple[str, ...] = (
     "housing_starts",
 )
 
-#: Published in real time and never revised, so used contemporaneously.
-CONTEMPORANEOUS_SERIES: tuple[str, ...] = (
+#: Quoted in real time and never revised, so no publication lag applies -- but a
+#: **transmission lag** does, and it applies to every series rather than to the one that
+#: was noticed.
+#:
+#: A loan is 90+ days delinquent in month t because payments were missed in t-3, t-2 and
+#: t-1. A market reading from month t cannot be what caused that. ``vix`` used to be read
+#: contemporaneously, justified by the data being available in real time -- an argument
+#: about *availability*, not *transmission* -- and the backtest showed the result:
+#: predicted default spiked in April 2025 and March 2026, the two VIX peaks of the test
+#: window, at actual-over-expected 0.47 and 0.59, while realised default did not move.
+#:
+#: Correcting only ``vix`` would repeat the pattern the validation criticised in the
+#: marginal-effects table, a fix applied to the covariate that happened to be found, so
+#: the lag reaches every market series the macro family can read.
+TRANSMISSION_LAGGED: tuple[str, ...] = (
     "mortgage_rate_30y",
     "mortgage_rate_15y",
     "treasury_10y",
@@ -53,18 +67,40 @@ CONTEMPORANEOUS_SERIES: tuple[str, ...] = (
     "credit_spread",
     "equity_index",
     "vix",
+    "policy_rate",
 )
 
-#: Covariates this module adds to a loan-month panel, and which must all be present
-#: for a row to be usable. ``refi_incentive`` and ``indexed_cltv`` are built only where
-#: the columns they read exist, so they are checked by presence rather than listed.
-DERIVED_COLUMNS: tuple[str, ...] = (
-    "cltv_drift",
-    "unemp_gap",
-    "nfci_lagged",
-    "rate_gap",
-    "hpi_growth",
-)
+#: Every series is lagged. The two lists above record why, and it is not the same reason.
+LAGGED_SERIES: tuple[str, ...] = PUBLICATION_LAGGED + TRANSMISSION_LAGGED
+
+#: Empty on purpose. Kept so the rule it used to encode is visibly retired rather than
+#: silently absent.
+CONTEMPORANEOUS_SERIES: tuple[str, ...] = ()
+
+#: The macro series each derived covariate reads, stated once.
+#:
+#: It used to exist only implicitly, inside the body of ``add_macro_family``, and that
+#: is how a stress scenario could shock two series no fitted covariate read and leave two
+#: fitted covariates without a path, with nothing noticing. Stated, it lets a test tie
+#: the scenario to the formula; and a second test holds this map to what the builder
+#: actually does, so it cannot drift from the code it describes.
+MACRO_SOURCES: Final[dict[str, tuple[str, ...]]] = {
+    "cltv_drift": ("hpi",),
+    "hpi_growth": ("hpi",),
+    "unemp_gap": ("unemployment_rate",),
+    "policy_rate_gap": ("policy_rate",),
+    "rate_gap": ("mortgage_rate_30y", "mortgage_rate_15y"),
+    "nfci_lagged": ("nfci",),
+    "term_spread": ("term_spread",),
+    "credit_spread": ("credit_spread",),
+    "vix": ("vix",),
+    "vix_gap": ("vix",),
+    "sentiment": ("sentiment",),
+    "inflation": ("cpi",),
+    "inflation_gap": ("cpi",),
+    "equity_return": ("equity_index",),
+    "starts_growth": ("housing_starts",),
+}
 
 
 def lag_macro(macro: pd.DataFrame, *, lag_months: int = MACRO_LAG_MONTHS) -> pd.DataFrame:
@@ -127,7 +163,10 @@ def add_macro_covariates(
             panel["period"], macro["mortgage_rate_30y"]
         )
 
-    built = [name for name in DERIVED_COLUMNS if name in enriched.columns]
+    # Every macro covariate built, as the aggregated path checks. The list used here had
+    # been frozen at the specification before the selection, so a missing sentiment or
+    # inflation_gap passed through a projection to become a missing PD.
+    built = [name for name in MACRO_DERIVED if name in enriched.columns]
     return enriched.dropna(subset=built).reset_index(drop=True)
 
 
@@ -205,6 +244,9 @@ BIN_EDGES: dict[str, tuple[float, ...]] = {
     "term_spread": (-3.0, -0.5, 0.0, 0.5, 1.0, 2.0, 4.0),
     "credit_spread": (0.0, 1.5, 2.0, 2.5, 3.0, 4.0, 7.0),
     "inflation": (-0.05, 0.0, 0.02, 0.03, 0.05, 0.10),
+    # Year-on-year CPI inflation now, less at origination. Whole points either side of zero;
+    # the outer bands reach past the exposure's 1st and 99th percentiles, -3.7 and +6.0.
+    "inflation_gap": (-0.10, -0.02, -0.01, 0.0, 0.01, 0.02, 0.04, 0.12),
     "equity_return": (-0.7, -0.2, 0.0, 0.1, 0.2, 0.4, 1.5),
     "vix": (8.0, 14.0, 18.0, 22.0, 28.0, 40.0, 90.0),
     "sentiment": (50.0, 65.0, 75.0, 85.0, 95.0, 115.0),
@@ -295,6 +337,8 @@ MACRO_DERIVED: Final[tuple[str, ...]] = (
     "vix",
     "sentiment",
     "starts_growth",
+    "vix_gap",
+    "inflation_gap",
 )
 
 
@@ -304,6 +348,7 @@ def add_macro_family(
     orig_month: pd.Series,
     observation: pd.Series,
     lag_months: int,
+    names: Sequence[str] | None = None,
 ) -> None:
     """Rebuild every macro-derived covariate, in place.
 
@@ -330,7 +375,17 @@ def add_macro_family(
     collinear -- five interest-rate series will not survive together. Pruning is the
     job of the correlation, VIF and backward-elimination passes in
     :mod:`creditsurv.models.selection`, which is the place the decision is recorded.
+
+    ``names`` restricts the family to what the caller will read. Building all of it
+    costs nine unused ``float64`` columns on the largest frame the pipeline holds, and
+    at the cell counts an exact calendar key implies that is the difference between
+    fitting and not.
     """
+    wanted = None if names is None else set(names)
+
+    def requested(name: str) -> bool:
+        return wanted is None or name in wanted
+
     lagged = macro.shift(lag_months)
     for column in CONTEMPORANEOUS_MACRO:
         if column in macro.columns:
@@ -345,6 +400,15 @@ def add_macro_family(
         series = pd.Series(lagged[column].to_numpy(), index=month)
         return np.asarray((when - offset).map(series).to_numpy(), dtype=float)
 
+    def store(name: str, values: np.ndarray) -> None:
+        """Keep a covariate at single precision.
+
+        These are rebuilt from macro indices published to three or four significant
+        figures, so the seventh decimal of a float64 carries no information -- only
+        bytes, on the frame where bytes decide whether the fit runs.
+        """
+        episodes[name] = values.astype(np.float32)
+
     def level(column: str) -> np.ndarray:
         """The series as it stands at the observation date."""
         return at(column, observation)
@@ -354,10 +418,19 @@ def add_macro_family(
         moved: np.ndarray = at(column, observation) - at(column, orig_month)
         return moved
 
-    def growth(column: str) -> np.ndarray:
-        """Year-on-year change, as a fraction."""
-        change: np.ndarray = at(column, observation) / at(column, observation, offset=12) - 1.0
+    def growth_at(column: str, when: pd.Series) -> np.ndarray:
+        """Year-on-year change to ``when``, as a fraction."""
+        change: np.ndarray = at(column, when) / at(column, when, offset=12) - 1.0
         return change
+
+    def growth(column: str) -> np.ndarray:
+        """Year-on-year change at the observation date."""
+        return growth_at(column, observation)
+
+    def growth_gap(column: str) -> np.ndarray:
+        """How far the year-on-year change has moved since the loan was written."""
+        moved: np.ndarray = growth_at(column, observation) - growth_at(column, orig_month)
+        return moved
 
     # Built only where the series exists, so a panel assembled from a partial cache
     # yields the covariates it can rather than raising on the first one it cannot.
@@ -368,14 +441,20 @@ def add_macro_family(
         ("term_spread", "term_spread", level),
         ("credit_spread", "credit_spread", level),
         ("vix", "vix", level),
+        # The gap forms of the two levels the validation called calendar effects (S5).
+        # A level is the same number for every loan in a month; its move since
+        # origination is not, so it is identified from loans living through the same
+        # month on different terms as well as from the calendar.
+        ("vix_gap", "vix", gap),
         ("sentiment", "sentiment", level),
         ("hpi_growth", "hpi", growth),
         ("inflation", "cpi", growth),
+        ("inflation_gap", "cpi", growth_gap),
         ("equity_return", "equity_index", growth),
         ("starts_growth", "housing_starts", growth),
     ):
-        if source in available:
-            episodes[name] = build(source)
+        if source in available and requested(name):
+            store(name, build(source))
 
     # The refinancing benchmark is switched by term, repeating what the source data
     # says rather than what is convenient: a fifteen-year loan is refinanced against
@@ -386,13 +465,13 @@ def add_macro_family(
     # This is the movement in the market rate since origination, not the full
     # refinancing incentive: the latter needs the loan's own note rate, which the key
     # does not carry. The constant part is missing; the part that varies is here.
-    if "mortgage_rate_30y" in available:
+    if "mortgage_rate_30y" in available and requested("rate_gap"):
         thirty = -gap("mortgage_rate_30y")
         if "term_years" in episodes.columns and "mortgage_rate_15y" in available:
             short = episodes["term_years"].to_numpy(dtype=float) <= 20.0
-            episodes["rate_gap"] = np.where(short, -gap("mortgage_rate_15y"), thirty)
+            store("rate_gap", np.where(short, -gap("mortgage_rate_15y"), thirty))
         else:
-            episodes["rate_gap"] = thirty
+            store("rate_gap", thirty)
 
     # Mark-to-market leverage, from the national house price index. Derived here
     # rather than carried in the grouping key because it is a function of orig_ltv
@@ -402,8 +481,6 @@ def add_macro_family(
     # The index rather than Freddie's own per-loan ELTV, which would be better if it
     # were usable: its coverage runs from 0.8% of the 1999 vintage to 94% of 2021, so
     # a model built on it would estimate a different quantity in every decade.
-    if "orig_ltv" in episodes.columns and "hpi" in available:
+    if "orig_ltv" in episodes.columns and "hpi" in available and requested("cltv_drift"):
         original = episodes["orig_ltv"].to_numpy(dtype=float)
-        episodes["cltv_drift"] = (
-            original * at("hpi", orig_month) / at("hpi", observation) - original
-        )
+        store("cltv_drift", original * at("hpi", orig_month) / at("hpi", observation) - original)

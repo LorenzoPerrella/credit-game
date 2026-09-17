@@ -27,7 +27,7 @@ holding back a decade to see the same answer at four dates is a poor trade.
 
 | as_of | train_loan_months | train_defaults | train_rows | test_loan_months | test_defaults | test_rows |
 |---|---|---|---|---|---|---|
-| 2024-12 | 2356646304 | 1866441 | 14874002 | 158693705 | 72078 | 984490 |
+| 2024-12 | 2345846897 | 1460306 | 59663961 | 189347228 | 76380 | 3975155 |
 
 ## Predicted against realised
 
@@ -40,11 +40,63 @@ There is no forward projection. A cell already records what its loans looked lik
 the month it covers, so the prediction is evaluated there — which is simpler than
 projecting a book forward and closer to the question being asked.
 
-- **loan-months scored**: 158,693,705
-- **expected defaults**: 85,743
-- **actual defaults**: 72,078
-- **actual / expected**: 0.8406
-- **Gini (exposure-weighted)**: 0.5374
+- **loan-months scored**: 189,347,228
+- **expected defaults**: 83,029
+- **actual defaults**: 76,380
+- **actual / expected**: 0.9199
+- **Gini (exposure-weighted)**: 0.5606
+
+## Acceptance
+
+The criteria below were **declared before the backtest ran**, and they are what makes this
+section a test rather than a description: a backtest with no criterion can be read, but
+not passed or failed. They are the independent validation's proposal, adopted as they
+stand rather than tuned to a result. On this run the in-sample years range from 0.47 to 1.60, and the out-of-time figure has to be read against that range rather than against one.
+
+On them, the model **does not pass**.
+
+| criterion | threshold | value | passed |
+|---|---|---|---|
+| actual / expected, overall | 0.80 to 1.25 | 0.9199 | True |
+| Gini, exposure-weighted | above 0.45 | 0.5606 | True |
+| actual / expected, every decile | 0.80 to 1.25 | 0.597 to 0.995 | False |
+
+## In-sample, by year
+
+Predicted against realised on the data the model was fitted to, one row per calendar
+year. It belongs beside the out-of-time result. A model whose in-sample years swing widely
+cannot be called calibrated because one out-of-time figure lands near one; and a year far
+from one here locates a failure in the time dimension of the model, which the
+cross-section by decile cannot show.
+
+| group | expected | events | exposure | expected_rate | actual_rate | actual_over_expected |
+|---|---|---|---|---|---|---|
+| 1999 | 1557.2911 | 733.0000 | 6.9e+06 | 0.0002 | 0.0001 | 0.4707 |
+| 2000 | 4784.4621 | 5078.0000 | 1.57e+07 | 0.0003 | 0.0003 | 1.0614 |
+| 2001 | 12133.4047 | 15622.0000 | 2.89e+07 | 0.0004 | 0.0005 | 1.2875 |
+| 2002 | 27170.4820 | 27311.0000 | 5.16e+07 | 0.0005 | 0.0005 | 1.0052 |
+| 2003 | 30409.9403 | 36524.0000 | 7.09e+07 | 0.0004 | 0.0005 | 1.2011 |
+| 2004 | 27846.1229 | 34465.0000 | 8.22e+07 | 0.0003 | 0.0004 | 1.2377 |
+| 2005 | 26383.3891 | 42159.0000 | 8.66e+07 | 0.0003 | 0.0005 | 1.5979 |
+| 2006 | 29305.8984 | 37347.0000 | 9.19e+07 | 0.0003 | 0.0004 | 1.2744 |
+| 2007 | 41813.3664 | 50230.0000 | 9.69e+07 | 0.0004 | 0.0005 | 1.2013 |
+| 2008 | 88093.6932 | 102677.0000 | 1.03e+08 | 0.0009 | 0.0010 | 1.1655 |
+| 2009 | 219906.9680 | 220702.0000 | 1.07e+08 | 0.0021 | 0.0021 | 1.0036 |
+| 2010 | 152311.0862 | 185679.0000 | 1.05e+08 | 0.0014 | 0.0018 | 1.2191 |
+| 2011 | 148117.8367 | 129907.0000 | 9.75e+07 | 0.0015 | 0.0013 | 0.8771 |
+| 2012 | 106362.5151 | 98649.0000 | 8.83e+07 | 0.0012 | 0.0011 | 0.9275 |
+| 2013 | 67224.4520 | 63306.0000 | 8.11e+07 | 0.0008 | 0.0008 | 0.9417 |
+| 2014 | 53496.1842 | 44255.0000 | 8.01e+07 | 0.0007 | 0.0006 | 0.8273 |
+| 2015 | 43460.3034 | 32731.0000 | 8.36e+07 | 0.0005 | 0.0004 | 0.7531 |
+| 2016 | 40029.0407 | 28692.0000 | 8.81e+07 | 0.0005 | 0.0003 | 0.7168 |
+| 2017 | 34916.0960 | 30322.0000 | 9.32e+07 | 0.0004 | 0.0003 | 0.8684 |
+| 2018 | 32090.4056 | 32404.0000 | 9.79e+07 | 0.0003 | 0.0003 | 1.0098 |
+| 2019 | 36428.4737 | 30618.0000 | 1.04e+08 | 0.0004 | 0.0003 | 0.8405 |
+| 2020 | 59394.6947 | 32490.0000 | 1.14e+08 | 0.0005 | 0.0003 | 0.5470 |
+| 2021 | 43638.2957 | 36332.0000 | 1.32e+08 | 0.0003 | 0.0003 | 0.8326 |
+| 2022 | 41135.7542 | 39249.0000 | 1.44e+08 | 0.0003 | 0.0003 | 0.9541 |
+| 2023 | 45121.5400 | 45417.0000 | 1.47e+08 | 0.0003 | 0.0003 | 1.0065 |
+| 2024 | 46828.0877 | 57407.0000 | 1.49e+08 | 0.0003 | 0.0004 | 1.2259 |
 
 ![Predicted and realised default rate through the test window](figures/backtest_over_time.png)
 
@@ -52,22 +104,21 @@ projecting a book forward and closer to the question being asked.
 
 | group | expected | events | exposure | expected_rate | actual_rate | actual_over_expected |
 |---|---|---|---|---|---|---|
-| 2025-01 | 5780.597826 | 5448.000000 | 1.23e+07 | 0.000471 | 0.000444 | 0.942463 |
-| 2025-02 | 5863.203983 | 4878.000000 | 1.22e+07 | 0.000480 | 0.000400 | 0.831968 |
-| 2025-03 | 7076.664613 | 4969.000000 | 1.21e+07 | 0.000583 | 0.000409 | 0.702167 |
-| 2025-04 | 10591.928506 | 4981.000000 | 1.23e+07 | 0.000860 | 0.000405 | 0.470264 |
-| 2025-05 | 6859.115005 | 5130.000000 | 1.22e+07 | 0.000560 | 0.000419 | 0.747910 |
-| 2025-06 | 6502.790480 | 5277.000000 | 1.22e+07 | 0.000533 | 0.000433 | 0.811498 |
-| 2025-07 | 6034.660107 | 5436.000000 | 1.23e+07 | 0.000489 | 0.000440 | 0.900796 |
-| 2025-08 | 5909.591996 | 5598.000000 | 1.23e+07 | 0.000481 | 0.000456 | 0.947274 |
-| 2025-09 | 5742.233287 | 5899.000000 | 1.22e+07 | 0.000472 | 0.000485 | 1.027301 |
-| 2025-10 | 6416.013632 | 6268.000000 | 1.23e+07 | 0.000520 | 0.000508 | 0.976931 |
-| 2025-11 | 6862.387484 | 6523.000000 | 1.23e+07 | 0.000557 | 0.000530 | 0.950544 |
-| 2025-12 | 5784.947490 | 6128.000000 | 1.21e+07 | 0.000478 | 0.000507 | 1.059301 |
-| 2026-01 | 3997.311409 | 3737.000000 | 7.85e+06 | 0.000509 | 0.000476 | 0.934878 |
-| 2026-02 | 2279.495063 | 1781.000000 | 3.88e+06 | 0.000588 | 0.000459 | 0.781313 |
-| 2026-03 | 42.190043 | 25.000000 | 51341.000000 | 0.000822 | 0.000487 | 0.592557 |
-| 2026-04 | 0.005160 | 0.000000 | 8.000000 | 0.000645 | 0.000000 | 0.000000 |
+| 2025-01 | 4455.354079 | 5925.000000 | 1.26e+07 | 0.000354 | 0.000471 | 1.329861 |
+| 2025-02 | 4893.495160 | 5339.000000 | 1.26e+07 | 0.000389 | 0.000424 | 1.091040 |
+| 2025-03 | 4506.965586 | 4788.000000 | 1.26e+07 | 0.000358 | 0.000380 | 1.062356 |
+| 2025-04 | 4695.047083 | 4640.000000 | 1.26e+07 | 0.000373 | 0.000368 | 0.988275 |
+| 2025-05 | 5197.340154 | 4405.000000 | 1.26e+07 | 0.000412 | 0.000349 | 0.847549 |
+| 2025-06 | 5437.894484 | 4754.000000 | 1.26e+07 | 0.000431 | 0.000377 | 0.874235 |
+| 2025-07 | 5791.915574 | 4696.000000 | 1.26e+07 | 0.000459 | 0.000372 | 0.810785 |
+| 2025-08 | 5980.785510 | 4901.000000 | 1.26e+07 | 0.000474 | 0.000388 | 0.819458 |
+| 2025-09 | 5219.808824 | 4978.000000 | 1.26e+07 | 0.000414 | 0.000394 | 0.953675 |
+| 2025-10 | 5039.286752 | 4353.000000 | 1.26e+07 | 0.000399 | 0.000345 | 0.863813 |
+| 2025-11 | 5863.886450 | 5559.000000 | 1.26e+07 | 0.000464 | 0.000440 | 0.948006 |
+| 2025-12 | 6033.268824 | 5371.000000 | 1.27e+07 | 0.000477 | 0.000424 | 0.890231 |
+| 2026-01 | 6470.362763 | 5830.000000 | 1.27e+07 | 0.000511 | 0.000461 | 0.901031 |
+| 2026-02 | 6541.669246 | 5672.000000 | 1.27e+07 | 0.000517 | 0.000448 | 0.867057 |
+| 2026-03 | 6901.747421 | 5169.000000 | 1.27e+07 | 0.000545 | 0.000408 | 0.748941 |
 
 ## Calibration by decile of predicted risk
 
@@ -80,22 +131,22 @@ reported because they fail independently.
 
 | bucket | loan_months | events | expected | actual | difference | ratio |
 |---|---|---|---|---|---|---|
-| 0 | 1.59e+07 | 760.000000 | 8.87e-05 | 4.79e-05 | -4.08e-05 | 0.539892 |
-| 1 | 1.59e+07 | 1342.000000 | 0.000151 | 8.46e-05 | -6.6e-05 | 0.561677 |
-| 2 | 1.59e+07 | 1803.000000 | 0.000209 | 0.000114 | -9.55e-05 | 0.543436 |
-| 3 | 1.59e+07 | 2580.000000 | 0.000271 | 0.000163 | -0.000108 | 0.600284 |
-| 4 | 1.59e+07 | 3390.000000 | 0.000343 | 0.000214 | -0.000130 | 0.622415 |
-| 5 | 1.59e+07 | 4660.000000 | 0.000431 | 0.000294 | -0.000137 | 0.681863 |
-| 6 | 1.59e+07 | 6597.000000 | 0.000543 | 0.000416 | -0.000127 | 0.766055 |
-| 7 | 1.59e+07 | 9340.000000 | 0.000699 | 0.000589 | -0.000110 | 0.842188 |
-| 8 | 1.59e+07 | 14405.000000 | 0.000954 | 0.000908 | -4.61e-05 | 0.951704 |
-| 9 | 1.59e+07 | 27201.000000 | 0.002034 | 0.001714 | -0.000320 | 0.842871 |
+| 0 | 1.89e+07 | 856.000000 | 6.98e-05 | 4.52e-05 | -2.46e-05 | 0.647663 |
+| 1 | 1.89e+07 | 1285.000000 | 0.000114 | 6.79e-05 | -4.59e-05 | 0.596500 |
+| 2 | 1.89e+07 | 1877.000000 | 0.000154 | 9.91e-05 | -5.47e-05 | 0.644460 |
+| 3 | 1.89e+07 | 2492.000000 | 0.000197 | 0.000132 | -6.52e-05 | 0.668554 |
+| 4 | 1.89e+07 | 3387.000000 | 0.000249 | 0.000179 | -6.99e-05 | 0.719148 |
+| 5 | 1.89e+07 | 4594.000000 | 0.000316 | 0.000243 | -7.35e-05 | 0.767455 |
+| 6 | 1.89e+07 | 6517.000000 | 0.000409 | 0.000344 | -6.47e-05 | 0.841654 |
+| 7 | 1.89e+07 | 9203.000000 | 0.000545 | 0.000486 | -5.91e-05 | 0.891568 |
+| 8 | 1.89e+07 | 14669.000000 | 0.000779 | 0.000775 | -3.91e-06 | 0.994977 |
+| 9 | 1.89e+07 | 31500.000000 | 0.001791 | 0.001664 | -0.000128 | 0.928690 |
 
 ![Realised against predicted default rate, by decile](figures/calibration.png)
 
 ## Discrimination
 
-**Gini 0.5374**, from the exposure-weighted Lorenz curve.
+**Gini 0.5606**, from the exposure-weighted Lorenz curve.
 
 A concordance index is not available and the substitution is not a convenience: the
 index needs pairs of *subjects*, and an aggregated cell is not a subject. The Lorenz
@@ -119,14 +170,19 @@ visible and correctly discounted instead of quietly triggering a model review.
 
 | covariate | psi | kind | interpretation |
 |---|---|---|---|
-| inflation | 10.4432 | time-varying | expected to move |
-| vix | 4.2296 | time-varying | expected to move |
-| unemp_gap | 2.3938 | time-varying | expected to move |
-| cltv_drift | 1.3086 | time-varying | expected to move |
-| purpose | 0.0643 | static | stable |
-| fico_s | 0.0412 | static | stable |
-| orig_ltv | 0.0356 | static | stable |
-| dti | 0.0346 | static | stable |
+| nfci_lagged | 9.3855 | time-varying | expected to move |
+| sentiment | 7.8577 | time-varying | expected to move |
+| starts_growth | 4.8186 | time-varying | expected to move |
+| policy_rate_gap | 2.6991 | time-varying | expected to move |
+| unemp_gap | 2.2036 | time-varying | expected to move |
+| cltv_drift | 1.2053 | time-varying | expected to move |
+| inflation_gap | 0.6818 | time-varying | expected to move |
+| first_time_buyer | 0.0692 | static | stable |
+| purpose | 0.0676 | static | stable |
+| fico_s | 0.0387 | static | stable |
+| orig_ltv | 0.0372 | static | stable |
+| dti | 0.0369 | static | stable |
+| has_mi | 0.0351 | static | stable |
 | occupancy | 0.0016 | static | stable |
 | term_years | 0.0000 | static | stable |
 
@@ -152,5 +208,5 @@ competing risk, and the direction of the bias is upward on lifetime PD.
 
 - `uv run creditsurv report`
 - Reporting date: 2024-12
-- Training exposure: 2,356,646,304 loan-months
-- Test exposure: 158,693,705 loan-months
+- Training exposure: 2,345,846,897 loan-months
+- Test exposure: 189,347,228 loan-months

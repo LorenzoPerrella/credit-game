@@ -1,0 +1,12 @@
+{
+  "vintages": "1999 - 2026",
+  "loans_originated": 49186171,
+  "amount_originated": 10636846659000.0,
+  "performance_rows": 2881397251,
+  "loan_months_outstanding": 2845574202,
+  "peak_contracts_outstanding": 13396700,
+  "peak_balance_outstanding": 3066161612177.9478,
+  "loan_months_modelled": 2535194125,
+  "defaults_modelled": 1536686,
+  "definition": "Performance rows: every row of the performance files, as the ingest manifest counted them. Loan-months outstanding: the rows reporting a positive balance at a non-negative age. Loan-months and defaults modelled: summed from the cells -- complete cases with every categorical code mapped, cut at the first terminating month, a moratorium not counted as a default."
+}

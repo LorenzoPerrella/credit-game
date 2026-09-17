@@ -11,26 +11,29 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 
+from creditsurv.config import CATEGORICAL_REFERENCE
+from creditsurv.models.aft import fit_aft
 from creditsurv.models.nonparametric import (
     kaplan_meier,
     km_band_contains,
     predicted_survival_curve,
 )
 from creditsurv.models.selection import (
+    SHAPE_COVARIATE,
     distribution_comparison,
     exponential_is_rejected,
     marginal_comparison,
     shape_depends_on_covariates,
+    shape_formula,
 )
 from creditsurv.reporting import charts
 from creditsurv.reporting.builder import Report, provenance
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from pathlib import Path
-
-    import pandas as pd
 
     from creditsurv.models.aft import FitResult
 
@@ -59,6 +62,43 @@ def _worst(band: pd.DataFrame) -> float:
 
 def _mean_deviation(band: pd.DataFrame) -> float:
     return float(band["deviation"].abs().mean() * 100.0)
+
+
+def _against_kaplan_meier(distribution: str, band: pd.DataFrame) -> dict[str, object]:
+    """How far one family's survival curve sits from Kaplan-Meier, overall and at the end."""
+    last = band.iloc[-1]
+    return {
+        "distribution": distribution,
+        "largest_deviation": _worst(band),
+        "mean_deviation": _mean_deviation(band),
+        "last_month": int(band.index[-1]),
+        "predicted_survival": float(last["predicted"]) * 100.0,
+        "deviation_at_last_month": float(last["deviation"]) * 100.0,
+    }
+
+
+def _comparison_reading(regression: pd.DataFrame, against_km: pd.DataFrame, reported: str) -> str:
+    """What the comparison says, in words that follow the numbers rather than precede them."""
+    leader = regression.iloc[0]
+    reading = [
+        f"On this specification the **{leader['distribution']}** has the better likelihood, "
+        f"by {float(regression['delta_aic'].max()):,.0f} AIC points."
+    ]
+    for row in regression.itertuples():
+        if row.signs_against_prior:
+            names = ", ".join(f"`{name}`" for name in str(row.signs_against_prior).split(", "))
+            reading.append(f"The {row.distribution} turns {names} against its declared prior.")
+    closest = against_km.sort_values("mean_deviation").iloc[0]
+    reading.append(
+        f"Against Kaplan-Meier the **{closest['distribution']}** is closer on average, "
+        f"{float(closest['mean_deviation']):.2f} percentage points of survival."
+    )
+    if leader["distribution"] != reported:
+        reading.append(
+            f"The model reported throughout is the {reported}, and "
+            "`docs/variable_selection.md` records why it was kept against a better likelihood."
+        )
+    return "\n\n".join(reading)
 
 
 def _direction(rho: float) -> str:
@@ -92,6 +132,7 @@ def generate(
     reports_dir: Path,
     weights_col: str | None = None,
     extra_fits: bool = True,
+    fit: Callable[..., FitResult] | None = None,
 ) -> Path:
     """Write ``methodology.md`` and its figures.
 
@@ -103,9 +144,13 @@ def generate(
     distributional comparison and the shape test. Both are model *selection*, so they
     belong in a report about methodology -- and on the whole population each is hours,
     which is a reason to be able to skip them, not a reason to pretend they were run.
-    A skipped section says so in the report rather than vanishing from it.
+    A skipped section says so in the report rather than vanishing from it. ``fit``
+    estimates them -- :func:`creditsurv.models.aft.fit_aft` unless the caller passes a
+    cached version, which is what lets a report be regenerated without paying for them
+    again.
     """
     figures = reports_dir / "figures"
+    fit = fit or fit_aft
 
     report = Report(
         "Methodology, variable selection and fit quality",
@@ -156,9 +201,11 @@ Three exclusions are deliberate and matter more than the inclusions:
             "**Origination vintage** is reserved for the out-of-time split. As a "
             "covariate it absorbs exactly the macroeconomic effects the model exists "
             "to estimate.",
-            "**Contemporaneous revised macro** is excluded; every revised series is "
-            "lagged three months. Look-ahead is invisible in results -- a model that "
-            "quietly reads next quarter's unemployment looks excellent and is worthless.",
+            "**Contemporaneous macro** is excluded: every series is lagged three months, "
+            "revised ones because they are published late and market quotes because a "
+            "loan ninety days delinquent in a month missed its payments in the three "
+            "before it. Look-ahead is invisible in results -- a model that quietly reads "
+            "next quarter's unemployment looks excellent and is worthless.",
             "**Current delinquency status** is excluded as a mediator, not a "
             "predictor. Including it inflates every metric while destroying the "
             "model's actual use, which is predicting lifetime PD from origination.",
@@ -245,15 +292,32 @@ the one that decides.
     # `fitted` is passed through so neither of these refits the model already in
     # hand: the Weibull row of the comparison and the restricted arm of the shape
     # test are both the default specification, and at hours per fit that matters.
+    curve = kaplan_meier(panel, weights_col=weights_col)
+    families: dict[str, FitResult] = {}
     regression = (
         distribution_comparison(
-            encoded, covariates, formula, weights_col=weights_col, fitted=fitted
+            encoded,
+            covariates,
+            formula,
+            weights_col=weights_col,
+            fitted=fitted,
+            fit=fit,
+            fits=families,
         )
         if extra_fits
         else None
     )
     report.heading("3. Regression fits on identical episodes", level=3).text(
         """
+The comparison is made with the covariates and read three ways: the likelihood, the
+declared priors -- a family pointing one the wrong way is contradicting the economics
+rather than fitting the data -- and the survival curve against Kaplan-Meier, over the long
+horizons a lifetime PD is quoted on. The three need not agree, and when they do not the
+report says so rather than choosing for the reader. The validation made this comparison on
+the specification before it: the log-logistic came 623,126 AIC points behind the Weibull
+and turned `orig_ltv`, `term_years` and investor occupancy around. The tables are this
+run's own comparison, on this run's specification.
+
 The log-normal is absent because it does not converge on this panel structure --
 observed across sample sizes, with and without a penalizer, under two optimisers,
 with left truncation on and off, and with durations rescaled. The cause was not
@@ -270,13 +334,45 @@ loan-level right-censored one by AIC is not a comparison at all.
         report.text(_SKIPPED.format(what="comparing distributions", flag="--extra-fits"))
     else:
         report.table(regression, decimals=2)
+        against_km = pd.DataFrame(
+            [
+                _against_kaplan_meier(
+                    name,
+                    km_band_contains(
+                        curve,
+                        predicted_survival_curve(
+                            result, encoded, covariates, weights_col=weights_col
+                        ),
+                    ),
+                )
+                for name, result in families.items()
+            ]
+        )
+        report.text(_comparison_reading(regression, against_km, fitted.distribution)).table(
+            against_km,
+            caption="Each family against Kaplan-Meier, in percentage points of survival",
+            decimals=2,
+        )
 
+    relaxed, ancillary = shape_formula(covariates, CATEGORICAL_REFERENCE)
     shape = (
         shape_depends_on_covariates(
-            encoded, covariates, formula, covariates[0], weights_col=weights_col, fitted=fitted
+            encoded,
+            covariates,
+            formula,
+            ancillary,
+            weights_col=weights_col,
+            fitted=fitted,
+            fit=fit,
         )
         if extra_fits
         else None
+    )
+    why = (
+        ", the one covariate whose survival curves cross: investor loans default faster "
+        "early and slower late, which no scale factor can represent"
+        if relaxed == SHAPE_COVARIATE
+        else ""
     )
     report.heading("4. Does the hazard's shape vary with covariates?", level=3).text(
         f"""
@@ -288,7 +384,7 @@ It matters for lifetime PD specifically: if the shape genuinely varies, the term
 structure differs by loan rather than merely shifting, and a single shape misstates
 the timing of losses even when it gets the total right.
 
-Tested on `{covariates[0]}`:
+Tested on `{relaxed}`{why}:
 """
     )
     if shape is None:
@@ -296,7 +392,6 @@ Tested on `{covariates[0]}`:
     else:
         report.table(shape, decimals=4)
 
-    curve = kaplan_meier(panel, weights_col=weights_col)
     predicted = predicted_survival_curve(fitted, encoded, covariates, weights_col=weights_col)
     band = km_band_contains(curve, predicted)
     inside = int(band["inside"].sum())

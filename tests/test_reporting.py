@@ -219,6 +219,52 @@ def test_time_varying_covariates_have_a_marginal_effect(
     assert effects.loc["cltv_drift", "kind"] == "time-varying"
 
 
+def test_a_macro_level_moves_by_its_deviation_in_the_fitting_data(
+    book_dir: Path, macro_module: pd.DataFrame
+) -> None:
+    """The second silent zero in the same table.
+
+    Under the random-walk baseline a macro *level* is identical for every loan and flat
+    across the projection, so its deviation on the projected panel is zero and the row
+    was skipped. The validation found the table omitting ``vix`` -- the macro covariate
+    with the largest standardised effect -- for that reason alone. The step now comes from
+    the data the model was fitted to, and the table says which step it used.
+    """
+    from dataclasses import replace
+
+    from creditsurv.data.panel import at_origination, to_interval_censored
+    from creditsurv.models.aft import fit_aft
+    from creditsurv.reporting.calibration import covariate_steps, marginal_effects
+    from fixtures import DEFAULT_PARAMS, build_panel
+
+    covariates = ["fico_s", "cltv_drift", "vix"]
+    params = replace(
+        DEFAULT_PARAMS,
+        intercept=4.9,
+        continuous={"fico_s": 0.34, "cltv_drift": -0.020},
+        categorical={},
+        prepayment_intercept=50.0,
+    )
+    panel, _ = build_panel(book_dir, macro_module, n_loans=600, seed=13, params=params)
+    encoded = to_interval_censored(panel)
+    fitted = fit_aft(encoded, covariates, " + ".join(covariates))
+
+    book = at_origination(panel).head(150).copy()
+    book["age"] = 0
+    book["period"] = macro_module.index.max() + 1
+
+    steps = covariate_steps(encoded, covariates)
+    effects = marginal_effects(
+        fitted, book, macro_module, covariates, covariates, steps=steps
+    ).set_index("covariate")
+
+    assert "vix" in effects.index, "a macro level must not drop out of the table"
+    assert effects.loc["vix", "kind"] == "time-varying"
+    vix = effects.loc[effects.index == "vix"]
+    assert float(vix["one_sd"].to_numpy(dtype=float)[0]) == pytest.approx(steps["vix"])
+    assert abs(float(vix["change_pp"].to_numpy(dtype=float)[0])) > 0.0
+
+
 def test_a_saved_fit_comes_back_and_a_changed_specification_does_not(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -259,3 +305,40 @@ def test_an_unreadable_cached_fit_is_a_miss_not_an_error(
     path.write_bytes(b"not a pickle")
 
     assert load_fit("deadbeefdeadbeef") is None
+
+
+def test_the_distribution_reading_follows_the_numbers() -> None:
+    """The first version of this section asserted that a family fitting worse and turning a
+    prior around is rejected twice over, and the run it was published with had the
+    log-logistic fitting better. The reading is now written from the tables."""
+    from creditsurv.reporting.methodology import _against_kaplan_meier, _comparison_reading
+
+    months = pd.Index([1.0, 2.0, 3.0])
+    weibull = pd.DataFrame(
+        {"predicted": [0.99, 0.98, 0.90], "deviation": [0.0, -0.01, -0.03]}, index=months
+    )
+    loglogistic = pd.DataFrame(
+        {"predicted": [0.99, 0.98, 0.92], "deviation": [0.0, -0.005, -0.01]}, index=months
+    )
+    against = pd.DataFrame(
+        [
+            _against_kaplan_meier("weibull", weibull),
+            _against_kaplan_meier("loglogistic", loglogistic),
+        ]
+    )
+    regression = pd.DataFrame(
+        {
+            "distribution": ["loglogistic", "weibull"],
+            "delta_aic": [0.0, 83961.0],
+            "signs_against_prior": ["nfci_lagged", ""],
+        }
+    )
+
+    reading = _comparison_reading(regression, against, "weibull")
+
+    assert "**loglogistic** has the better likelihood, by 83,961 AIC points" in reading
+    assert "turns `nfci_lagged` against its declared prior" in reading
+    assert "Against Kaplan-Meier the **loglogistic** is closer" in reading
+    assert "kept against a better likelihood" in reading
+    assert against.loc[0, "deviation_at_last_month"] == pytest.approx(-3.0)
+    assert against.loc[0, "last_month"] == 3

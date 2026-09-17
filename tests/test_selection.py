@@ -24,13 +24,12 @@ from creditsurv.models.nonparametric import (
     turnbull,
 )
 from creditsurv.models.selection import (
-    backward_elimination,
     distribution_comparison,
     likelihood_ratio_test,
     marginal_comparison,
     shape_depends_on_covariates,
+    shape_formula,
     stepwise_vif,
-    univariate_screening,
     variance_inflation,
 )
 from fixtures import DEFAULT_PARAMS, build_panel
@@ -83,6 +82,8 @@ def test_regression_comparison_prefers_the_generating_family(
 
     assert table.iloc[0]["distribution"] == "weibull"
     assert set(table["n_episodes"]) == {len(encoded)}
+    # The generator's own family points every declared prior the right way.
+    assert table.iloc[0]["signs_against_prior"] == ""
 
 
 def test_shape_test_does_not_reject_a_constant_shape(encoded: pd.DataFrame) -> None:
@@ -93,6 +94,23 @@ def test_shape_test_does_not_reject_a_constant_shape(encoded: pd.DataFrame) -> N
 
     assert result.iloc[0]["p_value"] > 0.05
     assert result.iloc[0]["added_parameters"] == 1
+
+
+def test_the_shape_test_takes_a_categorical_into_the_shape(encoded: pd.DataFrame) -> None:
+    """What ``report --extra-fits`` now runs: ``occupancy`` in the shape parameter, against
+    its reference, through the block engine. Three levels, so two shape parameters, and the
+    larger model can never fit worse than the one nested in it."""
+    covariates = [*COVARIATES, "occupancy"]
+    references = {"occupancy": "owner_occupied"}
+    formula = f"{FORMULA} + C(occupancy, Treatment('owner_occupied'))"
+    relaxed, ancillary = shape_formula(covariates, references)
+
+    result = shape_depends_on_covariates(encoded, covariates, formula, ancillary)
+
+    assert relaxed == "occupancy"
+    assert encoded["occupancy"].nunique() == 3
+    assert result.iloc[0]["added_parameters"] == 2
+    assert result.iloc[0]["full_log_likelihood"] >= result.iloc[0]["restricted_log_likelihood"]
 
 
 def test_likelihood_ratio_test_rejects_a_degenerate_comparison() -> None:
@@ -250,41 +268,6 @@ def test_stepwise_vif_leaves_independent_covariates_alone() -> None:
     assert surviving == ["a", "b"]
 
 
-def test_a_backwards_sign_is_eliminated_even_when_significant(
-    encoded: pd.DataFrame,
-) -> None:
-    """A wrong sign is a symptom, usually of collinearity, not a weak result.
-
-    A model asserting that higher credit scores default sooner fits its sample and
-    no other, so significance does not save it.
-    """
-    flipped = encoded.copy()
-    flipped["fico_s"] = -flipped["fico_s"]
-
-    log, surviving, _ = backward_elimination(flipped, ["fico_s", "cltv_drift"])
-
-    assert "fico_s" not in surviving
-    assert str(log.iloc[0]["reason"]) == "wrong sign"
-
-
-def test_backward_elimination_keeps_covariates_that_earn_their_place(
-    encoded: pd.DataFrame,
-) -> None:
-    log, surviving, result = backward_elimination(encoded, ["fico_s", "cltv_drift"])
-
-    assert set(surviving) == {"fico_s", "cltv_drift"}
-    assert log.empty
-    assert result.n_events > 0
-
-
-def test_univariate_screening_ranks_by_significance(encoded: pd.DataFrame) -> None:
-    table = univariate_screening(encoded, ["fico_s", "cltv_drift"])
-
-    assert list(table.columns) >= ["covariate", "coef", "p", "aic", "keep"]
-    assert table["p"].is_monotonic_increasing
-    assert table["keep"].any()
-
-
 def test_the_exponential_is_tested_without_a_second_fit(
     panel: pd.DataFrame,
 ) -> None:
@@ -314,3 +297,77 @@ def test_the_exponential_test_refuses_the_wrong_family() -> None:
 
     with pytest.raises(ValueError, match="nests inside the Weibull"):
         exponential_is_rejected(_Stub())  # type: ignore[arg-type]
+
+
+def test_every_candidate_has_an_economic_dimension_fixed_in_advance() -> None:
+    """The stability rule only compares covariates of one dimension.
+
+    A candidate without a dimension could never be judged by it, and one assigned a
+    dimension after the fits would be judged by a rule written to fit the result.
+    """
+    from creditsurv.config import (
+        ECONOMIC_DIMENSION,
+        MACRO_CANDIDATES,
+        MACRO_ELIMINATION_PRIORITY,
+        ORDINAL,
+        STATIC_CONTINUOUS,
+    )
+
+    candidates = {*MACRO_CANDIDATES, *STATIC_CONTINUOUS, *ORDINAL}
+    assert candidates <= set(ECONOMIC_DIMENSION), sorted(candidates - set(ECONOMIC_DIMENSION))
+    assert set(MACRO_ELIMINATION_PRIORITY) == set(MACRO_CANDIDATES)
+
+
+def test_factors_read_back_from_a_saved_correlation_are_the_ones_the_rows_give() -> None:
+    """The notebook shows the variance inflation from the correlation the selection saved,
+    so the two routes have to agree."""
+    from creditsurv.explore import weighted_correlation
+    from creditsurv.models.selection import inflation_from_covariance
+
+    rng = np.random.default_rng(8)
+    base = rng.normal(size=4000)
+    frame = pd.DataFrame(
+        {
+            "a": base,
+            "b": base + 0.1 * rng.normal(size=4000),
+            "c": rng.normal(size=4000),
+            "n": rng.integers(1, 5, 4000).astype(float),
+        }
+    )
+
+    rows = variance_inflation(frame, ["a", "b", "c"], weight="n").set_index("covariate")["vif"]
+    saved = weighted_correlation(frame, ["a", "b", "c"], weight="n")
+    table = inflation_from_covariance(saved).set_index("covariate")["vif"]
+
+    np.testing.assert_allclose(table.loc[rows.index], rows, rtol=1e-8)
+
+
+def test_the_shape_test_relaxes_the_covariate_whose_curves_cross() -> None:
+    """S3: the report relaxed the first covariate, ``fico_s``, while the stratum whose curves
+    cross -- the assumption the test exists for -- was ``occupancy``."""
+    covariates = ["fico_s", "cltv_drift", "purpose", "occupancy"]
+    references = {"purpose": "purchase", "occupancy": "owner_occupied"}
+
+    assert shape_formula(covariates, references) == (
+        "occupancy",
+        "C(occupancy, Treatment('owner_occupied'))",
+    )
+    assert shape_formula(["fico_s", "purpose"], {"purpose": "purchase"}) == ("fico_s", "fico_s")
+
+
+def test_the_comparison_fits_through_the_function_it_is_given(encoded: pd.DataFrame) -> None:
+    """The report passes a cached fit, so a family already estimated costs nothing again;
+    and it keeps every family's fit, to hold each against Kaplan-Meier."""
+    calls: list[str] = []
+
+    def counted(*args: object, **kwargs: object) -> FitResult:
+        calls.append(str(kwargs["distribution"]))
+        return fit_aft(*args, **kwargs)  # type: ignore[arg-type]
+
+    weibull = fit_aft(encoded, COVARIATES, FORMULA)
+    kept: dict[str, FitResult] = {}
+    distribution_comparison(encoded, COVARIATES, FORMULA, fitted=weibull, fit=counted, fits=kept)
+
+    assert calls == ["loglogistic"]
+    assert set(kept) == {"weibull", "loglogistic"}
+    assert kept["weibull"] is weibull

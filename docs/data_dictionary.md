@@ -8,7 +8,7 @@ once the grain of the data is clear.
 
 | Layer | Source | Scale |
 |---|---|---|
-| Loan book | Freddie Mac Single-Family Loan-Level Dataset | 48,827,197 loans, 1999–2026 |
+| Loan book | Freddie Mac Single-Family Loan-Level Dataset | 49,186,171 loans, 1999–2026 |
 | Macroeconomic series | FRED (St. Louis Fed), public CSV endpoint, no API key | 14 series, 1997–2026 |
 
 Both real, and the second is what gives the first its shape: vintages written into
@@ -40,14 +40,14 @@ is the most common way these models go wrong.
 | Layer | One row is | Measured size |
 |---|---|---|
 | 1. Raw macro | one month of one economic series | 354 months × 14 series |
-| 2. Origination record | one loan, as underwritten | **48,827,197** |
-| 3. Performance record | one loan in one calendar month | **2,876,284,955** |
-| 4. Weighted cell | a covariate combination at one age, with a count | **15,858,492** |
+| 2. Origination record | one loan, as underwritten | **49,186,171** |
+| 3. Performance record | one loan in one calendar month | **2,881,397,251** |
+| 4. Weighted cell | a covariate combination at one age, with a count | **63,639,116** under `exclude` |
 | 5. Model matrix | one *episode*, carrying that count as a weight | same as layer 4 |
 
 Layer 4 is where this project differs from a textbook treatment, and it is not an
-optimisation: a fit over 2.9 billion rows is out of reach, and a fit over 15.9
-million weighted cells takes minutes. See
+optimisation: a fit over 2.9 billion rows is out of reach, and a fit over the 59.7
+million weighted cells of the training half takes an hour and a half, block by block. See
 [data_preparation.md](data_preparation.md) for why the collapse is exact.
 
 ---
@@ -108,16 +108,22 @@ invent macro observations that never existed, which then leak into every covaria
 built on them. The panel ends at the last month for which *every* series has a real
 observation, and logs what it discarded. On a current run it ends **2026-06**.
 
-### Publication lags are applied per series, not uniformly
+### Every series is lagged three months, for one of two reasons
 
-| Treatment | Series | Why |
+| Lag | Series | Why |
 |---|---|---|
-| **Lagged 3 months** | `unemployment_rate`, `hpi`, `nfci`, `cpi`, `sentiment`, `housing_starts` | Published in arrears and later revised |
-| **Contemporaneous** | both mortgage rates, `treasury_10y`, `term_spread`, `credit_spread`, `equity_index`, `vix` | Market quotes, known in real time, never revised |
+| **Publication** | `unemployment_rate`, `hpi`, `nfci`, `cpi`, `sentiment`, `housing_starts` | Published in arrears and later revised: the value for month *t* is not known in *t* |
+| **Transmission** | both mortgage rates, `treasury_10y`, `term_spread`, `credit_spread`, `equity_index`, `vix`, `policy_rate` | Quoted in real time and never revised, and still unable to cause a default in the month they are quoted |
 
-A blanket lag would be simpler and would misstate what was knowable. A borrower
-comparing their note rate with today's market rate does not wait three months to do
-it, and a Treasury yield is not restated.
+Market quotes used to be read contemporaneously, on the argument that they are known in
+real time. That is an argument about **availability**. The event is ninety days of missed
+payments: a loan delinquent in month *t* missed its payments in *t−3*, *t−2* and *t−1*,
+so nothing observed in *t* can be what caused it. The backtest showed the cost. Predicted
+default spiked in April 2025 and March 2026, the two VIX peaks of the test window, with
+actual over expected at 0.47 and 0.59, while realised default did not move.
+
+The lag reaches every market series, not only the one that was noticed. `policy_rate` had
+been in neither list, and so was never lagged at all.
 
 ---
 
@@ -136,7 +142,7 @@ reliably.
 | `fico_s` | derived | ≈ −2.4 to +3.0 | `(credit_score − 700) / 50`, the modelled form |
 | `orig_ltv` | `original_ltv` | Percent | **999 means missing** |
 | `orig_cltv` | `original_cltv` | Percent | Combined: catches second liens |
-| `dti` | `original_dti` | Percent | **999 means missing** |
+| `dti` | `original_dti` | Percent | **999 means missing** -- for every HARP refinance, which is why the model does not cover them; see [data_preparation.md](data_preparation.md#what-dropping-removes) |
 | `orig_upb` | `original_upb` | USD | |
 | `note_rate` | `original_interest_rate` | Percent | |
 | `orig_term` | `original_loan_term` | Months | 180 or 360 for almost all of the book |
@@ -246,16 +252,19 @@ fitter is actually handed.
 | Field | Type | Definition |
 |---|---|---|
 | `vintage` | str | Origination quarter, `YYYYQn`, read off the file name |
+| `orig_month` | int | Origination month, as `year × 12 + month − 1`. The calendar is read from it: with only the quarter, every macro series was read about two months late (M1) |
 | `age` | int | Loan age in months, the start of the episode |
 | `event` | bool | Whether this cell's loan-months ended in default |
 | `n` | int | **How many loan-months the row stands for** |
 | `fico_s`, `orig_ltv`, `dti` | float | Coarse-classed, carried at the band's midpoint |
-| `purpose`, `occupancy`, `term_years` | category | Mapped levels |
+| `purpose`, `occupancy`, `term_years`, `has_mi`, `first_time_buyer` | category | Mapped levels |
 
 Episodes agreeing on every covariate and on their position in time are
 exchangeable, so they collapse into one row carrying a count, and the likelihood
-treats that count as a frequency weight. 2.52 billion loan-months become 15.86
-million cells — 159× — and the estimate is identical.
+treats that count as a frequency weight. 2.54 billion loan-months become 63.6
+million cells — 40× — and the estimate is identical. The table was four times smaller
+before the validation, when the key carried the origination quarter rather than the month
+and neither `has_mi` nor `first_time_buyer`.
 
 **`n` is a count of loan-months, never an amount.** Weighting by exposure would
 answer a different question from the one Basel and IFRS 9 ask: a PD is defined per
@@ -324,7 +333,8 @@ information.
 |---|---|
 | Origination vintage as a covariate | Reserved for the time split. As a covariate it absorbs the macro effects the model exists to estimate. |
 | Current delinquency status | A mediator, not a predictor. Including it inflates every metric while destroying the model's use. |
-| Contemporaneous revised macro | Look-ahead. Every revised series is lagged. |
+| Contemporaneous macro | Look-ahead, and no mechanism: a default in *t* was caused before *t*. Every series is lagged three months. |
+| `super_conforming_flag` | 1.96% of loans are flagged, 5.1% at most (2020), and none before 2008, when the category did not exist: its `N` for those vintages records a date, not a loan. What it does carry, a high balance in a high-cost area, is what `log_orig_upb` would measure directly. |
 | `amortization_type`, `interest_only_indicator` | Exactly **one** value each across the whole dataset. |
 | All loss and proceeds columns | Populated only for defaults, and they need LGD, which is out of scope. |
 

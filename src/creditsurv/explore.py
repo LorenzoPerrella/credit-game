@@ -152,14 +152,14 @@ def weighted_correlation(
     Weighted because the rows are cells: an unweighted matrix would describe the
     distribution of *cells*, which is an artefact of the binning, rather than the
     distribution of loan-months, which is the data.
-    """
-    exposure = frame[weight].to_numpy(dtype=float)
-    values = frame.loc[:, list(columns)].to_numpy(dtype=float)
-    total = exposure.sum()
 
-    means = (values * exposure[:, None]).sum(axis=0) / total
-    centred = values - means
-    covariance = (centred * exposure[:, None]).T @ centred / total
+    From the covariance added up a block at a time. The first version held the
+    covariates and a centred copy of them at once -- two copies of every candidate on
+    the training half of the exact key -- for a matrix a dozen entries wide.
+    """
+    from creditsurv.models.selection import weighted_covariance
+
+    covariance = weighted_covariance(frame, columns, weight=weight).to_numpy(dtype=float)
     deviations = np.sqrt(np.diag(covariance))
     correlation = covariance / np.outer(deviations, deviations)
     return pd.DataFrame(correlation, index=list(columns), columns=list(columns))
@@ -293,3 +293,22 @@ def curves_cross(
             if len(meaningful) and not ((meaningful > 0).all() or (meaningful < 0).all()):
                 return True
     return False
+
+
+def lagged_correlation(
+    first: pd.Series, second: pd.Series, *, lags: Sequence[int] = range(-6, 7)
+) -> pd.Series:
+    """The correlation of two monthly series, with the second shifted by each lag.
+
+    The validation's test for M1: a reconstruction that files events some months early
+    lines up best at that lag, not at zero. Both series are laid on every month from the
+    first to the last, a month either lacks counting as zero, so a shift is a shift in
+    months and not in positions.
+    """
+    months = pd.RangeIndex(
+        int(min(first.index.min(), second.index.min())),
+        int(max(first.index.max(), second.index.max())) + 1,
+    )
+    left = first.reindex(months, fill_value=0).astype(float)
+    right = second.reindex(months, fill_value=0).astype(float)
+    return pd.Series({lag: float(left.corr(right.shift(lag))) for lag in lags}, name="correlation")
