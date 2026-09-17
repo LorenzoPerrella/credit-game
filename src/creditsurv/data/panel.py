@@ -35,11 +35,14 @@ from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 
+from creditsurv.config import MACRO_LAG_MONTHS
 from creditsurv.features import MACRO_DERIVED, add_macro_family
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
+    from pathlib import Path
 
 LOAN_ID: Final = "loan_id"
 AGE: Final = "age"
@@ -179,6 +182,86 @@ def model_blocks(
         frame = model_frame(block, covariates)
         if weights_col is not None:
             frame[weights_col] = block[weights_col].to_numpy()
+        yield frame
+
+
+def cell_shape(source: Path | str) -> tuple[int, dict[str, pd.Index]]:
+    """The episode width and the categorical levels of a cell file, read without expanding it.
+
+    Both are properties of the **whole** table and cannot be taken from one block: a block
+    holding ages 0 and 12 is not a table of year-long episodes, and a block without an
+    investment property would give its design one dummy column fewer than the next block's.
+    """
+    import pyarrow.parquet as pq
+
+    file = pq.ParquetFile(source)
+    ages = pq.read_table(source, columns=[AGE]).column(AGE).unique().to_pylist()
+    distinct = sorted(int(age) for age in ages)
+    step = (
+        min((later - earlier) for earlier, later in pairwise(distinct)) if len(distinct) > 1 else 1
+    )
+    levels: dict[str, pd.Index] = {}
+    for field in file.schema_arrow:
+        if pa.types.is_dictionary(field.type) or pa.types.is_string(field.type):
+            values = pq.read_table(source, columns=[field.name]).column(field.name)
+            levels[field.name] = pd.Index(
+                sorted(str(value) for value in values.unique().to_pylist())
+            )
+    return step, levels
+
+
+def cell_blocks(
+    source: Path | str,
+    macro: pd.DataFrame,
+    covariates: Sequence[str],
+    *,
+    rows: int = 1_000_000,
+    months: tuple[int | None, int | None] | None = None,
+    select: Callable[[pd.DataFrame], np.ndarray] | None = None,
+    weights_col: str = WEIGHT,
+    lag_months: int = MACRO_LAG_MONTHS,
+) -> Iterator[pd.DataFrame]:
+    """Model frames straight from the cell file, a batch of cells at a time.
+
+    The episode frame is the largest object the pipeline holds -- 5.9 GB on the whole table,
+    and the training half beside its test half is what took a fit to a 15 GB footprint. Here
+    it never exists: each batch of cells is expanded, narrowed to what the formula reads,
+    handed to the block engine, which stores it compactly, and dropped.
+
+    ``months`` selects on the **observation** month as an ordinal (``year * 12 + month - 1``),
+    inclusive at both ends, which is how a training half or a backtest window is taken.
+    ``select`` takes any further subset of a batch of cells -- loans originated in even years,
+    say -- and is passed the cells, not the episodes.
+    """
+    import pyarrow.parquet as pq
+
+    from creditsurv.data.store import modernise_cells
+
+    step, levels = cell_shape(source)
+    for batch in pq.ParquetFile(source).iter_batches(batch_size=rows):
+        cells = modernise_cells(batch.to_pandas())
+        for name, categories in levels.items():
+            if name in cells.columns:
+                cells[name] = pd.Categorical(cells[name].astype(str), categories=categories)
+        if months is not None:
+            observation = origination_months(cells).to_numpy() + cells[AGE].to_numpy(dtype=int)
+            first, last = months
+            inside = np.ones(len(cells), dtype=bool)
+            if first is not None:
+                inside &= observation >= first
+            if last is not None:
+                inside &= observation <= last
+            cells = cells.loc[inside]
+        if select is not None and not cells.empty:
+            cells = cells.loc[np.asarray(select(cells), dtype=bool)]
+        if cells.empty:
+            continue
+        cells.index = pd.RangeIndex(len(cells))
+        episodes = cells_to_episodes(
+            cells, macro, covariates=covariates, step=step, lag_months=lag_months
+        )
+        frame = model_frame(episodes, covariates)
+        frame[weights_col] = episodes[weights_col].to_numpy()
         yield frame
 
 

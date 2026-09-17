@@ -47,7 +47,7 @@ from creditsurv.data.panel import (
 from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, fit_interval_censoring_in_blocks
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
 
     from lifelines.fitters import ParametericAFTRegressionFitter
 
@@ -261,6 +261,57 @@ def fit_aft(
         n_episodes=int(selected.sum()),
         n_events=n_events,
         elapsed_seconds=elapsed,
+        blocks=record,
+    )
+
+
+def fit_streamed(
+    blocks: Iterable[pd.DataFrame],
+    covariates: Sequence[str],
+    formula: str,
+    *,
+    distribution: str = "weibull",
+    penalizer: float = 0.0,
+    weights_col: str | None = None,
+    ancillary: str | bool | None = None,
+    show_progress: bool = False,
+    initial_point: np.ndarray | pd.Series | None = None,
+    polish: bool = True,
+) -> FitResult:
+    """Fit the interval-censored likelihood from blocks, without an episode frame in memory.
+
+    The same engine as :func:`fit_aft`, handed blocks it never has to hold together -- from
+    :func:`creditsurv.data.panel.cell_blocks`, which expands the cell file a batch at a time.
+    The counts come from the scan rather than from a frame, because there is no frame: the
+    engine already sums the rows, the loan-months and the weighted defaults it saw.
+    """
+    if distribution not in FITTERS:
+        message = f"Unknown distribution {distribution!r}; expected one of {sorted(FITTERS)}."
+        raise ValueError(message)
+    fitter = FITTERS[distribution](penalizer=penalizer)
+    started = time.perf_counter()
+    record = fit_interval_censoring_in_blocks(
+        fitter,
+        blocks,
+        formula=formula,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col=weights_col,
+        ancillary=ancillary,
+        initial_point=initial_point,
+        show_progress=show_progress,
+        polish=polish,
+    )
+    return FitResult(
+        fitter=fitter,
+        distribution=distribution,
+        likelihood=Likelihood.INTERVAL_CENSORED,
+        formula=formula,
+        n_episodes=record.rows,
+        n_events=int(record.events),
+        elapsed_seconds=time.perf_counter() - started,
         blocks=record,
     )
 
