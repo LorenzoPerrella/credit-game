@@ -30,7 +30,7 @@ an infinite upper bound.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
 from typing import TYPE_CHECKING, Final
 
@@ -233,13 +233,24 @@ class CellBlocks:
     source: str
     macro: pd.DataFrame
     covariates: tuple[str, ...]
-    rows: int = 1_000_000
+    #: Cells expanded at a time. A reader's peak is what one batch costs to expand: 1.53 GB
+    #: at a million cells, 0.97 GB at 250,000, measured on the production table.
+    rows: int = 250_000
     months: tuple[int | None, int | None] | None = None
     #: 0 for loans originated in even years, 1 for odd: the selection's stability halves,
     #: as something that survives being sent to another process.
     vintage_parity: int | None = None
     weights_col: str = WEIGHT
     lag_months: int = MACRO_LAG_MONTHS
+    #: The episode width and categorical levels of the file, when they are already known.
+    #: Read once and carried, so six worker processes do not each read the whole of two
+    #: columns of a 63-million-row file to learn the same thing -- which they did, and it
+    #: was 3 GB of the peak.
+    shape: tuple[int, dict[str, pd.Index]] | None = None
+
+    def prepared(self) -> CellBlocks:
+        """This description with the file's width and levels read, ready to be sent."""
+        return self if self.shape is not None else replace(self, shape=cell_shape(self.source))
 
     def __call__(self, part: int = 0, of: int = 1) -> Iterator[pd.DataFrame]:
         """The model frames of this part: every ``of``-th batch, starting at ``part``."""
@@ -247,7 +258,7 @@ class CellBlocks:
 
         from creditsurv.data.store import modernise_cells
 
-        step, levels = cell_shape(self.source)
+        step, levels = self.shape if self.shape is not None else cell_shape(self.source)
         batches = pq.ParquetFile(self.source).iter_batches(batch_size=self.rows)
         for number, batch in enumerate(batches):
             if number % of != part:
@@ -291,7 +302,7 @@ def cell_blocks(
     macro: pd.DataFrame,
     covariates: Sequence[str],
     *,
-    rows: int = 1_000_000,
+    rows: int = 250_000,
     months: tuple[int | None, int | None] | None = None,
     vintage_parity: int | None = None,
     weights_col: str = WEIGHT,

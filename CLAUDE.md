@@ -19,9 +19,16 @@ over 2.54 billion loan-months under the `exclude` policy.
   errors and log-likelihood. Re-run it before trusting a new lifelines.
 - **Measure memory as phys_footprint** ("peak memory footprint" in `/usr/bin/time -l`),
   never `maxrss`: it misses compressed pages and understated the fit about 2.5x.
-- **The training half is 59.7 million rows**, and a cold fit on it took 91 minutes under
-  `exclude` and 79 under `censor`. `creditsurv moratorium`, two fits and two backtests,
-  took 4.8 hours.
+- **The training half is 59.7 million rows.** Held in memory it fitted in 91 minutes under
+  `exclude` and 79 under `censor`, at a 15 GB footprint. **Streamed from the cell file in
+  worker processes it fitted in 68.1 minutes at 4.7 GB** -- four processes, 250,000 cells a
+  batch, 315 blocks, 1.79 GB of them stored -- and reproduced the in-memory fit to **9.4e-07
+  standard errors**, the same log-likelihood, the same 59,663,961 cells and 1,460,306
+  defaults. A warm start from it converges in one Newton step, 4.7 minutes.
+- **Memory is the batch, not the blocks.** A reader peaks at what one batch costs to expand:
+  1.53 GB at a million cells, 0.97 GB at 250,000. Six processes at a million reached 11.8 GB;
+  four at 250,000 reach 4.7. The stored blocks are 30 bytes a row wherever they are.
+- `creditsurv moratorium`, two fits and two backtests, took 4.8 hours.
 - **`report` starts its fit where the selection ended.** Same specification, same rows, so
   the selection's cached fit is already the optimum, and Newton goes from there instead of
   SLSQP from lifelines' seed. A cell table rebuilt since has another identity, and the fit

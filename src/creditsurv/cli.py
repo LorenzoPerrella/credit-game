@@ -421,9 +421,7 @@ def fit(
     workers: Annotated[
         int, typer.Option(help="Processes the likelihood is evaluated in, when streamed.")
     ] = 1,
-    block_rows: Annotated[
-        int, typer.Option(help="Cells read at a time, when streamed.")
-    ] = 1_000_000,
+    block_rows: Annotated[int, typer.Option(help="Cells read at a time, when streamed.")] = 250_000,
 ) -> None:
     """Fit the model and print its coefficients.
 
@@ -971,6 +969,7 @@ def _fit_streamed(
         rows=block_rows,
         months=(None, cut),
     )
+    source = source.prepared()
     typer.echo(f"Reading {source.source} in {workers} process(es)...")
     result = fit_streamed(
         source,
