@@ -415,6 +415,15 @@ def fit(
     ] = DEFAULT_AS_OF,
     save: Annotated[bool, typer.Option(help="Write the coefficients under docs/reports.")] = True,
     moratorium: MoratoriumOption = "exclude",
+    streamed: Annotated[
+        bool, typer.Option(help="Read the rows from the cell file instead of holding them.")
+    ] = False,
+    workers: Annotated[
+        int, typer.Option(help="Processes the likelihood is evaluated in, when streamed.")
+    ] = 1,
+    block_rows: Annotated[
+        int, typer.Option(help="Cells read at a time, when streamed.")
+    ] = 1_000_000,
 ) -> None:
     """Fit the model and print its coefficients.
 
@@ -436,22 +445,31 @@ def fit(
     from creditsurv.models.aft import Likelihood, coefficient_table, fit_aft
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    # Already encoded: cells_to_episodes writes the interval bounds as it expands,
-    # because the bounds are a function of the cell's age band and its event flag.
-    if as_of:
-        encoded = _split(moratorium, pd.Period(as_of, freq="M"))[0].train
-        typer.echo(f"Training on {int(encoded[WEIGHT].sum()):,} loan-months up to {as_of}.")
+    if streamed:
+        result = _fit_streamed(
+            as_of=as_of,
+            moratorium=moratorium,
+            distribution=dist,
+            workers=workers,
+            block_rows=block_rows,
+        )
     else:
-        encoded, _ = _episodes(moratorium)
+        # Already encoded: cells_to_episodes writes the interval bounds as it expands,
+        # because the bounds are a function of the cell's age band and its event flag.
+        if as_of:
+            encoded = _split(moratorium, pd.Period(as_of, freq="M"))[0].train
+            typer.echo(f"Training on {int(encoded[WEIGHT].sum()):,} loan-months up to {as_of}.")
+        else:
+            encoded, _ = _episodes(moratorium)
 
-    result = fit_aft(
-        encoded,
-        default_covariates(),
-        default_formula(),
-        distribution=dist,
-        likelihood=Likelihood(likelihood),
-        weights_col=WEIGHT,
-    )
+        result = fit_aft(
+            encoded,
+            default_covariates(),
+            default_formula(),
+            distribution=dist,
+            likelihood=Likelihood(likelihood),
+            weights_col=WEIGHT,
+        )
     typer.echo(
         f"{result.distribution} / {result.likelihood.value}: "
         f"{result.n_episodes:,} cells, {result.n_events:,} defaults, "
@@ -920,8 +938,69 @@ def check_calendar(moratorium: MoratoriumOption = "exclude") -> None:
     typer.echo(f"Written: {destination}")
 
 
+def _fit_streamed(
+    *,
+    as_of: str,
+    moratorium: str,
+    distribution: str,
+    workers: int,
+    block_rows: int,
+) -> FitResult:
+    """Fit from the cell file, in ``workers`` processes, and save it under its fingerprint.
+
+    The rows are never held: each process reads its share of the cells, expands it, and keeps
+    it compactly. The fit is cached under the same description a fit made in memory is, so
+    `report` and `views` find it by the specification rather than by how it was made.
+    """
+    import pandas as pd
+
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.panel import WEIGHT, CellBlocks
+    from creditsurv.data.store import cells_path, fit_fingerprint, save_fit
+    from creditsurv.models.aft import fit_streamed
+
+    formula = default_formula()
+    cut = None
+    if as_of:
+        reporting_date = pd.Period(as_of, freq="M")
+        cut = reporting_date.year * 12 + reporting_date.month - 1
+    source = CellBlocks(
+        str(cells_path(moratorium)),
+        load_macro_panel(),
+        tuple(default_covariates()),
+        rows=block_rows,
+        months=(None, cut),
+    )
+    typer.echo(f"Reading {source.source} in {workers} process(es)...")
+    result = fit_streamed(
+        source,
+        default_covariates(),
+        formula,
+        distribution=distribution,
+        weights_col=WEIGHT,
+        workers=workers,
+    )
+    record = result.blocks
+    assert record is not None
+    described = _fit_description(
+        (result.n_episodes, int(record.loan_months)),
+        formula,
+        as_of=as_of,
+        moratorium=moratorium,
+        distribution=distribution,
+    )
+    fingerprint = fit_fingerprint(**described)
+    path = save_fit(result, fingerprint, {**described, "minutes": result.elapsed_seconds / 60})
+    typer.echo(
+        f"  {record.rows:,} cells in {record.blocks} blocks, {record.stored_bytes / 1e9:.2f} GB "
+        f"stored, {record.evaluations} evaluations, {result.elapsed_seconds / 60:.1f} minutes"
+    )
+    typer.echo(f"  saved as {fingerprint} to {path}")
+    return result
+
+
 def _fit_description(
-    encoded: pd.DataFrame,
+    counted: pd.DataFrame | tuple[int, int],
     formula: str,
     *,
     as_of: str,
@@ -933,6 +1012,9 @@ def _fit_description(
 ) -> dict[str, object]:
     """What a report's fit is cached under, and so how any command finds it again.
 
+    ``counted`` is the panel, or its row and loan-month counts when the rows were never held
+    as a frame -- a fit streamed from the cell file counts them as it reads.
+
     The moratorium policy is in it because the two treatments can produce panels of similar
     size, and a censor fit silently reused for exclude would compare a model with itself.
     The ancillary formula and the likelihood enter only when they are not the defaults, so
@@ -940,14 +1022,19 @@ def _fit_description(
     """
     from creditsurv.models.aft import Likelihood as Likelihoods
 
+    if isinstance(counted, tuple):
+        rows, loan_months = counted
+    else:
+        rows = len(counted)
+        loan_months = int(counted[weights_col].sum()) if weights_col else rows
     described: dict[str, object] = {
         "as_of": as_of,
         "moratorium": moratorium,
         "formula": formula,
         "distribution": distribution,
         "weights_col": weights_col,
-        "rows": len(encoded),
-        "loan_months": int(encoded[weights_col].sum()) if weights_col else len(encoded),
+        "rows": rows,
+        "loan_months": loan_months,
     }
     if ancillary is not None:
         described["ancillary"] = ancillary

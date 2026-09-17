@@ -159,3 +159,42 @@ def test_fitting_in_processes_needs_a_description_of_the_rows(
 
     with pytest.raises(TypeError, match="blocks\\(part, of\\)"):
         fit_streamed(blocks, COVARIATES, FORMULA, weights_col=WEIGHT, workers=2)
+
+
+def test_a_file_written_under_the_former_names_streams_under_the_current_ones(
+    tmp_path: Path, macro_module: pd.DataFrame
+) -> None:
+    """The cells on disk predate the rename, and their levels do too.
+
+    Read without translating them, every renamed level became a missing category -- a design
+    of NaNs, which lifelines refuses only once the whole file has been read.
+    """
+    months = pd.PeriodIndex(macro_module.index[-40:-1])
+    former = pd.DataFrame(
+        {
+            "fico_s": [-0.4, 1.0] * len(months),
+            "orig_ltv": [75.0, 85.0] * len(months),
+            "dti": [32.0, 28.0] * len(months),
+            "purpose": pd.Categorical(["refinance_cashout", "purchase"] * len(months)),
+            "has_mi": pd.Categorical(["N", "Y"] * len(months)),
+            "first_time_buyer": pd.Categorical(["Y", "N"] * len(months)),
+            "orig_month": [month.year * 12 + month.month - 1 for month in months for _ in (0, 1)],
+            "age": [0, 1] * len(months),
+            "event": [False, True] * len(months),
+            "n": [10, 3] * len(months),
+        }
+    )
+    path = tmp_path / "cells_exclude.parquet"
+    former.to_parquet(path)
+
+    step, levels = cell_shape(path)
+    blocks = list(cell_blocks(path, macro_module, ["credit_score", "purpose"], rows=8))
+
+    assert step == 1
+    assert list(levels["purpose"]) == ["cash_out_refinance", "purchase"]
+    assert list(levels["mortgage_insurance"]) == ["insured", "uninsured"]
+    assert blocks
+    for frame in blocks:
+        assert not frame.isna().to_numpy().any()
+        assert set(frame["purpose"].cat.categories) == {"cash_out_refinance", "purchase"}
+        assert frame["credit_score"].between(600.0, 800.0).all()
