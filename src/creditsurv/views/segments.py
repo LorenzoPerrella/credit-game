@@ -105,7 +105,7 @@ SEGMENTS: Final[dict[str, Segment]] = {
             ("mortgage_insurance",),
             _categorical("mortgage_insurance"),
         ),
-        Segment("buyer_type", "Buyer", ("buyer_type",), _categorical("buyer_type")),
+        Segment("buyer_type", "Buyer type", ("buyer_type",), _categorical("buyer_type")),
         Segment("term", "Original term", ("term_years",), _term),
         Segment(
             "fico",

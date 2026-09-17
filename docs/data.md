@@ -108,6 +108,7 @@ default still counts. The May 2020 default rate fell from 90.4 to 2.00 basis poi
 
 ## Where to read more
 
+- [Variables](variables.md): every variable's label, definition, unit, source and values.
 - [Data dictionary](data_dictionary.md): the record layout, layer by layer, and a real loan
   traced through all five.
 - [Data preparation](data_preparation.md): 40 GB to a fittable table, with every

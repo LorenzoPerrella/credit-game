@@ -59,6 +59,9 @@ markdown_extensions:
 extra_javascript:
   - javascripts/figures.js
 
+extra_css:
+  - stylesheets/extra.css
+
 validation:
   omitted_files: warn
   absolute_links: warn
@@ -69,6 +72,7 @@ nav:
   - Home: index.md
   - Data:
       - In short: data.md
+      - Variables: variables.md
       - Data dictionary: data_dictionary.md
       - Data preparation: data_preparation.md
       - The moratorium decision: reports/moratorium.md

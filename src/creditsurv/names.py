@@ -245,7 +245,7 @@ _VARIABLES: Final[tuple[Variable, ...]] = (
     ),
     _loan(
         "buyer_type",
-        "Buyer",
+        "Buyer type",
         "Whether the borrower is buying a home for the first time.",
         source="first_time_homebuyer_indicator, origination file (9 = not available)",
         former="first_time_buyer",
@@ -800,8 +800,19 @@ def in_words(text: str) -> str:
         if name is not None and ("_" in name or name in {"dti", "vix", "hpi", "nfci", "cpi"})
     } - _NOT_IN_PROSE
     for name in sorted(candidates, key=len, reverse=True):
-        text = re.sub(rf"(?<![A-Za-z0-9_`]){re.escape(name)}(?![A-Za-z0-9_`])", label(name), text)
+        pattern = rf"(?<![A-Za-z0-9_`]){re.escape(name)}(?![A-Za-z0-9_`])"
+        text = re.sub(pattern, _in_sentence(label(name)), text)
     return text
+
+
+def _in_sentence(shown: str) -> str:
+    """A label as it reads inside a sentence: lower case, unless it opens with a name."""
+    first = shown.split(" ", 1)[0]
+    if first.isupper() or any(character.isupper() for character in first[1:]):
+        return shown
+    if first in {"Baa", "Nasdaq", "Northeast", "Midwest", "South", "West", "Census"}:
+        return shown
+    return shown[:1].lower() + shown[1:]
 
 
 def _each(value: object, read: Callable[[str], str]) -> object:

@@ -410,7 +410,8 @@ def test_no_figure_or_table_shows_a_name_the_code_uses(published: Sources) -> No
         "|".join(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])" for name in _code_names())
     )
     shown = [text for figure in FIGURES.values() for text in _texts(figure.build(published))]
-    for table in TABLES.values():
+    # The Variables page is the one place the names are the point.
+    for table in (table for name, table in TABLES.items() if not name.startswith("variables_")):
         frame = table.build(published)
         shown.extend(str(column) for column in frame.columns)
         shown.extend(str(value) for value in frame.to_numpy().ravel())

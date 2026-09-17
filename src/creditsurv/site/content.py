@@ -185,6 +185,31 @@ def adverse_legs(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     return names.readable(legs)
 
 
+def _glossary(kind: names.Kind) -> Callable[[Mapping[str, pd.DataFrame]], pd.DataFrame]:
+    """Four columns, so a name is never broken across lines: values and source join the meaning."""
+
+    def build(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        rows = []
+        for row in names.glossary([kind]):
+            meaning = row["What it is"]
+            if row["Values"]:
+                meaning += f" Values: {row['Values']}."
+            if row["Source"]:
+                meaning += f" Source: {row['Source']}."
+            name = row["Name"] + (f"<br>formerly {row['Formerly']}" if row["Formerly"] else "")
+            rows.append(
+                {
+                    "Label": row["Label"],
+                    "Name": name,
+                    "Unit": row["Unit"],
+                    "Meaning": meaning.replace("|", "/"),
+                }
+            )
+        return pd.DataFrame(rows)
+
+    return build
+
+
 TABLES: Final[dict[str, Table]] = registry(
     Table("acceptance", ("acceptance_by_segment",), acceptance),
     Table("scenario_summary", ("scenarios_by_segment",), scenario_summary),
@@ -192,6 +217,10 @@ TABLES: Final[dict[str, Table]] = registry(
     Table("selection_elimination", ("selection_elimination",), elimination),
     Table("selection_inflation", ("selection_inflation",), inflation),
     Table("adverse_legs", (), adverse_legs),
+    Table("variables_loan", (), _glossary(names.Kind.LOAN)),
+    Table("variables_macro", (), _glossary(names.Kind.MACRO)),
+    Table("variables_series", (), _glossary(names.Kind.SERIES)),
+    Table("variables_structure", (), _glossary(names.Kind.STRUCTURE)),
 )
 
 

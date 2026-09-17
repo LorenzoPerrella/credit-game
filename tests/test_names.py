@@ -163,7 +163,7 @@ def test_a_table_reads_in_labels_with_its_numbers_untouched() -> None:
     ]
     assert shown["Series"].tolist() == ["VIX", "House price index"]
     assert shown["Reason"].tolist() == [
-        "beside Loan-to-value change since origination, both housing",
+        "beside loan-to-value change since origination, both housing",
         "variance inflation 11.9",
     ]
     assert shown["Effect of one sd"].tolist() == frame["effect_1sd"].tolist()
