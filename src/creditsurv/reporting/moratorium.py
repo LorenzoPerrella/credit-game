@@ -17,6 +17,7 @@ import pandas as pd
 
 from creditsurv.backtest.runner import ACCEPTANCE
 from creditsurv.models.aft import coefficient_table
+from creditsurv.names import term_label
 from creditsurv.reporting.builder import Report, provenance
 
 if TYPE_CHECKING:
@@ -100,7 +101,7 @@ The same specification is fitted and backtested under each, below.
     after = float(cast("float", largest["coef censor"]))
     report.heading("Coefficients").text(
         f"""
-The largest move is in `{largest["covariate"]}` ({largest["param"]}):
+The largest move is in *{term_label(str(largest["covariate"]))}*:
 **{moved:+.1f} combined standard errors**, from {before:+.4f} to {after:+.4f}.
 """
     ).table(shift, decimals=4)

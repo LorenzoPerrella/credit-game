@@ -21,6 +21,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from creditsurv import names
 from creditsurv.backtest.runner import ACCEPTANCE
 from creditsurv.views.segments import SEGMENTS
 
@@ -31,6 +32,12 @@ if TYPE_CHECKING:
 #: points has a standard error of 1 basis point; below it a curve draws the noise of a few
 #: hundred loans as if it were a shape.
 EXPOSURE_FLOOR: float = 100_000
+
+#: The parameter block a covariate acts on, whatever the family calls it.
+SCALE_PARAMETERS: Final = ("lambda_", "alpha_", "mu_")
+
+#: The parameter block holding the shape of the hazard.
+SHAPE_PARAMETERS: Final = ("rho_", "beta_", "sigma_")
 
 #: Tableau 10: distinguishable for the common colour-vision deficiencies, and legible on the
 #: light and the dark scheme alike.
@@ -93,7 +100,18 @@ def registry(*items: Named) -> dict[str, Named]:
 
 
 def segment_title(name: str) -> str:
-    return _TITLES.get(name, name.replace("_", " ").capitalize())
+    """A segment's menu entry: its title, or the label of the variable it was named after."""
+    return _TITLES.get(name) or names.label(name)
+
+
+def group_label(segment: str, group: object) -> str:
+    """A group as a reader sees it: a level's label, or the band as it is written.
+
+    Looked up through the variable the segment opens, under its current or former codes, so a
+    table written before the rename still reads "Cash-out refinance".
+    """
+    column = SEGMENTS[segment].columns[0] if segment in SEGMENTS else segment
+    return names.level_label(column, group)
 
 
 def _segment_key(name: str) -> tuple[int, int, str]:
@@ -267,10 +285,11 @@ def _lines_by_segment(
                     x=points[x],
                     y=_rounded(points[y] * scale),
                     mode=mode,
-                    name=str(group),
+                    name=group_label(segment, group),
                     line={"color": PALETTE[position % len(PALETTE)], "width": 1.8},
                     stackgroup=segment if stack else None,
-                    hovertemplate=f"{group}<br>%{{x}}: %{{y:,.3~f}}<extra></extra>",
+                    hovertemplate=f"{group_label(segment, group)}<br>%{{x}}: %{{y:,.3~f}}"
+                    "<extra></extra>",
                 )
             )
         if members:
@@ -309,11 +328,12 @@ def _pairs_by_segment(
                         x=points[x],
                         y=_rounded(transform(points[column])),
                         mode=mode,
-                        name=str(group),
+                        name=group_label(segment, group),
                         legendgroup=f"{segment}:{group}",
                         showlegend=shown,
                         line={"color": colour, "dash": dash, "width": 1.8},
-                        hovertemplate=f"{group}, {label}<br>%{{x}}: %{{y:,.3~f}}<extra></extra>",
+                        hovertemplate=f"{group_label(segment, group)}, {label}<br>"
+                        "%{x}: %{y:,.3~f}<extra></extra>",
                     )
                 )
         if members:
@@ -455,7 +475,7 @@ def families_vs_km(views: Mapping[str, pd.DataFrame]) -> go.Figure:
             go.Scatter(
                 x=rows["age"],
                 y=_percent_default(rows["predicted_survival"]),
-                name=str(name),
+                name=names.DISTRIBUTIONS.get(str(name), str(name)),
                 line={"color": colour, "dash": "dash", "width": 1.8},
             )
         )
@@ -464,7 +484,7 @@ def families_vs_km(views: Mapping[str, pd.DataFrame]) -> go.Figure:
             go.Scatter(
                 x=rows["age"],
                 y=-rows["deviation"] * 100.0,
-                name=str(name),
+                name=names.DISTRIBUTIONS.get(str(name), str(name)),
                 line={"color": colour, "width": 1.8},
             )
         )
@@ -479,21 +499,11 @@ def families_vs_km(views: Mapping[str, pd.DataFrame]) -> go.Figure:
 
 # ----- the model ---------------------------------------------------------------------------
 
-_TERM: Final = re.compile(r"C\((\w+), Treatment\('([^']*)'\)\)\[T\.([^\]]*)\]")
-
-
-def term_label(term: str) -> str:
-    """``C(purpose, Treatment('purchase'))[T.cash_out_refinance]`` as a reader would say it."""
-    match = _TERM.fullmatch(term)
-    if match:
-        field, reference, level = match.groups()
-        return f"{field}: {level} (against {reference})"
-    return term
-
 
 def coefficients(views: Mapping[str, pd.DataFrame]) -> go.Figure:
     table = views["coefficients"]
-    scale = table[(table["parameter"] == "lambda_") & (table["term"] != "Intercept")]
+    # The block the covariates act on: lambda_ for the Weibull, alpha_ for the log-logistic.
+    scale = table[table["parameter"].isin(SCALE_PARAMETERS) & (table["term"] != "Intercept")]
     continuous = scale[scale["one_sd"].notna()].copy()
     categorical = scale[scale["one_sd"].isna()].copy()
     continuous = continuous.reindex(continuous["effect_1sd"].abs().sort_values().index)
@@ -524,7 +534,7 @@ def coefficients(views: Mapping[str, pd.DataFrame]) -> go.Figure:
         figure.add_trace(
             go.Bar(
                 x=value,
-                y=[term_label(term) for term in rows["term"]],
+                y=[names.term_label(term) for term in rows["term"]],
                 orientation="h",
                 marker={"color": colours},
                 error_x={
@@ -573,7 +583,7 @@ def scenarios(views: Mapping[str, pd.DataFrame]) -> go.Figure:
             members.append(len(figure.data))
             figure.add_trace(
                 go.Bar(
-                    x=rows["group"].astype(str),
+                    x=[group_label(segment, group) for group in rows["group"]],
                     y=rows[column] * 100.0,
                     name=name,
                     marker={"color": colour},
@@ -591,12 +601,12 @@ def covariates_over_time(views: Mapping[str, pd.DataFrame]) -> go.Figure:
     choices = []
     for name, rows in frame.groupby("covariate", sort=True):
         rows = rows.sort_values("month")
-        choices.append((str(name), [len(figure.data)]))
+        choices.append((names.label(str(name)), [len(figure.data)]))
         figure.add_trace(
             go.Scatter(
                 x=rows["month"],
                 y=rows["mean"],
-                name=str(name),
+                name=names.label(str(name)),
                 line={"color": PALETTE[0], "width": 1.8},
                 showlegend=False,
             )
@@ -681,9 +691,10 @@ def lending_mix(views: Mapping[str, pd.DataFrame]) -> go.Figure:
                 go.Bar(
                     x=points["year"],
                     y=points["loan_share"] * 100.0,
-                    name=str(group),
+                    name=group_label(segment, group),
                     marker={"color": PALETTE[position % len(PALETTE)]},
-                    hovertemplate=f"{group}, %{{x}}: %{{y:.1f}}%<extra></extra>",
+                    hovertemplate=f"{group_label(segment, group)}, %{{x}}: %{{y:.1f}}%"
+                    "<extra></extra>",
                 )
             )
         choices.append((segment_title(segment), members))
@@ -760,12 +771,13 @@ def macro_series(views: Mapping[str, pd.DataFrame]) -> go.Figure:
     choices = []
     for name, rows in frame.groupby("series", sort=True):
         rows = rows.sort_values("month")
-        choices.append((str(name).replace("_", " "), [len(figure.data)]))
+        shown = names.label(str(name), kind=names.Kind.SERIES)
+        choices.append((shown, [len(figure.data)]))
         figure.add_trace(
             go.Scatter(
                 x=rows["month"],
                 y=rows["value"],
-                name=str(name),
+                name=shown,
                 showlegend=False,
                 line={"color": PALETTE[0], "width": 1.8},
             )
@@ -784,15 +796,17 @@ def selection_correlation(views: Mapping[str, pd.DataFrame]) -> go.Figure:
     figure.add_trace(
         go.Heatmap(
             z=wide.to_numpy(),
-            x=order,
-            y=order,
+            x=[names.label(name) for name in order],
+            y=[names.label(name) for name in order],
             zmin=-1,
             zmax=1,
             colorscale="RdBu",
             hovertemplate="%{y} and %{x}: %{z:.2f}<extra></extra>",
         )
     )
-    figure.update_yaxes(autorange="reversed")
+    # Every covariate named: left to itself the axis shows every other one.
+    figure.update_xaxes(dtick=1)
+    figure.update_yaxes(autorange="reversed", dtick=1)
     return figure
 
 
@@ -809,7 +823,7 @@ def selection_screening(views: Mapping[str, pd.DataFrame]) -> go.Figure:
         figure.add_trace(
             go.Bar(
                 x=rows["effect_1sd"],
-                y=rows["covariate"],
+                y=[names.label(str(name)) for name in rows["covariate"]],
                 orientation="h",
                 name=name,
                 marker={"color": colour},
@@ -835,7 +849,7 @@ def selection_stability(views: Mapping[str, pd.DataFrame]) -> go.Figure:
             figure.add_trace(
                 go.Scatter(
                     x=rows[column],
-                    y=rows["covariate"],
+                    y=[names.label(str(name)) for name in rows["covariate"]],
                     mode="markers",
                     name=name,
                     marker={"color": colour, "symbol": symbol, "size": 10},

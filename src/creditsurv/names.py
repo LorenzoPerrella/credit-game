@@ -25,7 +25,9 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Callable, Iterable, Mapping
+
+    import pandas as pd
 
 
 class Kind(StrEnum):
@@ -56,6 +58,8 @@ class Variable:
     source: str = ""
     former: str | None = None
     levels: tuple[Level, ...] = ()
+    #: How a value stored under the former name reads, when its scale was different too.
+    former_label: str | None = None
 
     def level(self, code: object) -> Level:
         """The level with this code, current or former."""
@@ -76,6 +80,7 @@ def _loan(
     source: str = "",
     former: str | None = None,
     levels: Iterable[tuple[str, str, str | None]] = (),
+    former_label: str | None = None,
 ) -> Variable:
     return Variable(
         name,
@@ -86,6 +91,7 @@ def _loan(
         source,
         former,
         tuple(Level(*level) for level in levels),
+        former_label,
     )
 
 
@@ -114,6 +120,8 @@ _VARIABLES: Final[tuple[Variable, ...]] = (
         unit="points",
         source="classic_fico, origination file (9999 = not available)",
         former="fico_s",
+        # Stored as (score - 700) / 50 until the rename: a coefficient on it is per 50 points.
+        former_label="Credit score, per 50 points above 700",
     ),
     _loan(
         "original_ltv",
@@ -646,9 +654,12 @@ def label(name: str, *, kind: Kind | None = None) -> str:
     to a modelled variable.
     """
     try:
-        return variable(name, kind=kind).label
+        entry = variable(name, kind=kind)
     except KeyError:
         return name.replace("_", " ")
+    if name == entry.former and entry.former_label:
+        return entry.former_label
+    return entry.label
 
 
 def level_label(name: str, code: object) -> str:
@@ -718,3 +729,113 @@ def glossary(kinds: Iterable[Kind] = tuple(Kind)) -> list[dict[str, str]]:
 def labelled(values: Mapping[str, object]) -> dict[str, object]:
     """A mapping keyed by variable names, keyed by labels instead."""
     return {label(str(name)): value for name, value in values.items()}
+
+
+# ----- presentation -----------------------------------------------------------------------------
+
+#: Headers a reader is shown instead of a column name. A column not listed reads with its
+#: underscores as spaces and a capital letter.
+HEADERS: Final[dict[str, str]] = {
+    "coef": "Coefficient",
+    "se(coef)": "Standard error",
+    "coef lower 95%": "Lower 95%",
+    "coef upper 95%": "Upper 95%",
+    "time_ratio": "Time ratio",
+    "p": "p-value",
+    "effect_1sd": "Effect of one sd",
+    "one_sd": "One sd",
+    "change_pp": "Change, pp",
+    "baseline_pd": "Baseline PD",
+    "shocked_pd": "Shocked PD",
+    "aic": "AIC",
+    "delta_aic": "AIC behind the best",
+    "log_likelihood": "Log-likelihood",
+    "n_episodes": "Episodes",
+    "n_parameters": "Parameters",
+    "lr_statistic": "Likelihood ratio",
+    "vif": "Variance inflation",
+    "psi": "Stability index",
+    "loan_months": "Loan-months",
+    "actual_over_expected": "Actual / expected",
+    "km_lower": "Kaplan-Meier lower",
+    "km_upper": "Kaplan-Meier upper",
+    "as_of": "Reporting date",
+    "param": "Parameter",
+    "signs_against_prior": "Signs against the prior",
+    "sign_agrees": "Sign as expected",
+    "expected_sign": "Expected sign",
+    "effect_all": "Whole training half",
+    "effect_even": "Even vintage years",
+    "effect_odd": "Odd vintage years",
+}
+
+#: Columns whose values are variable names or formula terms, and how each is read.
+_TERM_COLUMNS: Final = frozenset({"covariate", "term", "removed", "first", "second", "variable"})
+_SERIES_COLUMNS: Final = frozenset({"series"})
+_LIST_COLUMNS: Final = frozenset({"signs_against_prior", "read by"})
+_PARAMETER_COLUMNS: Final = frozenset({"param", "parameter"})
+_DISTRIBUTION_COLUMNS: Final = frozenset({"distribution"})
+_PROSE_COLUMNS: Final = frozenset({"reason", "why", "interpretation"})
+
+#: Former names that are also ordinary words or too short to be told apart in prose: in a
+#: sentence, "variance inflation" is not the covariate.
+_NOT_IN_PROSE: Final = frozenset({"inflation", "sentiment", "n", "vintage", "event", "period"})
+
+
+def header(column: object) -> str:
+    """A column name as a table header."""
+    text = str(column)
+    if text in HEADERS:
+        return HEADERS[text]
+    spaced = text.replace("_", " ")
+    return spaced[:1].upper() + spaced[1:]
+
+
+def in_words(text: str) -> str:
+    """Prose with every variable name it cites replaced by that variable's label."""
+    candidates = {
+        name
+        for entry in _VARIABLES
+        for name in (entry.name, entry.former)
+        if name is not None and ("_" in name or name in {"dti", "vix", "hpi", "nfci", "cpi"})
+    } - _NOT_IN_PROSE
+    for name in sorted(candidates, key=len, reverse=True):
+        text = re.sub(rf"(?<![A-Za-z0-9_`]){re.escape(name)}(?![A-Za-z0-9_`])", label(name), text)
+    return text
+
+
+def _each(value: object, read: Callable[[str], str]) -> object:
+    return read(value) if isinstance(value, str) and value else value
+
+
+def readable(frame: pd.DataFrame, *, headers: bool = True) -> pd.DataFrame:
+    """A table as a reader should see it: labels for names, sentences for terms and headers.
+
+    Numbers are untouched. Columns are recognised by name -- ``covariate``, ``term``,
+    ``series``, ``distribution``, ``reason`` and the like -- so any table a report or a page
+    shows passes through here unchanged in shape.
+    """
+    shown = frame.copy()
+    for column in shown.columns:
+        key = str(column)
+        if key in _TERM_COLUMNS:
+            shown[column] = shown[column].map(lambda value: _each(value, term_label))
+        elif key in _SERIES_COLUMNS:
+            shown[column] = shown[column].map(
+                lambda value: _each(value, lambda name: label(name, kind=Kind.SERIES))
+            )
+        elif key in _LIST_COLUMNS:
+            shown[column] = shown[column].map(
+                lambda value: _each(
+                    value, lambda names: ", ".join(label(name) for name in names.split(", "))
+                )
+            )
+        elif key in _PARAMETER_COLUMNS:
+            shown[column] = shown[column].map(lambda value: PARAMETERS.get(str(value), value))
+        elif key in _DISTRIBUTION_COLUMNS:
+            shown[column] = shown[column].map(lambda value: DISTRIBUTIONS.get(str(value), value))
+        elif key in _PROSE_COLUMNS:
+            shown[column] = shown[column].map(lambda value: _each(value, in_words))
+    if headers:
+        shown.columns = [header(column) for column in shown.columns]
+    return shown

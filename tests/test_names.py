@@ -137,3 +137,53 @@ def test_the_glossary_has_a_row_per_variable() -> None:
 
     assert len(rows) == len(names.VARIABLES)
     assert all(row["Label"] and row["What it is"] for row in rows)
+
+
+def test_a_table_reads_in_labels_with_its_numbers_untouched() -> None:
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "covariate": [
+                "credit_score",
+                "C(purpose, Treatment('purchase'))[T.cash_out_refinance]",
+            ],
+            "series": ["vix_index", "house_price_index"],
+            "reason": ["beside ltv_change, both housing", "variance inflation 11.9"],
+            "effect_1sd": [0.4353, -0.2031],
+        }
+    )
+
+    shown = names.readable(frame)
+
+    assert list(shown.columns) == ["Covariate", "Series", "Reason", "Effect of one sd"]
+    assert shown["Covariate"].tolist() == [
+        "Credit score",
+        "Loan purpose: Cash-out refinance (against Purchase)",
+    ]
+    assert shown["Series"].tolist() == ["VIX", "House price index"]
+    assert shown["Reason"].tolist() == [
+        "beside Loan-to-value change since origination, both housing",
+        "variance inflation 11.9",
+    ]
+    assert shown["Effect of one sd"].tolist() == frame["effect_1sd"].tolist()
+
+
+def test_a_report_table_is_shown_in_labels() -> None:
+    import pandas as pd
+
+    from creditsurv.reporting.builder import Report
+
+    report = Report("Test").table(
+        pd.DataFrame({"covariate": ["unemployment_change"], "coef": [0.1]})
+    )
+
+    written = "\n".join(report._parts)
+    assert "| Covariate | Coefficient |" in written
+    assert "Unemployment change since origination" in written
+    assert "unemployment_change" not in written
+
+
+def test_a_value_stored_on_the_former_scale_says_so() -> None:
+    assert names.label("credit_score") == "Credit score"
+    assert names.label("fico_s") == "Credit score, per 50 points above 700"

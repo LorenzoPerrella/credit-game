@@ -19,9 +19,16 @@ from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
+from creditsurv import names
 from creditsurv.backtest.runner import ACCEPTANCE
 from creditsurv.site import figures
-from creditsurv.site.figures import group_key, registry, segment_title, term_label
+from creditsurv.site.figures import (
+    SHAPE_PARAMETERS,
+    group_key,
+    group_label,
+    registry,
+    segment_title,
+)
 from creditsurv.views.tables import load_manifest, load_view
 
 if TYPE_CHECKING:
@@ -85,7 +92,10 @@ def acceptance(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Segment": table["segment"].map(segment_title),
-            "Group": table["group"],
+            "Group": [
+                group_label(segment, group)
+                for segment, group in zip(table["segment"], table["group"], strict=True)
+            ],
             "Loan-months": table["loan_months"].map("{:,.0f}".format),
             "Defaults": table["defaults"].map("{:,.0f}".format),
             "Actual / expected": table["actual_over_expected"].map("{:.3f}".format),
@@ -109,7 +119,10 @@ def scenario_summary(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Segment": table["segment"].map(segment_title),
-            "Group": table["group"],
+            "Group": [
+                group_label(segment, group)
+                for segment, group in zip(table["segment"], table["group"], strict=True)
+            ],
             "12-month PD": table["pd_12m"].map("{:.2%}".format),
             "Lifetime PD, baseline": table["lifetime_pd_baseline"].map("{:.2%}".format),
             "Lifetime PD, adverse": table["lifetime_pd_adverse"].map("{:.2%}".format),
@@ -122,8 +135,8 @@ def coefficient_table(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     table = views["coefficients"]
     return pd.DataFrame(
         {
-            "Parameter": table["parameter"],
-            "Term": table["term"].map(term_label),
+            "Parameter": table["parameter"].map(lambda value: names.PARAMETERS.get(value, value)),
+            "Term": table["term"].map(names.term_label),
             "Coefficient": table["coef"].map("{:+.5f}".format),
             "Standard error": table["se"].map("{:.2e}".format),
             "95% interval": [
@@ -143,8 +156,8 @@ def elimination(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Step": table["step"],
-            "Removed": table["removed"].map(lambda name: f"`{name}`"),
-            "Rule that fired": table["reason"],
+            "Removed": table["removed"].map(names.label),
+            "Rule that fired": table["reason"].map(names.in_words),
             "Covariates left": table["remaining"],
         }
     )
@@ -155,7 +168,7 @@ def inflation(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Step": table["step"],
-            "Removed": table["removed"].map(lambda name: f"`{name}`"),
+            "Removed": table["removed"].map(names.label),
             "Variance inflation": table["vif"].map("{:.1f}".format),
             "Covariates left": table["remaining"],
         }
@@ -168,7 +181,8 @@ def adverse_legs(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     from creditsurv.features import MACRO_SOURCES
     from creditsurv.models.lifetime_pd import ADVERSE, scenario_legs
 
-    return scenario_legs(ADVERSE, {name: MACRO_SOURCES[name] for name in TIME_VARYING_CONTINUOUS})
+    legs = scenario_legs(ADVERSE, {name: MACRO_SOURCES[name] for name in TIME_VARYING_CONTINUOUS})
+    return names.readable(legs)
 
 
 TABLES: Final[dict[str, Table]] = registry(
@@ -206,7 +220,8 @@ def _in_sample_years(sources: Sources) -> pd.Series:
 
 def _shape(sources: Sources) -> pd.Series:
     table = sources["coefficients"]
-    row: pd.Series = table[(table["parameter"] == "rho_") & (table["term"] == "Intercept")].iloc[0]
+    shape = table["parameter"].isin(SHAPE_PARAMETERS) & (table["term"] == "Intercept")
+    row: pd.Series = table[shape].iloc[0]
     return row
 
 

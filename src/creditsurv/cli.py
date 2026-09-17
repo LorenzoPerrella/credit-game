@@ -56,7 +56,9 @@ def default_covariates() -> list[str]:
 
 
 def _echo_table(frame: pd.DataFrame, *, index: bool = False) -> None:
-    typer.echo(frame.to_string(index=index))
+    from creditsurv.names import readable
+
+    typer.echo(readable(frame.reset_index() if index else frame).to_string(index=False))
 
 
 @app.command("fetch-macro")
@@ -209,6 +211,7 @@ def portfolio() -> None:
         origination_mix("purpose"),
         figures / "mix_purpose.png",
         title="New lending by purpose",
+        variable="purpose",
     )
 
     typer.echo("Underwriting drift...")

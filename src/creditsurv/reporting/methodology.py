@@ -28,6 +28,7 @@ from creditsurv.models.selection import (
     shape_depends_on_covariates,
     shape_formula,
 )
+from creditsurv.names import DISTRIBUTIONS, label
 from creditsurv.reporting import charts
 from creditsurv.reporting.builder import Report, provenance
 
@@ -81,21 +82,26 @@ def _comparison_reading(regression: pd.DataFrame, against_km: pd.DataFrame, repo
     """What the comparison says, in words that follow the numbers rather than precede them."""
     leader = regression.iloc[0]
     reading = [
-        f"On this specification the **{leader['distribution']}** has the better likelihood, "
+        f"On this specification the **{DISTRIBUTIONS.get(str(leader['distribution']))}** "
+        "has the better likelihood, "
         f"by {float(regression['delta_aic'].max()):,.0f} AIC points."
     ]
     for row in regression.itertuples():
         if row.signs_against_prior:
-            names = ", ".join(f"`{name}`" for name in str(row.signs_against_prior).split(", "))
-            reading.append(f"The {row.distribution} turns {names} against its declared prior.")
+            turned = ", ".join(
+                f"*{label(name)}*" for name in str(row.signs_against_prior).split(", ")
+            )
+            family = DISTRIBUTIONS.get(str(row.distribution), str(row.distribution))
+            reading.append(f"The {family} turns {turned} against its declared prior.")
     closest = against_km.sort_values("mean_deviation").iloc[0]
     reading.append(
-        f"Against Kaplan-Meier the **{closest['distribution']}** is closer on average, "
+        f"Against Kaplan-Meier the **{DISTRIBUTIONS.get(str(closest['distribution']))}** "
+        "is closer on average, "
         f"{float(closest['mean_deviation']):.2f} percentage points of survival."
     )
     if leader["distribution"] != reported:
         reading.append(
-            f"The model reported throughout is the {reported}, and "
+            f"The model reported throughout is the {DISTRIBUTIONS.get(reported, reported)}, and "
             "`docs/variable_selection.md` records why it was kept against a better likelihood."
         )
     return "\n\n".join(reading)
@@ -384,7 +390,7 @@ It matters for lifetime PD specifically: if the shape genuinely varies, the term
 structure differs by loan rather than merely shifting, and a single shape misstates
 the timing of losses even when it gets the total right.
 
-Tested on `{relaxed}`{why}:
+Tested on *{label(relaxed)}*{why}:
 """
     )
     if shape is None:

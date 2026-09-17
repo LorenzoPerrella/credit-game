@@ -22,7 +22,7 @@ from creditsurv.data.aggregate import PRODUCTION_EDGES
 from creditsurv.data.panel import AGE
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
 
 @dataclass(frozen=True)
@@ -38,14 +38,13 @@ class Segment:
         return all(column in frame.columns for column in self.columns)
 
 
-def _categorical(column: str, names: Mapping[str, str] | None = None) -> Callable[..., pd.Series]:
+def _categorical(column: str) -> Callable[..., pd.Series]:
+    """The column's own codes. A page shows their labels, from :mod:`creditsurv.names`."""
+
     def label(frame: pd.DataFrame) -> pd.Series:
         values = frame[column]
         if not isinstance(values.dtype, pd.CategoricalDtype):
             values = values.astype("category")
-        if names:
-            present = {old: names.get(str(old), str(old)) for old in values.cat.categories}
-            values = values.cat.rename_categories(present)
         return values.rename(column)
 
     return label
@@ -104,16 +103,9 @@ SEGMENTS: Final[dict[str, Segment]] = {
             "mortgage_insurance",
             "Mortgage insurance",
             ("mortgage_insurance",),
-            _categorical("mortgage_insurance", {"uninsured": "no insurance", "insured": "insured"}),
+            _categorical("mortgage_insurance"),
         ),
-        Segment(
-            "buyer_type",
-            "First-time buyer",
-            ("buyer_type",),
-            _categorical(
-                "buyer_type", {"repeat": "repeat buyer", "first_time": "first-time buyer"}
-            ),
-        ),
+        Segment("buyer_type", "Buyer", ("buyer_type",), _categorical("buyer_type")),
         Segment("term", "Original term", ("term_years",), _term),
         Segment(
             "fico",

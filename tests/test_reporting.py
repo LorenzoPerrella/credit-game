@@ -114,12 +114,12 @@ def test_coefficient_chart_omits_intercepts(tmp_path: Path) -> None:
 def test_formulaic_labels_are_made_readable() -> None:
     label = charts._label("lambda_", "C(purpose, Treatment('purchase'))[T.cash_out_refinance]")
 
-    assert label == "purpose: cash_out_refinance"
+    assert label == "Loan purpose: Cash-out refinance (against Purchase)"
 
 
 def test_intercept_labels_name_their_parameter_block() -> None:
     """Both blocks own an intercept, so two rows would otherwise read identically."""
-    assert charts._label("rho_", "Intercept") == "rho: Intercept"
+    assert charts._label("rho_", "Intercept") == "Shape: Intercept"
 
 
 def test_psi_handles_categorical_variables() -> None:
@@ -342,9 +342,9 @@ def test_the_distribution_reading_follows_the_numbers() -> None:
 
     reading = _comparison_reading(regression, against, "weibull")
 
-    assert "**loglogistic** has the better likelihood, by 83,961 AIC points" in reading
-    assert "turns `financial_conditions` against its declared prior" in reading
-    assert "Against Kaplan-Meier the **loglogistic** is closer" in reading
+    assert "**Log-logistic** has the better likelihood, by 83,961 AIC points" in reading
+    assert "turns *Financial conditions* against its declared prior" in reading
+    assert "Against Kaplan-Meier the **Log-logistic** is closer" in reading
     assert "kept against a better likelihood" in reading
     assert against.loc[0, "deviation_at_last_month"] == pytest.approx(-3.0)
     assert against.loc[0, "last_month"] == 3
