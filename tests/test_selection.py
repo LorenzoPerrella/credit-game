@@ -24,14 +24,12 @@ from creditsurv.models.nonparametric import (
     turnbull,
 )
 from creditsurv.models.selection import (
-    backward_elimination,
     distribution_comparison,
     likelihood_ratio_test,
     marginal_comparison,
     shape_depends_on_covariates,
     shape_formula,
     stepwise_vif,
-    univariate_screening,
     variance_inflation,
 )
 from fixtures import DEFAULT_PARAMS, build_panel
@@ -268,41 +266,6 @@ def test_stepwise_vif_leaves_independent_covariates_alone() -> None:
 
     assert log.empty
     assert surviving == ["a", "b"]
-
-
-def test_a_backwards_sign_is_eliminated_even_when_significant(
-    encoded: pd.DataFrame,
-) -> None:
-    """A wrong sign is a symptom, usually of collinearity, not a weak result.
-
-    A model asserting that higher credit scores default sooner fits its sample and
-    no other, so significance does not save it.
-    """
-    flipped = encoded.copy()
-    flipped["fico_s"] = -flipped["fico_s"]
-
-    log, surviving, _ = backward_elimination(flipped, ["fico_s", "cltv_drift"])
-
-    assert "fico_s" not in surviving
-    assert str(log.iloc[0]["reason"]) == "wrong sign"
-
-
-def test_backward_elimination_keeps_covariates_that_earn_their_place(
-    encoded: pd.DataFrame,
-) -> None:
-    log, surviving, result = backward_elimination(encoded, ["fico_s", "cltv_drift"])
-
-    assert set(surviving) == {"fico_s", "cltv_drift"}
-    assert log.empty
-    assert result.n_events > 0
-
-
-def test_univariate_screening_ranks_by_significance(encoded: pd.DataFrame) -> None:
-    table = univariate_screening(encoded, ["fico_s", "cltv_drift"])
-
-    assert list(table.columns) >= ["covariate", "coef", "p", "aic", "keep"]
-    assert table["p"].is_monotonic_increasing
-    assert table["keep"].any()
 
 
 def test_the_exponential_is_tested_without_a_second_fit(

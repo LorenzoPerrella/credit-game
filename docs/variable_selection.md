@@ -152,11 +152,12 @@ factor by weighted least squares directly.
 
 ### 7. Univariate screening — does it carry anything alone?
 
-`models.selection.univariate_screening`. **Threshold: p > 0.05 → discard.**
+`models.procedure.run_selection`. **Threshold: p > 0.05 → discard.**
 
-One model per candidate, with a fixed set of covariates forced into every fit
-(`always_include`), so each is judged on what it *adds* rather than on what it happens
-to proxy.
+One model per candidate, fitted beside the loan block and started from the loan block's
+own fit, so each is judged on what it *adds* rather than on what it happens to proxy. The
+sign each candidate takes here is also the one step 8 holds it to when it has no declared
+prior.
 
 A screen, not a decision. A covariate can be insignificant alone and matter in
 combination, which is why the survivors still face backward elimination.

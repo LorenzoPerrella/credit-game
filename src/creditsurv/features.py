@@ -77,17 +77,6 @@ LAGGED_SERIES: tuple[str, ...] = PUBLICATION_LAGGED + TRANSMISSION_LAGGED
 #: silently absent.
 CONTEMPORANEOUS_SERIES: tuple[str, ...] = ()
 
-#: Covariates this module adds to a loan-month panel, and which must all be present
-#: for a row to be usable. ``refi_incentive`` and ``indexed_cltv`` are built only where
-#: the columns they read exist, so they are checked by presence rather than listed.
-DERIVED_COLUMNS: tuple[str, ...] = (
-    "cltv_drift",
-    "unemp_gap",
-    "nfci_lagged",
-    "rate_gap",
-    "hpi_growth",
-)
-
 #: The macro series each derived covariate reads, stated once.
 #:
 #: It used to exist only implicitly, inside the body of ``add_macro_family``, and that
@@ -174,7 +163,10 @@ def add_macro_covariates(
             panel["period"], macro["mortgage_rate_30y"]
         )
 
-    built = [name for name in DERIVED_COLUMNS if name in enriched.columns]
+    # Every macro covariate built, as the aggregated path checks. The list used here had
+    # been frozen at the specification before the selection, so a missing sentiment or
+    # inflation_gap passed through a projection to become a missing PD.
+    built = [name for name in MACRO_DERIVED if name in enriched.columns]
     return enriched.dropna(subset=built).reset_index(drop=True)
 
 
