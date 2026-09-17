@@ -30,6 +30,7 @@ an infinite upper bound.
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from itertools import pairwise
 from typing import TYPE_CHECKING, Final
 
@@ -41,7 +42,7 @@ from creditsurv.config import MACRO_LAG_MONTHS
 from creditsurv.features import MACRO_DERIVED, add_macro_family
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
+    from collections.abc import Iterator, Sequence
     from pathlib import Path
 
 LOAN_ID: Final = "loan_id"
@@ -210,6 +211,71 @@ def cell_shape(source: Path | str) -> tuple[int, dict[str, pd.Index]]:
     return step, levels
 
 
+@dataclass(frozen=True)
+class CellBlocks:
+    """Where a share of the model's rows comes from, in a form a worker can be sent.
+
+    A description rather than the rows: the path to the cell file, the macro panel and what
+    to select. A worker process is handed one of these and reads its own part, so a parallel
+    fit never sends blocks between processes and never holds a copy of them all.
+    """
+
+    source: str
+    macro: pd.DataFrame
+    covariates: tuple[str, ...]
+    rows: int = 1_000_000
+    months: tuple[int | None, int | None] | None = None
+    #: 0 for loans originated in even years, 1 for odd: the selection's stability halves,
+    #: as something that survives being sent to another process.
+    vintage_parity: int | None = None
+    weights_col: str = WEIGHT
+    lag_months: int = MACRO_LAG_MONTHS
+
+    def __call__(self, part: int = 0, of: int = 1) -> Iterator[pd.DataFrame]:
+        """The model frames of this part: every ``of``-th batch, starting at ``part``."""
+        import pyarrow.parquet as pq
+
+        from creditsurv.data.store import modernise_cells
+
+        step, levels = cell_shape(self.source)
+        batches = pq.ParquetFile(self.source).iter_batches(batch_size=self.rows)
+        for number, batch in enumerate(batches):
+            if number % of != part:
+                continue
+            cells = modernise_cells(batch.to_pandas())
+            for name, categories in levels.items():
+                if name in cells.columns:
+                    cells[name] = pd.Categorical(cells[name].astype(str), categories=categories)
+            cells = self._selected(cells)
+            if cells.empty:
+                continue
+            cells.index = pd.RangeIndex(len(cells))
+            episodes = cells_to_episodes(
+                cells,
+                self.macro,
+                covariates=list(self.covariates),
+                step=step,
+                lag_months=self.lag_months,
+            )
+            frame = model_frame(episodes, list(self.covariates))
+            frame[self.weights_col] = episodes[self.weights_col].to_numpy()
+            yield frame
+
+    def _selected(self, cells: pd.DataFrame) -> pd.DataFrame:
+        origination = origination_months(cells).to_numpy()
+        keep = np.ones(len(cells), dtype=bool)
+        if self.months is not None:
+            observation = origination + cells[AGE].to_numpy(dtype=int)
+            first, last = self.months
+            if first is not None:
+                keep &= observation >= first
+            if last is not None:
+                keep &= observation <= last
+        if self.vintage_parity is not None:
+            keep &= (origination // 12) % 2 == self.vintage_parity
+        return cells.loc[keep]
+
+
 def cell_blocks(
     source: Path | str,
     macro: pd.DataFrame,
@@ -217,7 +283,7 @@ def cell_blocks(
     *,
     rows: int = 1_000_000,
     months: tuple[int | None, int | None] | None = None,
-    select: Callable[[pd.DataFrame], np.ndarray] | None = None,
+    vintage_parity: int | None = None,
     weights_col: str = WEIGHT,
     lag_months: int = MACRO_LAG_MONTHS,
 ) -> Iterator[pd.DataFrame]:
@@ -230,39 +296,19 @@ def cell_blocks(
 
     ``months`` selects on the **observation** month as an ordinal (``year * 12 + month - 1``),
     inclusive at both ends, which is how a training half or a backtest window is taken.
-    ``select`` takes any further subset of a batch of cells -- loans originated in even years,
-    say -- and is passed the cells, not the episodes.
+    ``vintage_parity`` takes loans originated in even or in odd years, the selection's
+    stability halves.
     """
-    import pyarrow.parquet as pq
-
-    from creditsurv.data.store import modernise_cells
-
-    step, levels = cell_shape(source)
-    for batch in pq.ParquetFile(source).iter_batches(batch_size=rows):
-        cells = modernise_cells(batch.to_pandas())
-        for name, categories in levels.items():
-            if name in cells.columns:
-                cells[name] = pd.Categorical(cells[name].astype(str), categories=categories)
-        if months is not None:
-            observation = origination_months(cells).to_numpy() + cells[AGE].to_numpy(dtype=int)
-            first, last = months
-            inside = np.ones(len(cells), dtype=bool)
-            if first is not None:
-                inside &= observation >= first
-            if last is not None:
-                inside &= observation <= last
-            cells = cells.loc[inside]
-        if select is not None and not cells.empty:
-            cells = cells.loc[np.asarray(select(cells), dtype=bool)]
-        if cells.empty:
-            continue
-        cells.index = pd.RangeIndex(len(cells))
-        episodes = cells_to_episodes(
-            cells, macro, covariates=covariates, step=step, lag_months=lag_months
-        )
-        frame = model_frame(episodes, covariates)
-        frame[weights_col] = episodes[weights_col].to_numpy()
-        yield frame
+    yield from CellBlocks(
+        str(source),
+        macro,
+        tuple(covariates),
+        rows=rows,
+        months=months,
+        vintage_parity=vintage_parity,
+        weights_col=weights_col,
+        lag_months=lag_months,
+    )()
 
 
 def aggregate_episodes(

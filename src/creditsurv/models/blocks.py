@@ -41,12 +41,13 @@ number.
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import time
 import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import lifelines
 import numpy as np
@@ -57,6 +58,13 @@ from lifelines import exceptions, utils
 from scipy.optimize import minimize
 
 if TYPE_CHECKING:
+    from multiprocessing.queues import Queue
+
+    #: What the parent asks a worker for, and what a worker sends back.
+    Command = tuple[str, np.ndarray | None]
+    Prepared = tuple[pd.MultiIndex, np.ndarray, float, dict[str, np.ndarray]]
+    Answer = dict[str, Any] | tuple[float, np.ndarray] | np.ndarray
+
     from collections.abc import Callable, Iterable
 
     from lifelines.fitters import ParametericAFTRegressionFitter
@@ -183,6 +191,10 @@ class _Scan:
     high: np.ndarray | None = None
     bounds: list[pd.Series] = field(default_factory=list)
     events: float = 0.0
+    weight: float = 0.0
+    #: Blocks and bytes held by the worker processes, when there are any.
+    other_blocks: int = 0
+    other_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -209,7 +221,7 @@ class BlockFit:
 
 def fit_interval_censoring_in_blocks(
     fitter: ParametericAFTRegressionFitter,
-    blocks: Iterable[pd.DataFrame],
+    blocks: Iterable[pd.DataFrame] | Callable[[int, int], Iterable[pd.DataFrame]],
     *,
     formula: str,
     lower_bound_col: str,
@@ -222,6 +234,7 @@ def fit_interval_censoring_in_blocks(
     fit_options: dict[str, Any] | None = None,
     show_progress: bool = False,
     polish: bool = True,
+    workers: int = 1,
 ) -> BlockFit:
     """``fitter.fit_interval_censoring``, reading the rows a block at a time.
 
@@ -240,27 +253,38 @@ def fit_interval_censoring_in_blocks(
     ``polish`` carries the fit from where SLSQP stops to the optimum -- see :func:`_polish`.
     Off, the result is the one lifelines itself returns, which is what the equivalence
     tests compare.
+
+    ``workers`` above one evaluates the blocks in that many processes. ``blocks`` must then
+    be a **description** of where the rows come from -- callable as ``blocks(part, of)`` and
+    picklable, such as :class:`creditsurv.data.panel.CellBlocks` -- because each worker reads
+    its own share rather than being sent one: sending the blocks would cost their memory
+    twice, and autograd traces the likelihood in Python, so threads would share one core.
     """
     if isinstance(ancillary, pd.DataFrame):
         message = "An ancillary DataFrame cannot be read block by block; pass a formula or True."
         raise TypeError(message)
 
     started = time.perf_counter()
-    utils.CensoringType.set_censoring_type(fitter, utils.CensoringType.INTERVAL)
-    fitter._time_fit_was_called = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
-    fitter.lower_bound_col = lower_bound_col
-    fitter.upper_bound_col = upper_bound_col
-    fitter.event_col = event_col
-    fitter.entry_col = entry_col
-    fitter.weights_col = weights_col
-    fitter.robust = False
+    names = (lower_bound_col, upper_bound_col, event_col, entry_col, weights_col)
+    _set_censoring(fitter, names)
 
+    if workers > 1 and not callable(blocks):
+        message = (
+            "Fitting in several processes needs a description of where the rows come from, "
+            "callable as blocks(part, of), not an iterator of them."
+        )
+        raise TypeError(message)
+    source = cast("Callable[[int, int], Iterable[pd.DataFrame]]", blocks)
+    setup = _Setup(type(fitter), fitter.penalizer, formula, ancillary, names)
+    pool = _Workers(setup, source, workers) if workers > 1 else None
     scan = _scan(
         fitter,
-        blocks,
+        source(0, workers) if callable(blocks) else blocks,
         seed=_seed_regressors(fitter, formula, ancillary),
-        names=(lower_bound_col, upper_bound_col, event_col, entry_col, weights_col),
+        names=names,
     )
+    if pool is not None:
+        _combine(scan, pool.summaries())
     if scan.rows < 2 or scan.columns is None:
         message = "A fit needs at least two rows."
         raise ValueError(message)
@@ -300,7 +324,20 @@ def fit_interval_censoring_in_blocks(
     fitter._neg_likelihood = partial(
         fitter._create_neg_likelihood_with_penalty_function, likelihood=likelihood
     )
-    objective = _Objective(fitter, scan.blocks, columns, norm_std.to_numpy(), unflatten)
+    total_weight = float(scan.weight)
+    local = _Objective(
+        fitter,
+        scan.blocks,
+        columns,
+        norm_std.to_numpy(),
+        unflatten,
+        total_weight=total_weight,
+        with_penalty=pool is None,
+    )
+    objective: _Evaluator = local
+    if pool is not None:
+        pool.prepare(columns, norm_std.to_numpy(), total_weight, seeded)
+        objective = _Pooled(fitter, local, pool, unflatten)
 
     # From a warm start Newton goes straight to the optimum. SLSQP would rebuild its
     # curvature estimate from nothing and take as many evaluations as from a cold start:
@@ -351,13 +388,15 @@ def fit_interval_censoring_in_blocks(
         steps,
         remaining,
     )
+    if pool is not None:
+        pool.close()
     _store(fitter, columns, x, value, curvature, objective, unflatten)
     return BlockFit(
         rows=scan.rows,
-        blocks=len(scan.blocks),
+        blocks=len(scan.blocks) + scan.other_blocks,
         loan_months=objective.total_weight,
         events=scan.events,
-        stored_bytes=sum(block.nbytes for block in scan.blocks),
+        stored_bytes=sum(block.nbytes for block in scan.blocks) + scan.other_bytes,
         evaluations=objective.evaluations,
         seconds=time.perf_counter() - started,
         method=method,
@@ -468,6 +507,7 @@ def _scan(
             distinct.groupby(["lower", "upper", "entry"], sort=False)["weight"].sum()
         )
         scan.events += float(weights[np.isfinite(upper)].sum())
+        scan.weight += float(weights.sum())
         log.debug("block %d: %s rows", number, f"{len(frame):,}")
 
     stored = sum(block.nbytes for block in scan.blocks)
@@ -636,6 +676,247 @@ def _warm_start(
     return started
 
 
+def _set_censoring(
+    fitter: ParametericAFTRegressionFitter,
+    names: tuple[str, str, str, str | None, str | None],
+) -> None:
+    """Tell the fitter what it is fitting, as ``fit_interval_censoring`` does."""
+    lower_bound_col, upper_bound_col, event_col, entry_col, weights_col = names
+    utils.CensoringType.set_censoring_type(fitter, utils.CensoringType.INTERVAL)
+    fitter._time_fit_was_called = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+    fitter.lower_bound_col = lower_bound_col
+    fitter.upper_bound_col = upper_bound_col
+    fitter.event_col = event_col
+    fitter.entry_col = entry_col
+    fitter.weights_col = weights_col
+    fitter.robust = False
+
+
+@dataclass(frozen=True)
+class _Setup:
+    """What a worker needs to build the same design from its own share of the rows."""
+
+    fitter_class: type[ParametericAFTRegressionFitter]
+    penalizer: float
+    formula: str
+    ancillary: str | bool | None
+    names: tuple[str, str, str, str | None, str | None]
+
+
+def _summary(scan: _Scan) -> dict[str, Any]:
+    """What a worker's scan tells the parent. Not the blocks: those stay where they are."""
+    return {
+        "rows": scan.rows,
+        "first": scan.first,
+        "second": scan.second,
+        "low": scan.low,
+        "high": scan.high,
+        "events": scan.events,
+        "weight": scan.weight,
+        "bounds": pd.concat(scan.bounds).groupby(level=[0, 1, 2]).sum() if scan.bounds else None,
+        "columns": scan.columns,
+        "blocks": len(scan.blocks),
+        "bytes": sum(block.nbytes for block in scan.blocks),
+    }
+
+
+def _combine(scan: _Scan, summaries: Iterable[dict[str, Any]]) -> None:
+    """Add the workers' sums to the parent's, so the fit sees every row."""
+    for summary in summaries:
+        if summary["rows"] == 0:
+            continue
+        if scan.columns is not None and not summary["columns"].equals(scan.columns):
+            message = "A worker's design columns differ from the parent's."
+            raise ValueError(message)
+        scan.rows += summary["rows"]
+        scan.events += summary["events"]
+        scan.weight += summary["weight"]
+        scan.other_blocks += summary["blocks"]
+        scan.other_bytes += summary["bytes"]
+        if scan.first is None:
+            scan.first, scan.second = summary["first"], summary["second"]
+            scan.low, scan.high = summary["low"], summary["high"]
+        else:
+            assert scan.second is not None and scan.low is not None and scan.high is not None
+            scan.first = scan.first + summary["first"]
+            scan.second = scan.second + summary["second"]
+            scan.low = np.minimum(scan.low, summary["low"])
+            scan.high = np.maximum(scan.high, summary["high"])
+        if summary["bounds"] is not None:
+            scan.bounds.append(summary["bounds"])
+
+
+def _serve(
+    setup: _Setup,
+    source: Callable[[int, int], Iterable[pd.DataFrame]],
+    part: int,
+    of: int,
+    commands: Queue[Command | Prepared],
+    results: Queue[Answer],
+) -> None:
+    """A worker: read a share of the rows, then answer with its part of the objective.
+
+    Runs in its own process. It reads its blocks itself rather than being sent them, keeps
+    them for the whole fit, and adds no penalty: the parent adds that once.
+    """
+    fitter = setup.fitter_class(penalizer=setup.penalizer)
+    _set_censoring(fitter, setup.names)
+    scan = _scan(
+        fitter,
+        source(part, of),
+        seed=_seed_regressors(fitter, setup.formula, setup.ancillary),
+        names=setup.names,
+    )
+    results.put(_summary(scan))
+
+    columns, scale, total_weight, seeded = cast("Prepared", commands.get())
+    raw_std = pd.Series(scale, index=columns)
+    fitter.regressors = scan.regressors
+    fitter._n_examples = scan.rows
+    fitter._cols_to_not_penalize = fitter._find_cols_to_not_penalize(raw_std)
+    fitter._norm_std = raw_std
+    fitter._initial_point_dicts = [seeded]
+    likelihood = fitter._log_likelihood_interval_censoring
+    fitter._neg_likelihood_with_penalty_function = partial(
+        fitter._create_neg_likelihood_with_penalty_function,
+        likelihood=likelihood,
+        penalty=fitter._add_penalty,
+    )
+    fitter._neg_likelihood = partial(
+        fitter._create_neg_likelihood_with_penalty_function, likelihood=likelihood
+    )
+    objective = _Objective(
+        fitter,
+        scan.blocks,
+        columns,
+        scale,
+        flatten(seeded)[1],
+        total_weight=total_weight,
+        with_penalty=False,
+    )
+    while True:
+        command, payload = cast("Command", commands.get())
+        if command == "stop" or payload is None:
+            return
+        if command == "value":
+            results.put(objective(payload))
+        else:
+            results.put(objective.hessian(payload))
+
+
+class _Workers:
+    """The worker processes, each holding its own share of the rows for the whole fit."""
+
+    def __init__(
+        self,
+        setup: _Setup,
+        source: Callable[[int, int], Iterable[pd.DataFrame]],
+        of: int,
+    ) -> None:
+        context = multiprocessing.get_context("spawn")
+        self._results: Queue[Answer] = context.Queue()
+        self._commands: list[Queue[Command | Prepared]] = []
+        self._processes: list[multiprocessing.process.BaseProcess] = []
+        for part in range(1, of):
+            commands: Queue[Command | Prepared] = context.Queue()
+            process = context.Process(
+                target=_serve,
+                args=(setup, source, part, of, commands, self._results),
+                daemon=True,
+            )
+            process.start()
+            self._commands.append(commands)
+            self._processes.append(process)
+        log.info("%d worker process(es) reading their share of the rows", len(self._processes))
+
+    def summaries(self) -> list[dict[str, Any]]:
+        return [cast("dict[str, Any]", self._results.get()) for _ in self._processes]
+
+    def prepare(
+        self,
+        columns: pd.MultiIndex,
+        scale: np.ndarray,
+        total_weight: float,
+        seeded: dict[str, np.ndarray],
+    ) -> None:
+        for commands in self._commands:
+            commands.put((columns, scale, total_weight, seeded))
+
+    def _ask(self, command: str, x: np.ndarray) -> list[Answer]:
+        for commands in self._commands:
+            commands.put((command, x))
+        return [self._results.get() for _ in self._processes]
+
+    def value_and_gradient(self, x: np.ndarray) -> list[tuple[float, np.ndarray]]:
+        return [cast("tuple[float, np.ndarray]", answer) for answer in self._ask("value", x)]
+
+    def hessian(self, x: np.ndarray) -> list[np.ndarray]:
+        return [cast("np.ndarray", answer) for answer in self._ask("hessian", x)]
+
+    def close(self) -> None:
+        for commands in self._commands:
+            commands.put(("stop", None))
+        for process in self._processes:
+            process.join(timeout=30)
+
+
+class _Pooled:
+    """The objective over every row: this process's blocks plus the workers'."""
+
+    def __init__(
+        self,
+        fitter: ParametericAFTRegressionFitter,
+        local: _Objective,
+        workers: _Workers,
+        unflatten: Callable[[np.ndarray], dict[str, np.ndarray]],
+    ) -> None:
+        self._local = local
+        self._workers = workers
+        self.total_weight = local.total_weight
+        self.evaluations = 0
+        penalizer = fitter.penalizer
+        self._penalty: Callable[[np.ndarray], Any] | None = None
+        if isinstance(penalizer, np.ndarray) or penalizer > 0:
+
+            def penalty(x: np.ndarray) -> float:
+                return cast("float", fitter._add_penalty(unflatten(x), 0.0))
+
+            self._penalty = penalty
+
+    def __call__(self, x: np.ndarray) -> tuple[float, np.ndarray]:
+        remote = self._workers.value_and_gradient(x)
+        value, gradient = self._local(x)
+        for block_value, block_gradient in remote:
+            value += float(block_value)
+            gradient = gradient + block_gradient
+        if self._penalty is not None:
+            penalty_value, penalty_gradient = value_and_grad(self._penalty)(x)
+            value += float(penalty_value)
+            gradient = gradient + penalty_gradient
+        self.evaluations += 1
+        return value, gradient
+
+    def hessian(self, x: np.ndarray) -> np.ndarray:
+        remote = self._workers.hessian(x)
+        total = self._local.hessian(x)
+        for block in remote:
+            total = total + block
+        if self._penalty is not None:
+            total = total + hessian(self._penalty)(x)
+        return total
+
+
+class _Evaluator(Protocol):
+    """The objective as the optimiser and the polish use it, wherever the rows are."""
+
+    total_weight: float
+    evaluations: int
+
+    def __call__(self, x: np.ndarray) -> tuple[float, np.ndarray]: ...
+
+    def hessian(self, x: np.ndarray) -> np.ndarray: ...
+
+
 class _Objective:
     """The negative mean log-likelihood and its derivatives, added up block by block.
 
@@ -651,11 +932,16 @@ class _Objective:
         columns: pd.MultiIndex,
         scale: np.ndarray,
         unflatten: Callable[[np.ndarray], dict[str, np.ndarray]],
+        *,
+        total_weight: float | None = None,
+        with_penalty: bool = True,
     ) -> None:
         self._blocks = blocks
         self._columns = columns
         self._scale = scale
-        self.total_weight = float(sum(block.weight_sum for block in blocks))
+        # Given when the rows are split across processes: a block's share is of every row
+        # fitted, not of the rows this process happens to hold.
+        self.total_weight = total_weight or float(sum(block.weight_sum for block in blocks))
         negative = partial(
             fitter._create_neg_likelihood_with_penalty_function,
             likelihood=fitter._log_likelihood_interval_censoring,
@@ -665,7 +951,7 @@ class _Objective:
 
         penalizer = fitter.penalizer
         self._penalty: Callable[[np.ndarray], Any] | None = None
-        if isinstance(penalizer, np.ndarray) or penalizer > 0:
+        if with_penalty and (isinstance(penalizer, np.ndarray) or penalizer > 0):
 
             def penalty(x: np.ndarray) -> float:
                 # A cast, not float(): while autograd traces this the value is a box, and
@@ -742,7 +1028,7 @@ def _newton_step(
 
 
 def _polish(
-    objective: _Objective,
+    objective: _Evaluator,
     x: np.ndarray,
     value: float,
     gradient: np.ndarray,
@@ -823,15 +1109,13 @@ def _damped_step(x: np.ndarray, gradient: np.ndarray, damped: np.ndarray) -> np.
 
 
 def _from_slsqp(
-    objective: _Objective, results: OptimizeResult, *, polish: bool
+    objective: _Evaluator, results: OptimizeResult, *, polish: bool
 ) -> tuple[np.ndarray, float, np.ndarray, int, float, float]:
     """Where SLSQP stopped, polished to the optimum unless ``polish`` is off."""
     started = time.perf_counter()
     x = np.asarray(results.x, dtype=float)
     curvature = _symmetric(objective.hessian(x))
-    log.info(
-        "hessian over %d blocks in %.0fs", len(objective._blocks), time.perf_counter() - started
-    )
+    log.info("hessian in %.0fs", time.perf_counter() - started)
     value = float(results.fun)
     gradient = np.asarray(results.jac, dtype=float)
     if polish:
@@ -841,7 +1125,7 @@ def _from_slsqp(
 
 
 def _newton_from(
-    objective: _Objective, start: np.ndarray
+    objective: _Evaluator, start: np.ndarray
 ) -> tuple[np.ndarray, float, np.ndarray, int, float, float] | None:
     """Damped Newton steps from a warm start, or ``None`` if they do not reach the optimum.
 
@@ -877,7 +1161,7 @@ def _store(
     x: np.ndarray,
     value: float,
     curvature: np.ndarray,
-    objective: _Objective,
+    objective: _Evaluator,
     unflatten: Callable[[np.ndarray], dict[str, np.ndarray]],
 ) -> None:
     """What ``_fit_model`` and ``_fit`` set once the optimum is found."""

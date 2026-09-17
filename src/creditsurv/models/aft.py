@@ -47,7 +47,7 @@ from creditsurv.data.panel import (
 from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, fit_interval_censoring_in_blocks
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
     from lifelines.fitters import ParametericAFTRegressionFitter
 
@@ -266,7 +266,7 @@ def fit_aft(
 
 
 def fit_streamed(
-    blocks: Iterable[pd.DataFrame],
+    blocks: Iterable[pd.DataFrame] | Callable[[int, int], Iterable[pd.DataFrame]],
     covariates: Sequence[str],
     formula: str,
     *,
@@ -277,6 +277,7 @@ def fit_streamed(
     show_progress: bool = False,
     initial_point: np.ndarray | pd.Series | None = None,
     polish: bool = True,
+    workers: int = 1,
 ) -> FitResult:
     """Fit the interval-censored likelihood from blocks, without an episode frame in memory.
 
@@ -284,6 +285,10 @@ def fit_streamed(
     :func:`creditsurv.data.panel.cell_blocks`, which expands the cell file a batch at a time.
     The counts come from the scan rather than from a frame, because there is no frame: the
     engine already sums the rows, the loan-months and the weighted defaults it saw.
+
+    ``workers`` above one evaluates the likelihood in that many processes, each reading its
+    own share of the rows; ``blocks`` must then be a picklable description of where the rows
+    come from, such as :class:`creditsurv.data.panel.CellBlocks`.
     """
     if distribution not in FITTERS:
         message = f"Unknown distribution {distribution!r}; expected one of {sorted(FITTERS)}."
@@ -303,6 +308,7 @@ def fit_streamed(
         initial_point=initial_point,
         show_progress=show_progress,
         polish=polish,
+        workers=workers,
     )
     return FitResult(
         fitter=fitter,

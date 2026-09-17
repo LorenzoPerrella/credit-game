@@ -707,7 +707,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "duckdb", specifier = ">=1.5.5" },
-    { name = "lifelines", specifier = ">=0.30" },
+    { name = "lifelines", specifier = ">=0.30,<0.31" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pandas", specifier = ">=2.1,<3.0" },

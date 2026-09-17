@@ -16,7 +16,13 @@ import pytest
 
 from creditsurv.data.aggregate import build_cells
 from creditsurv.data.ingest import ingest
-from creditsurv.data.panel import WEIGHT, cell_blocks, cell_shape, cells_to_episodes
+from creditsurv.data.panel import (
+    WEIGHT,
+    CellBlocks,
+    cell_blocks,
+    cell_shape,
+    cells_to_episodes,
+)
 from creditsurv.data.store import save_cells
 from creditsurv.models.aft import fit_aft, fit_streamed
 from fixtures import write_book_archives
@@ -104,17 +110,52 @@ def test_a_window_of_observation_months_selects_what_a_split_would(
     assert after == len(split.test)
 
 
-def test_a_further_selection_reads_only_the_cells_it_wants(
+def test_the_stability_halves_are_taken_while_reading(
     cell_file: Path, macro_module: pd.DataFrame
 ) -> None:
-    """Loans originated in even years, which is how the selection's stability halves are taken."""
-    from creditsurv.data.panel import origination_months
+    """Loans originated in even and in odd years, as the selection's step 9 takes them."""
+    even = sum(
+        len(block) for block in cell_blocks(cell_file, macro_module, COVARIATES, vintage_parity=0)
+    )
+    odd = sum(
+        len(block) for block in cell_blocks(cell_file, macro_module, COVARIATES, vintage_parity=1)
+    )
+    whole = sum(len(block) for block in cell_blocks(cell_file, macro_module, COVARIATES))
 
-    def even(cells: pd.DataFrame) -> np.ndarray:
-        years: np.ndarray = (origination_months(cells).to_numpy() // 12) % 2 == 0
-        return years
+    assert even > 0
+    assert odd > 0
+    assert even + odd == whole
 
-    blocks = list(cell_blocks(cell_file, macro_module, COVARIATES, select=even))
-    whole = list(cell_blocks(cell_file, macro_module, COVARIATES))
 
-    assert 0 < sum(len(block) for block in blocks) < sum(len(block) for block in whole)
+def test_the_same_fit_comes_out_of_three_processes_as_out_of_one(
+    cell_file: Path, macro_module: pd.DataFrame
+) -> None:
+    """Each worker reads its own share, so the blocks are never sent or held twice."""
+    source = CellBlocks(str(cell_file), macro_module, tuple(COVARIATES), rows=400)
+
+    alone = fit_streamed(source, COVARIATES, FORMULA, weights_col=WEIGHT)
+    shared = fit_streamed(source, COVARIATES, FORMULA, weights_col=WEIGHT, workers=3)
+
+    assert shared.blocks is not None and alone.blocks is not None
+    assert shared.blocks.blocks == alone.blocks.blocks
+    assert shared.n_episodes == alone.n_episodes
+    assert shared.n_events == alone.n_events
+    assert shared.blocks.loan_months == pytest.approx(alone.blocks.loan_months)
+    np.testing.assert_allclose(
+        shared.fitter.params_.to_numpy(), alone.fitter.params_.to_numpy(), rtol=1e-8
+    )
+    np.testing.assert_allclose(
+        shared.fitter.standard_errors_.to_numpy(),
+        alone.fitter.standard_errors_.to_numpy(),
+        rtol=1e-8,
+    )
+    assert shared.log_likelihood == pytest.approx(alone.log_likelihood, rel=1e-12)
+
+
+def test_fitting_in_processes_needs_a_description_of_the_rows(
+    cell_file: Path, macro_module: pd.DataFrame
+) -> None:
+    blocks = cell_blocks(cell_file, macro_module, COVARIATES)
+
+    with pytest.raises(TypeError, match="blocks\\(part, of\\)"):
+        fit_streamed(blocks, COVARIATES, FORMULA, weights_col=WEIGHT, workers=2)
