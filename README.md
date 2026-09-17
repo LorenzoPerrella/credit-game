@@ -182,9 +182,11 @@ macro covariates came out economically backwards. Removing five others did not c
 flipped when the *sample* changed by 6%. All three were among the four smallest
 standardised effects, and each sat beside a larger correlated covariate carrying the
 same information. One pair was literal: `cltv_drift` is built from the house price
-index, so `hpi_growth` was that index entering a second time as a residual. The model
-now carries **one covariate per economic dimension**, and holds its coefficients to
-within 4.5% across samples that previously flipped them.
+index, so `hpi_growth` was that index entering a second time as a residual. The rule that
+came out of it -- a small covariate whose sign moves with the sample, beside a larger one
+of the same economic dimension, is not identified -- is now step 9 of `creditsurv select`,
+judged on loans originated in even and in odd years, and it removed `hpi_growth` and
+`term_spread` again on the whole training half.
 
 **Quarterly episodes once looked no better than monthly.** They compressed identically,
 which made no sense until the cause was clear: a monthly-varying covariate was still
@@ -214,9 +216,14 @@ verified, not assumed — so quarters are aggregated one at a time.
   actually occurred, which is what *predicted against realised* means and which a real
   deployment would not have had. Read as the performance of the whole system it would
   overstate what the system can do.
-- **Five macro covariates were given up**, and two expected signs turned out to be
-  wrong. Both are set out in [variable selection](docs/variable_selection.md), with the
-  measured evidence and a comparison against what `nmds` would have decided.
+- **Eight of fifteen macro candidates were given up** by `creditsurv select`, `vix` among
+  them, and the first run's revision of two expected signs was retracted. Both are set out
+  in [variable selection](docs/variable_selection.md), with the measured evidence and a
+  comparison against what `nmds` would have decided.
+- **HARP refinances are outside the model.** They carry no debt-to-income, so the
+  complete-case rule drops them: 18% of the 2009–2019 vintages, about three times as
+  likely to default as the loans kept. See
+  [data preparation](docs/data_preparation.md#what-dropping-removes).
 
 ---
 

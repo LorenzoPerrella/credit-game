@@ -243,9 +243,80 @@ What changed on the way, each for a stated reason:
   mean log-likelihood, and on four quarters of the book it stopped up to 5.9 standard
   errors short. A sign read off a fit that far from its optimum is not the fit's sign.
 
-The results below are the **first run's**, on the quarter-keyed table before the
-validation. They are kept because the arguments in them -- the retraction included --
-are still the reasons the rules exist; the numbers are superseded by the report.
+The results of the selection on the training half come first. The **first run's** follow,
+on the quarter-keyed table before the validation, kept because the arguments in them -- the
+retraction included -- are the reasons the rules exist; its numbers and its specification
+are superseded.
+
+## Results on the training half
+
+`creditsurv select` under `exclude`, on **59,663,961 cells covering 2,345,846,897
+loan-months** up to 2024-12, with no sampling: the [report](reports/selection.md) and the
+[record](reports/selection.json) the configuration is tested against. Nineteen continuous
+candidates -- the loan block and fifteen macro series, `vix_gap` and `inflation_gap` among
+them beside their levels -- with `purpose` and `occupancy` in the base and `has_mi` and
+`first_time_buyer` screened beside it.
+
+| Step | Removed | Why |
+|---|---|---|
+| 5. Correlation | nothing | one pair at the threshold, `rate_gap` and `policy_rate_gap` at −0.800, reported |
+| 6. Variance inflation | `credit_spread` | 11.9 |
+| 7. Screen | nothing | every candidate at p = 0 beside the loan block |
+| 8. Backwards sign | `vix_gap`, then `vix` | +0.00254 and +0.00935, where negative is expected |
+| 8. Reversed sign | `rate_gap`, `equity_return`, `inflation` | −0.190 alone to +0.018 together, +0.431 to −0.086, +10.04 to −8.33 |
+| 9. Stability | `term_spread`, `hpi_growth` | sign changes between the halves, beside `policy_rate_gap` and `cltv_drift` |
+
+What remains, with the effect of one standard deviation on log survival time on the whole
+training half and on loans originated in even and in odd years, from the last round:
+
+| Covariate | Dimension | Whole | Even years | Odd years |
+|---|---|---|---|---|
+| `fico_s` | credit quality | +0.434 | +0.442 | +0.425 |
+| `orig_ltv` | leverage at origination | −0.203 | −0.193 | −0.211 |
+| `dti` | debt burden | −0.176 | −0.176 | −0.172 |
+| `term_years` | term | −0.241 | −0.246 | −0.234 |
+| `cltv_drift` | housing | −0.182 | −0.168 | −0.186 |
+| `unemp_gap` | labour | −0.094 | −0.108 | −0.083 |
+| `nfci_lagged` | financial stress | −0.004 | −0.005 | −0.005 |
+| `policy_rate_gap` | interest rates | +0.125 | +0.112 | +0.144 |
+| `sentiment` | confidence | +0.090 | +0.096 | +0.074 |
+| `starts_growth` | housing | +0.077 | +0.068 | +0.088 |
+| `inflation_gap` | prices | +0.056 | +0.083 | +0.020 |
+
+Plus `purpose`, `occupancy`, `has_mi` and `first_time_buyer`.
+
+**`vix` is out, and not by hand.** Beside the loan block alone it has the expected sign,
+−0.0198; in the full model it turns positive. With moratoria no longer counted as defaults,
+part of what made it the first run's largest effect has gone -- the validation suspected
+as much (S5) -- and what is left is shared with `nfci_lagged` and the macro block. Its gap
+form fared no better.
+
+**Where a level and its gap were both offered, the gap survived.** `inflation` reversed
+against its own sign while `inflation_gap` kept its: side by side, the level and the move
+since origination were between them reading mostly inflation at origination, a cohort
+effect. The level was the calendar effect the validation named; the gap varies across
+loans observed in the same month.
+
+**Three readings to hold loosely.** `nfci_lagged` is kept at an effect of −0.004 a standard
+deviation: stable and right-signed, and nearly nothing, so in a stress scenario it
+contributes its sign and little else. `policy_rate_gap` has no declared prior, and its
+positive sign -- a policy rate below where the loan was written shortens survival -- reads as
+the central bank cutting into recessions rather than as a payment channel a fixed-rate
+mortgage does not have. And housing carries two covariates, the position (`cltv_drift`)
+and the construction cycle (`starts_growth`); step 9 separates a pair only when the smaller
+changes sign, and neither did.
+
+**The first run's other eliminations were judgments, not rules.** `sentiment` was given up
+for having no marginal signal and `starts_growth` for a U-shaped marginal profile. Neither
+judgment has a threshold that could have been fixed in advance, so neither is part of the
+executable procedure, and both covariates are back. The U in `starts_growth` is still a
+reason to band it; that would be a new candidate, not a different reading of this one.
+
+**What `nmds` would have done differently.** It too would have removed `vix` and `vix_gap`
+on their signs. It would have kept `rate_gap`, `inflation` and `equity_return`, which have
+no prior and meet no rule of its, and `term_spread` and `hpi_growth`, since it has no
+stability step. The reversal and stability rules are this project's additions, argued in
+the sections that follow.
 
 ## Results of the first run
 
