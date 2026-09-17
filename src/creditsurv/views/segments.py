@@ -1,0 +1,162 @@
+"""The sub-items a view can be opened by, each defined once.
+
+Every view that is split by loan purpose, credit score band or vintage era takes its labels
+from here, so the same loan-month carries the same label on the portfolio page and on the
+calibration page. The bands follow ``PRODUCTION_EDGES``, the grid the cells are built on:
+a view cut on a finer grid than the key would be inventing distinctions the model never saw.
+
+Labels stay categorical. On the training half a column of strings is sixty million Python
+objects; a categorical is sixty million bytes.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from itertools import pairwise
+from typing import TYPE_CHECKING, Final
+
+import numpy as np
+import pandas as pd
+
+from creditsurv.data.aggregate import PRODUCTION_EDGES
+from creditsurv.data.panel import AGE
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
+
+@dataclass(frozen=True)
+class Segment:
+    """A way of splitting loan-months into named groups."""
+
+    name: str
+    title: str
+    columns: tuple[str, ...]
+    label: Callable[[pd.DataFrame], pd.Series]
+
+    def available(self, frame: pd.DataFrame) -> bool:
+        return all(column in frame.columns for column in self.columns)
+
+
+def _categorical(column: str, names: Mapping[str, str] | None = None) -> Callable[..., pd.Series]:
+    def label(frame: pd.DataFrame) -> pd.Series:
+        values = frame[column]
+        if not isinstance(values.dtype, pd.CategoricalDtype):
+            values = values.astype("category")
+        if names:
+            present = {old: names.get(str(old), str(old)) for old in values.cat.categories}
+            values = values.cat.rename_categories(present)
+        return values.rename(column)
+
+    return label
+
+
+def _banded(
+    column: str, edges: tuple[float, ...], shown: Callable[[float], str]
+) -> Callable[..., pd.Series]:
+    # The outer edges are opened, so a value past the grid -- an LTV above 100 -- falls in the
+    # outermost band rather than out of the view.
+    bins = [-np.inf, *edges[1:-1], np.inf]
+    labels = [f"{shown(low)} to {shown(high)}" for low, high in pairwise(edges)]
+
+    def label(frame: pd.DataFrame) -> pd.Series:
+        values = frame[column].to_numpy(dtype=float)
+        banded = pd.cut(values, bins=bins, labels=labels, right=False)
+        return pd.Series(banded, index=frame.index, name=column)
+
+    return label
+
+
+def _years(column: str, edges: tuple[int, ...]) -> Callable[..., pd.Series]:
+    labels = [f"{low} to {high - 1}" for low, high in pairwise(edges)]
+
+    def label(frame: pd.DataFrame) -> pd.Series:
+        years = pd.PeriodIndex(frame[column]).year.to_numpy()
+        banded = pd.cut(years, bins=list(edges), labels=labels, right=False)
+        return pd.Series(banded, index=frame.index, name=column)
+
+    return label
+
+
+def _term(frame: pd.DataFrame) -> pd.Series:
+    years = frame["term_years"].to_numpy()
+    codes, levels = pd.factorize(years, sort=True)
+    labelled = pd.Categorical.from_codes(
+        codes, categories=pd.Index([f"{int(v)} years" for v in levels])
+    )
+    return pd.Series(labelled, index=frame.index, name="term_years")
+
+
+#: Credit score bands, shown as scores rather than as the standardised ``fico_s``.
+def _score(value: float) -> str:
+    return f"{700 + 50 * value:.0f}"
+
+
+def _number(value: float) -> str:
+    return f"{value:.0f}"
+
+
+SEGMENTS: Final[dict[str, Segment]] = {
+    segment.name: segment
+    for segment in (
+        Segment("purpose", "Loan purpose", ("purpose",), _categorical("purpose")),
+        Segment("occupancy", "Occupancy", ("occupancy",), _categorical("occupancy")),
+        Segment(
+            "has_mi",
+            "Mortgage insurance",
+            ("has_mi",),
+            _categorical("has_mi", {"N": "no insurance", "Y": "insured"}),
+        ),
+        Segment(
+            "first_time_buyer",
+            "First-time buyer",
+            ("first_time_buyer",),
+            _categorical("first_time_buyer", {"N": "repeat buyer", "Y": "first-time buyer"}),
+        ),
+        Segment("term", "Original term", ("term_years",), _term),
+        Segment(
+            "fico",
+            "Credit score band",
+            ("fico_s",),
+            _banded("fico_s", PRODUCTION_EDGES["fico_s"], _score),
+        ),
+        Segment(
+            "ltv",
+            "Loan-to-value band",
+            ("orig_ltv",),
+            _banded("orig_ltv", PRODUCTION_EDGES["orig_ltv"], _number),
+        ),
+        Segment(
+            "dti",
+            "Debt-to-income band",
+            ("dti",),
+            _banded("dti", PRODUCTION_EDGES["dti"], _number),
+        ),
+        Segment(
+            "vintage_era",
+            "Vintage era",
+            ("orig_period",),
+            _years("orig_period", (1999, 2004, 2009, 2015, 2020, 2027)),
+        ),
+    )
+}
+
+#: Loan age bands, for calibration by seasoning.
+AGE_BANDS: Final[tuple[int, ...]] = (0, 12, 24, 36, 60, 120, 240, 400)
+
+
+def age_bands(frame: pd.DataFrame) -> pd.Series:
+    """The seasoning band of each loan-month, in months of loan age."""
+    labels = [f"{low} to {high - 1}" for low, high in pairwise(AGE_BANDS)]
+    banded = pd.cut(frame[AGE].to_numpy(), bins=list(AGE_BANDS), labels=labels, right=False)
+    return pd.Series(banded, index=frame.index, name="age_band")
+
+
+def calendar_years(frame: pd.DataFrame, column: str = "period") -> pd.Series:
+    """The calendar year each loan-month is observed in."""
+    return pd.Series(pd.PeriodIndex(frame[column]).year, index=frame.index, name="year")
+
+
+def available(frame: pd.DataFrame) -> list[Segment]:
+    """The segments a frame carries the columns for."""
+    return [segment for segment in SEGMENTS.values() if segment.available(frame)]
