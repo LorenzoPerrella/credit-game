@@ -483,7 +483,7 @@ _TERM: Final = re.compile(r"C\((\w+), Treatment\('([^']*)'\)\)\[T\.([^\]]*)\]")
 
 
 def term_label(term: str) -> str:
-    """``C(purpose, Treatment('purchase'))[T.refinance_cashout]`` as a reader would say it."""
+    """``C(purpose, Treatment('purchase'))[T.cash_out_refinance]`` as a reader would say it."""
     match = _TERM.fullmatch(term)
     if match:
         field, reference, level = match.groups()
@@ -693,7 +693,11 @@ def lending_mix(views: Mapping[str, pd.DataFrame]) -> go.Figure:
 
 def underwriting(views: Mapping[str, pd.DataFrame]) -> go.Figure:
     frame = views["underwriting_by_vintage"]
-    names = {"score": "Credit score", "ltv": "Loan-to-value, %", "dti": "Debt-to-income, %"}
+    names = {
+        "score": "Credit score",
+        "ltv": "Loan-to-value, %",
+        "dti": "Debt-to-income, %",
+    }
     figure = _base("Vintage year", "Median and interquartile range")
     choices = []
     for measure in (name for name in names if name in set(frame["measure"])):

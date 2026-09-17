@@ -1,38 +1,38 @@
 {
   "as_of": "2024-12",
   "categorical": {
-    "first_time_buyer": "N",
-    "has_mi": "N",
+    "buyer_type": "repeat",
+    "mortgage_insurance": "uninsured",
     "occupancy": "owner_occupied",
     "purpose": "purchase"
   },
   "eliminated": {
-    "credit_spread": "step 6: variance inflation 11.9, above 10",
+    "corporate_bond_spread": "step 6: variance inflation 11.9, above 10",
     "equity_return": "step 8: reversed sign: -0.08563 in the full model, +0.4305 beside the loan block alone",
-    "hpi_growth": "step 9: 1 sd effect -0.004 on even and +0.015 on odd origination years, beside cltv_drift (-0.179), both housing",
-    "inflation": "step 8: reversed sign: -8.333 in the full model, +10.04 beside the loan block alone",
-    "rate_gap": "step 8: reversed sign: +0.01812 in the full model, -0.1903 beside the loan block alone",
-    "term_spread": "step 9: 1 sd effect -0.058 on even and +0.013 on odd origination years, beside policy_rate_gap (+0.119), both interest rates",
-    "vix": "step 8: wrong sign: +0.009349 where - is expected",
-    "vix_gap": "step 8: wrong sign: +0.00254 where - is expected"
+    "house_price_growth": "step 9: 1 sd effect -0.004 on even and +0.015 on odd origination years, beside ltv_change (-0.179), both housing",
+    "inflation_rate": "step 8: reversed sign: -8.333 in the full model, +10.04 beside the loan block alone",
+    "mortgage_rate_decline": "step 8: reversed sign: +0.01812 in the full model, -0.1903 beside the loan block alone",
+    "yield_curve_slope": "step 9: 1 sd effect -0.058 on even and +0.013 on odd origination years, beside policy_rate_change (+0.119), both interest rates",
+    "equity_volatility": "step 8: wrong sign: +0.009349 where - is expected",
+    "volatility_change": "step 8: wrong sign: +0.00254 where - is expected"
   },
-  "formula": "fico_s + orig_ltv + dti + term_years + cltv_drift + unemp_gap + nfci_lagged + policy_rate_gap + sentiment + starts_growth + inflation_gap + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N'))",
+  "formula": "credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + policy_rate_change + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
   "moratorium": "exclude",
   "ordinal": [
     "term_years"
   ],
   "static_continuous": [
-    "fico_s",
-    "orig_ltv",
-    "dti"
+    "credit_score",
+    "original_ltv",
+    "debt_to_income"
   ],
   "time_varying_continuous": [
-    "cltv_drift",
-    "unemp_gap",
-    "nfci_lagged",
-    "policy_rate_gap",
-    "sentiment",
-    "starts_growth",
-    "inflation_gap"
+    "ltv_change",
+    "unemployment_change",
+    "financial_conditions",
+    "policy_rate_change",
+    "consumer_sentiment",
+    "housing_starts_growth",
+    "inflation_change"
   ]
 }

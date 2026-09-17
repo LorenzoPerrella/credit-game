@@ -50,11 +50,11 @@ if TYPE_CHECKING:
     from creditsurv.site.content import Table, Value
     from creditsurv.site.figures import Figure
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.9,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=0.14,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -93,7 +93,7 @@ def published(
             families={"weibull": train_hazard, "loglogistic": train_hazard * 1.1},
         ),
         coefficient_view(fitted, split.train, COVARIATES),
-        covariates_over_time(split, ["cltv_drift", "unemp_gap"]),
+        covariates_over_time(split, ["ltv_change", "unemployment_change"]),
         *projection_views(
             fitted,
             origination_book(split.train, macro_module, 40),
@@ -222,10 +222,10 @@ def test_age_bands_are_drawn_in_order_of_age(published: Sources) -> None:
 
 
 def test_a_categorical_term_is_named_against_its_reference() -> None:
-    term = "C(purpose, Treatment('purchase'))[T.refinance_cashout]"
+    term = "C(purpose, Treatment('purchase'))[T.cash_out_refinance]"
 
-    assert term_label(term) == "purpose: refinance_cashout (against purchase)"
-    assert term_label("fico_s") == "fico_s"
+    assert term_label(term) == "purpose: cash_out_refinance (against purchase)"
+    assert term_label("credit_score") == "credit_score"
 
 
 # ----- the hook ----------------------------------------------------------------------------

@@ -27,14 +27,14 @@ from fixtures import DEFAULT_PARAMS, build_panel
 if TYPE_CHECKING:
     from pathlib import Path
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
 FORMULA = " + ".join(COVARIATES)
 HORIZON = 60
 
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.9,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=0.14,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -56,7 +56,7 @@ def new_business(panel: pd.DataFrame, macro_module: pd.DataFrame) -> pd.DataFram
     """Loans written at the reporting date, so the whole path is forward-looking."""
     loans = at_origination(panel).head(300).copy()
     loans["age"] = 0
-    loans["orig_period"] = macro_module.index.max() + 1
+    loans["origination_period"] = macro_module.index.max() + 1
     loans["period"] = macro_module.index.max() + 1
     return loans
 
@@ -146,18 +146,18 @@ def test_adverse_scenario_moves_the_macro_series(macro_module: pd.DataFrame) -> 
     last_observed = macro_module.iloc[-1]
 
     assert extended["unemployment_rate"].iloc[-1] > last_observed["unemployment_rate"]
-    assert extended["hpi"].iloc[-1] < last_observed["hpi"]
+    assert extended["house_price_index"].iloc[-1] < last_observed["house_price_index"]
 
 
 def test_house_price_shocks_are_proportional(macro_module: pd.DataFrame) -> None:
     """A house price index is a level, so a twenty percent fall must mean the same
     thing whatever the index happens to be."""
-    scenario = Scenario(name="crash", shocks={"hpi": [-0.5]})
+    scenario = Scenario(name="crash", shocks={"house_price_index": [-0.5]})
 
     extended = extend_macro(macro_module, 3, scenario)
 
-    expected = float(macro_module["hpi"].iloc[-1]) * 0.5
-    assert extended["hpi"].iloc[-1] == pytest.approx(expected)
+    expected = float(macro_module["house_price_index"].iloc[-1]) * 0.5
+    assert extended["house_price_index"].iloc[-1] == pytest.approx(expected)
 
 
 def test_projection_requires_an_age_column(
@@ -229,6 +229,6 @@ def test_the_scenario_legs_say_what_moves_and_what_reads_it() -> None:
 
     assert set(legs.index) == set(ADVERSE.shocks)
     assert "nothing" not in set(legs["read by"])
-    assert legs.loc["hpi", "move"] == "-20%"
+    assert legs.loc["house_price_index", "move"] == "-20%"
     assert legs.loc["unemployment_rate", "move"] == "+4.0"
     assert legs.loc["unemployment_rate", "month reached"] == 12

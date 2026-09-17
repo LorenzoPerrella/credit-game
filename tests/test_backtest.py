@@ -29,14 +29,14 @@ from fixtures import DEFAULT_PARAMS, build_panel
 if TYPE_CHECKING:
     from pathlib import Path
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
 FORMULA = " + ".join(COVARIATES)
 AS_OF = pd.Period("2008-12", freq="M")
 
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.9,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=0.14,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -61,7 +61,7 @@ def _cells() -> pd.DataFrame:
             ),
             "age": [0, 6, 12, 24, 36],
             "event": [False, True, False, True, False],
-            "n": [1000, 10, 900, 8, 700],
+            "loan_months": [1000, 10, 900, 8, 700],
         }
     )
 
@@ -215,18 +215,30 @@ def test_time_varying_covariates_are_labelled_not_flagged() -> None:
     not news and must not read as a model defect."""
     rng = np.random.default_rng(3)
     train = pd.DataFrame(
-        {"fico_s": rng.normal(size=3000), "unemp_gap": rng.normal(size=3000), "n": 1.0}
+        {
+            "credit_score": rng.normal(size=3000),
+            "unemployment_change": rng.normal(size=3000),
+            "loan_months": 1.0,
+        }
     )
     test = pd.DataFrame(
-        {"fico_s": rng.normal(size=3000), "unemp_gap": rng.normal(4.0, size=3000), "n": 1.0}
+        {
+            "credit_score": rng.normal(size=3000),
+            "unemployment_change": rng.normal(4.0, size=3000),
+            "loan_months": 1.0,
+        }
     )
 
     table = stability_report(
-        train, test, ["fico_s", "unemp_gap"], time_varying=["unemp_gap"], weights_col="n"
+        train,
+        test,
+        ["credit_score", "unemployment_change"],
+        time_varying=["unemployment_change"],
+        weights_col="loan_months",
     ).set_index("covariate")
 
-    assert table.loc["unemp_gap", "interpretation"] == "expected to move"
-    assert table.loc["fico_s", "interpretation"] == "stable"
+    assert table.loc["unemployment_change", "interpretation"] == "expected to move"
+    assert table.loc["credit_score", "interpretation"] == "stable"
 
 
 # --------------------------------------------------------------------------------------
@@ -238,7 +250,7 @@ def _encoded(panel: pd.DataFrame) -> pd.DataFrame:
     """The fixture book as a weighted, interval-censored panel."""
     from creditsurv.data.panel import to_interval_censored
 
-    return to_interval_censored(panel.assign(n=1))
+    return to_interval_censored(panel.assign(loan_months=1))
 
 
 def test_lookahead_check_catches_a_corrupted_split(panel: pd.DataFrame) -> None:
@@ -260,7 +272,7 @@ def test_the_backtest_fits_once_and_scores_what_follows(panel: pd.DataFrame) -> 
     assert (split.test["period"] > AS_OF).all()
     assert fitted.n_episodes == len(split.train)
     assert result.expected_defaults > 0
-    assert result.loan_months == int(split.test["n"].sum())
+    assert result.loan_months == int(split.test["loan_months"].sum())
 
 
 def test_a_model_from_the_wrong_panel_is_refused(panel: pd.DataFrame) -> None:
@@ -271,7 +283,7 @@ def test_a_model_from_the_wrong_panel_is_refused(panel: pd.DataFrame) -> None:
     than a shortcut.
     """
     encoded = _encoded(panel)
-    everything = fit_aft(encoded, COVARIATES, FORMULA, weights_col="n")
+    everything = fit_aft(encoded, COVARIATES, FORMULA, weights_col="loan_months")
 
     with pytest.raises(ValueError, match="scoring its own training data"):
         run_backtest(encoded, AS_OF, COVARIATES, FORMULA, fitted=everything)
@@ -280,7 +292,7 @@ def test_a_model_from_the_wrong_panel_is_refused(panel: pd.DataFrame) -> None:
 def test_passing_the_fitted_model_in_does_not_refit(panel: pd.DataFrame) -> None:
     encoded = _encoded(panel)
     split = cell_split(encoded, AS_OF)
-    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="n")
+    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="loan_months")
 
     _, returned, _ = run_backtest(encoded, AS_OF, COVARIATES, FORMULA, fitted=fitted)
 
@@ -311,7 +323,7 @@ def test_the_over_time_table_covers_the_whole_test_window(panel: pd.DataFrame) -
 def test_score_refuses_an_empty_test_half(panel: pd.DataFrame) -> None:
     encoded = _encoded(panel)
     split = cell_split(encoded, AS_OF)
-    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="n")
+    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="loan_months")
 
     with pytest.raises(ValueError, match="No exposure after"):
         score(fitted, split.test.iloc[:0], COVARIATES, as_of=AS_OF)
@@ -380,7 +392,7 @@ def test_the_in_sample_years_arrive_beside_the_out_of_time_result(panel: pd.Data
     training_years = set(pd.PeriodIndex(split.train["period"]).year)
 
     assert set(table["group"]) == training_years
-    assert table["exposure"].sum() == pytest.approx(float(split.train["n"].sum()))
+    assert table["exposure"].sum() == pytest.approx(float(split.train["loan_months"].sum()))
     assert (table["group"] <= AS_OF.year).all(), "in-sample must stop at the reporting date"
 
 
@@ -399,13 +411,13 @@ def test_splitting_the_cells_first_gives_the_halves_splitting_the_panel_would(
     vintages = [1997 * 12, 2006 * 12, 2007 * 12]
     cells = pd.DataFrame(
         {
-            "orig_month": [month for month in vintages for _ in range(8)],
-            "purpose": pd.Categorical(["purchase", "refinance_cashout"] * 12),
-            "fico_s": [0.4] * 24,
-            "orig_ltv": [85.0] * 24,
+            "origination_month": [month for month in vintages for _ in range(8)],
+            "purpose": pd.Categorical(["purchase", "cash_out_refinance"] * 12),
+            "credit_score": [0.4] * 24,
+            "original_ltv": [85.0] * 24,
             "age": list(range(8)) * 3,
             "event": ([False] * 7 + [True]) * 3,
-            "n": [50] * 24,
+            "loan_months": [50] * 24,
         }
     )
     as_of = pd.Period("2007-03", freq="M")

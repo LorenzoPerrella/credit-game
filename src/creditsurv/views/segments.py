@@ -91,11 +91,6 @@ def _term(frame: pd.DataFrame) -> pd.Series:
     return pd.Series(labelled, index=frame.index, name="term_years")
 
 
-#: Credit score bands, shown as scores rather than as the standardised ``fico_s``.
-def _score(value: float) -> str:
-    return f"{700 + 50 * value:.0f}"
-
-
 def _number(value: float) -> str:
     return f"{value:.0f}"
 
@@ -106,41 +101,43 @@ SEGMENTS: Final[dict[str, Segment]] = {
         Segment("purpose", "Loan purpose", ("purpose",), _categorical("purpose")),
         Segment("occupancy", "Occupancy", ("occupancy",), _categorical("occupancy")),
         Segment(
-            "has_mi",
+            "mortgage_insurance",
             "Mortgage insurance",
-            ("has_mi",),
-            _categorical("has_mi", {"N": "no insurance", "Y": "insured"}),
+            ("mortgage_insurance",),
+            _categorical("mortgage_insurance", {"uninsured": "no insurance", "insured": "insured"}),
         ),
         Segment(
-            "first_time_buyer",
+            "buyer_type",
             "First-time buyer",
-            ("first_time_buyer",),
-            _categorical("first_time_buyer", {"N": "repeat buyer", "Y": "first-time buyer"}),
+            ("buyer_type",),
+            _categorical(
+                "buyer_type", {"repeat": "repeat buyer", "first_time": "first-time buyer"}
+            ),
         ),
         Segment("term", "Original term", ("term_years",), _term),
         Segment(
             "fico",
             "Credit score band",
-            ("fico_s",),
-            _banded("fico_s", PRODUCTION_EDGES["fico_s"], _score),
+            ("credit_score",),
+            _banded("credit_score", PRODUCTION_EDGES["credit_score"], _number),
         ),
         Segment(
             "ltv",
             "Loan-to-value band",
-            ("orig_ltv",),
-            _banded("orig_ltv", PRODUCTION_EDGES["orig_ltv"], _number),
+            ("original_ltv",),
+            _banded("original_ltv", PRODUCTION_EDGES["original_ltv"], _number),
         ),
         Segment(
             "dti",
             "Debt-to-income band",
-            ("dti",),
-            _banded("dti", PRODUCTION_EDGES["dti"], _number),
+            ("debt_to_income",),
+            _banded("debt_to_income", PRODUCTION_EDGES["debt_to_income"], _number),
         ),
         Segment(
             "vintage_era",
             "Vintage era",
-            ("orig_period",),
-            _years("orig_period", (1999, 2004, 2009, 2015, 2020, 2027)),
+            ("origination_period",),
+            _years("origination_period", (1999, 2004, 2009, 2015, 2020, 2027)),
         ),
     )
 }

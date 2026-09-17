@@ -69,15 +69,18 @@ log = logging.getLogger(__name__)
 #: Loan characteristics in the cell key that no earlier specification screened, with their
 #: reference levels. Admitted to the key for the validation's M3; step 7 is where they meet
 #: the same test as every other candidate, whatever it says.
-CANDIDATE_CATEGORICAL: Final[dict[str, str]] = {"has_mi": "N", "first_time_buyer": "N"}
+CANDIDATE_CATEGORICAL: Final[dict[str, str]] = {
+    "mortgage_insurance": "uninsured",
+    "buyer_type": "repeat",
+}
 
 #: The loan block the selection starts from and protects from variance inflation, fixed
 #: here as ``config.MACRO_CANDIDATES`` fixes the macro block. ``config.STATIC_CONTINUOUS``,
 #: ``config.ORDINAL`` and ``config.CATEGORICAL_REFERENCE`` hold what survived. Were the
 #: candidates read back from them, a covariate the selection once removed could never be
-#: considered again, and ``has_mi`` and ``first_time_buyer``, admitted by the first run under
+#: considered again, and ``mortgage_insurance`` and ``buyer_type``, admitted by the first run under
 #: this rule, would enter the next one twice.
-LOAN_CONTINUOUS: Final[tuple[str, ...]] = ("fico_s", "orig_ltv", "dti")
+LOAN_CONTINUOUS: Final[tuple[str, ...]] = ("credit_score", "original_ltv", "debt_to_income")
 LOAN_ORDINAL: Final[tuple[str, ...]] = ("term_years",)
 BASE_CATEGORICAL: Final[dict[str, str]] = {"purpose": "purchase", "occupancy": "owner_occupied"}
 
@@ -463,13 +466,13 @@ def _worst(
     * **A backwards sign** against a declared prior. It outranks everything else: it says
       the specification is wrong, not that the evidence is thin.
     * **A reversed sign** on a covariate with no declared prior: its coefficient in the
-      full model points the other way from its coefficient ``alone`` beside the loan block
-      at step 7. This is the first run's marginal/conditional reversal rule, which removed
-      ``credit_spread`` and ``term_spread`` and which ``docs/variable_selection.md`` states
-      "so it can be applied consistently rather than invoked when convenient". A covariate
-      whose conditional effect contradicts its own is carrying something other than what
-      its name says. The first version of this procedure did not run it; its first
-      complete run kept three such covariates.
+      full model points the other way from its coefficient ``alone`` beside the loan block at step
+      7. This is the first run's marginal/conditional reversal rule, which removed
+      ``corporate_bond_spread`` and ``yield_curve_slope`` and which ``docs/variable_selection.md``
+      states "so it can be applied consistently rather than invoked when convenient". A covariate
+      whose conditional effect contradicts its own is carrying something other than what its name
+      says. The first version of this procedure did not run it; its first complete run kept three
+      such covariates.
     * **A p-value above 0.05**, which at this sample size almost nothing reaches.
 
     Categorical terms carry no expected sign, are not screened alone, and at this sample

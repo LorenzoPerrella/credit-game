@@ -155,12 +155,19 @@ _STATE_TO_REGION: Final[dict[str, str]] = {
 
 _PURPOSE = {
     "P": "purchase",
-    "N": "refinance_rate_term",
-    "C": "refinance_cashout",
-    "R": "refinance_rate_term",
+    "N": "rate_term_refinance",
+    "C": "cash_out_refinance",
+    "R": "rate_term_refinance",
 }
-_OCCUPANCY = {"P": "owner_occupied", "S": "second_home", "I": "investor"}
-_CHANNEL = {"R": "retail", "B": "broker", "C": "correspondent", "T": "correspondent"}
+_OCCUPANCY = {"P": "owner_occupied", "S": "second_home", "I": "investment_property"}
+#: As the aggregation maps it: broker, correspondent and third party are one level.
+_CHANNEL = {
+    "R": "retail",
+    "B": "broker_or_correspondent",
+    "C": "broker_or_correspondent",
+    "T": "broker_or_correspondent",
+}
+_BUYER = {"Y": "first_time", "N": "repeat"}
 
 
 class FreddieMacDataMissingError(FileNotFoundError):
@@ -266,7 +273,7 @@ def to_canonical_panel(
 
     panel = panel.rename(columns={"loan_identifier": "loan_id", "loan_age": "age"})
     panel["age"] = panel["age"].astype("int64")
-    panel["orig_period"] = panel["period"] - panel["age"]
+    panel["origination_period"] = panel["period"] - panel["age"]
     panel["event"] = events["defaulted"].to_numpy()
     panel["prepaid"] = events["prepaid"].to_numpy()
 
@@ -294,19 +301,18 @@ def _loan_attributes(origination: pd.DataFrame) -> pd.DataFrame:
         {
             "loan_id": origination["loan_identifier"],
             "credit_score": score,
-            "fico_s": (score - 700.0) / 50.0,
-            "orig_ltv": origination["original_ltv"],
-            "dti": origination["original_dti"],
-            "orig_upb": origination["original_upb"],
-            "log_orig_upb": np.log(origination["original_upb"]),
+            "original_ltv": origination["original_ltv"],
+            "debt_to_income": origination["original_dti"],
+            "original_balance": origination["original_upb"],
+            "log_original_balance": np.log(origination["original_upb"]),
             "note_rate": origination["original_interest_rate"],
             "purpose": origination["loan_purpose"].map(_PURPOSE),
             "occupancy": origination["occupancy_status"].map(_OCCUPANCY),
             "channel": origination["channel"].map(_CHANNEL),
             "region": origination["property_state"].map(_STATE_TO_REGION),
-            "first_time_buyer": origination["first_time_homebuyer_indicator"].where(
-                origination["first_time_homebuyer_indicator"].isin(["Y", "N"]), "N"
-            ),
+            # Mapped as the aggregation maps it: a 9, "not available", drops the loan rather than
+            # reading as a repeat buyer.
+            "buyer_type": origination["first_time_homebuyer_indicator"].map(_BUYER),
         }
     )
     # A loan missing a covariate cannot be modelled, and imputing underwriting

@@ -1,10 +1,10 @@
 """The stress scenario and the fitted specification have to describe the same model.
 
-The validation found the adverse scenario shocking four series of which two fed no
-covariate in the final formula, while two of the model's four macro covariates -- ``vix``,
-the largest standardised effect, among them -- had no shocked path. The published
-multiplier understated the model's own sensitivity as a result, and nothing failed: the
-scenario predated the specification by three days and simply was not updated.
+The validation found the adverse scenario shocking four series of which two fed no covariate in the
+final formula, while two of the model's four macro covariates -- ``equity_volatility``, the largest
+standardised effect, among them -- had no shocked path. The published multiplier understated the
+model's own sensitivity as a result, and nothing failed: the scenario predated the specification by
+three days and simply was not updated.
 
 These tests make the next drift a failure instead of a finding.
 """
@@ -52,7 +52,7 @@ def _build(macro: pd.DataFrame) -> set[str]:
     """Which derived covariates the builder produces from this macro panel."""
     ages = pd.Series(range(12, 24))
     origination = pd.Series([2005 * 12] * len(ages))
-    episodes = pd.DataFrame({"orig_ltv": [80.0] * len(ages), "term_years": [30] * len(ages)})
+    episodes = pd.DataFrame({"original_ltv": [80.0] * len(ages), "term_years": [30] * len(ages)})
     add_macro_family(episodes, macro, origination, origination + ages, lag_months=3)
     return set(episodes.columns) & set(MACRO_DERIVED)
 

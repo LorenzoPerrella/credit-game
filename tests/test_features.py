@@ -45,15 +45,17 @@ def macro() -> pd.DataFrame:
     steps = np.arange(len(index), dtype=float)
     columns = {
         "unemployment_rate": 4.0 + steps,
-        "hpi": 100.0 + steps,
+        "house_price_index": 100.0 + steps,
         "mortgage_rate_30y": 6.0 + steps,
-        "nfci": steps,
+        "financial_conditions_index": steps,
     }
     # Distinct offsets so a covariate reading the wrong series is visible, and all
     # strictly increasing so a shift in either direction shows up as a wrong value.
     for offset, name in enumerate(set(LAGGED_SERIES + CONTEMPORANEOUS_SERIES) - set(columns)):
         columns[name] = 200.0 + 10.0 * offset + steps
-    for offset, name in enumerate(("policy_rate", "cpi", "sentiment", "housing_starts")):
+    for offset, name in enumerate(
+        ("fed_funds_rate", "consumer_price_index", "consumer_sentiment_index", "housing_starts")
+    ):
         columns.setdefault(name, 300.0 + 10.0 * offset + steps)
     return pd.DataFrame(columns, index=index)
 
@@ -70,16 +72,15 @@ def test_revised_series_are_shifted_by_the_lag(macro: pd.DataFrame) -> None:
 def test_no_series_is_read_in_the_month_it_is_quoted(macro: pd.DataFrame) -> None:
     """A market quote is known in real time, and still cannot cause a default that month.
 
-    A loan is 90+ days delinquent in month t because payments were missed in t-3 to t-1,
-    so no reading from month t can be what caused it. ``vix`` was read contemporaneously,
-    and the backtest's predicted default spiked on the two VIX peaks of the test window
-    while realised default did not move. The lag reaches every series, not only the one
-    that was noticed.
+    A loan is 90+ days delinquent in month t because payments were missed in t-3 to t-1, so no
+    reading from month t can be what caused it. ``equity_volatility`` was read contemporaneously,
+    and the backtest's predicted default spiked on the two VIX peaks of the test window while
+    realised default did not move. The lag reaches every series, not only the one that was noticed.
     """
     lagged = lag_macro(macro, lag_months=3)
 
     assert CONTEMPORANEOUS_SERIES == ()
-    for column in ("vix", "credit_spread", "mortgage_rate_30y", "policy_rate"):
+    for column in ("vix_index", "baa_treasury_spread", "mortgage_rate_30y", "fed_funds_rate"):
         assert value_at(lagged, "2000-06", column) == value_at(macro, "2000-03", column)
 
 
@@ -96,10 +97,10 @@ def _panel(macro: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "loan_id": 1,
-            "orig_period": pd.Period("2000-06", freq="M"),
+            "origination_period": pd.Period("2000-06", freq="M"),
             "period": periods,
             "age": range(len(periods)),
-            "orig_ltv": 80.0,
+            "original_ltv": 80.0,
             "note_rate": 7.0,
         }
     )
@@ -110,25 +111,25 @@ def test_covariates_are_built_from_lagged_macro(macro: pd.DataFrame) -> None:
     enriched = add_macro_covariates(_panel(macro), macro, lag_months=3)
 
     at_origination = enriched.iloc[0]
-    # unemp_gap compares period and origination, both lagged, so it starts at zero.
-    assert at_origination["unemp_gap"] == pytest.approx(0.0)
-    # refi_incentive uses the contemporaneous rate: 7.0 - mortgage_rate(2000-06).
+    # unemployment_change compares period and origination, both lagged, so it starts at zero.
+    assert at_origination["unemployment_change"] == pytest.approx(0.0)
+    # refinance_incentive uses the contemporaneous rate: 7.0 - mortgage_rate(2000-06).
     expected = 7.0 - value_at(macro, "2000-06", "mortgage_rate_30y")
-    assert at_origination["refi_incentive"] == pytest.approx(expected)
+    assert at_origination["refinance_incentive"] == pytest.approx(expected)
 
 
 def test_cltv_drift_starts_at_zero(macro: pd.DataFrame) -> None:
     """Zero at origination by construction: the level and the movement are separable."""
     enriched = add_macro_covariates(_panel(macro), macro, lag_months=3)
 
-    assert enriched.iloc[0]["cltv_drift"] == pytest.approx(0.0)
+    assert enriched.iloc[0]["ltv_change"] == pytest.approx(0.0)
 
 
 def test_rising_prices_reduce_indexed_leverage(macro: pd.DataFrame) -> None:
     """Mark-to-market leverage must fall as the index rises, not rise with it."""
     enriched = add_macro_covariates(_panel(macro), macro, lag_months=3)
 
-    assert enriched["cltv_drift"].is_monotonic_decreasing
+    assert enriched["ltv_change"].is_monotonic_decreasing
     assert enriched.iloc[-1]["indexed_cltv"] < 80.0
 
 
@@ -137,10 +138,10 @@ def test_rows_without_lagged_history_are_dropped_not_imputed(macro: pd.DataFrame
     panel = pd.DataFrame(
         {
             "loan_id": [1],
-            "orig_period": [pd.Period("2000-01", freq="M")],
+            "origination_period": [pd.Period("2000-01", freq="M")],
             "period": [pd.Period("2000-01", freq="M")],
             "age": [0],
-            "orig_ltv": [80.0],
+            "original_ltv": [80.0],
             "note_rate": [7.0],
         }
     )
@@ -149,21 +150,21 @@ def test_rows_without_lagged_history_are_dropped_not_imputed(macro: pd.DataFrame
 
 
 def test_binning_uses_band_midpoints() -> None:
-    frame = pd.DataFrame({"dti": [21.0, 27.9]})
+    frame = pd.DataFrame({"debt_to_income": [21.0, 27.9]})
 
-    binned = bin_covariates(frame, edges={"dti": (10.0, 20.0, 28.0, 36.0)})
+    binned = bin_covariates(frame, edges={"debt_to_income": (10.0, 20.0, 28.0, 36.0)})
 
     # Both values fall in (20, 28], whose midpoint is 24.
-    assert binned["dti_binned"].tolist() == [24.0, 24.0]
+    assert binned["debt_to_income_binned"].tolist() == [24.0, 24.0]
 
 
 def test_binning_clips_rather_than_drops_outliers() -> None:
-    frame = pd.DataFrame({"dti": [-50.0, 900.0]})
+    frame = pd.DataFrame({"debt_to_income": [-50.0, 900.0]})
 
-    binned = bin_covariates(frame, edges={"dti": (10.0, 20.0, 36.0)})
+    binned = bin_covariates(frame, edges={"debt_to_income": (10.0, 20.0, 36.0)})
 
-    assert binned["dti_binned"].tolist() == [15.0, 28.0]
-    assert not binned["dti_binned"].isna().any()
+    assert binned["debt_to_income_binned"].tolist() == [15.0, 28.0]
+    assert not binned["debt_to_income_binned"].isna().any()
 
 
 def test_binning_covers_every_modelled_continuous_covariate() -> None:
@@ -181,8 +182,8 @@ def test_binning_covers_every_modelled_continuous_covariate() -> None:
 def test_binned_formula_rewrites_only_continuous_terms() -> None:
     rewritten = binned_formula(default_formula())
 
-    assert "fico_s_binned" in rewritten
-    assert "cltv_drift_binned" in rewritten
+    assert "credit_score_binned" in rewritten
+    assert "ltv_change_binned" in rewritten
     # Categoricals are already discrete and must be left alone.
     assert "C(purpose, Treatment('purchase'))" in rewritten
     assert "purpose_binned" not in rewritten

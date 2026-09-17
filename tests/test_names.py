@@ -54,32 +54,34 @@ def _series() -> set[str]:
 
 
 @pytest.mark.parametrize("name", sorted(_covariates()))
-def test_every_covariate_the_code_names_is_registered(name: str) -> None:
-    assert names.variable(name).kind in (Kind.LOAN, Kind.MACRO)
+def test_every_covariate_the_code_names_is_registered_under_its_current_name(name: str) -> None:
+    assert name in names.VARIABLES, f"{name} is a former name or not registered"
+    assert names.VARIABLES[name].kind in (Kind.LOAN, Kind.MACRO)
 
 
 @pytest.mark.parametrize("name", sorted(_series()))
-def test_every_macro_series_the_code_names_is_registered(name: str) -> None:
-    assert names.variable(name, kind=Kind.SERIES).kind is Kind.SERIES
+def test_every_macro_series_the_code_names_is_registered_under_its_current_name(name: str) -> None:
+    assert name in names.VARIABLES, f"{name} is a former name or not registered"
+    assert names.VARIABLES[name].kind is Kind.SERIES
 
 
 _THEN: re.Pattern[str] = re.compile(r"THEN '([^']*)'")
 
 
 @pytest.mark.parametrize("name", sorted(_CATEGORICAL))
-def test_every_level_the_aggregation_produces_has_a_label(name: str) -> None:
-    entry = names.variable(name)
+def test_every_level_the_aggregation_produces_is_a_current_level(name: str) -> None:
+    entry = names.VARIABLES[name]
     produced = set(_THEN.findall(_CATEGORICAL[name]))
     if name == "region":
         produced = {"Northeast", "Midwest", "South", "West", "Other"}
 
     for code in produced:
-        assert entry.level(code).label
+        assert code in {level.code for level in entry.levels}, f"{name}: {code} is not current"
 
 
 def test_every_reference_level_is_a_level_of_its_variable() -> None:
     for name, reference in {**CATEGORICAL_REFERENCE, **BASE_CATEGORICAL}.items():
-        assert names.variable(name).level(reference)
+        assert reference in {level.code for level in names.VARIABLES[name].levels}
 
 
 def test_labels_are_unique_among_what_a_reader_compares() -> None:

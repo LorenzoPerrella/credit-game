@@ -55,7 +55,7 @@ def test_categorical_profile_reports_share_and_default_rate(tmp_path: Path) -> N
 
     assert float(table.loc[table.index == "purchase", "share"].iloc[0]) == pytest.approx(0.8)
     assert float(
-        table.loc[table.index == "refinance_cashout", "default_rate"].iloc[0]
+        table.loc[table.index == "cash_out_refinance", "default_rate"].iloc[0]
     ) == pytest.approx(0.5)
 
 
@@ -67,7 +67,7 @@ def test_a_rare_level_is_marked_for_merging(tmp_path: Path) -> None:
 
     table = profile_categorical("purpose", *_sources(tmp_path)).set_index("level")
 
-    verdict = str(table.loc[table.index == "refinance_cashout", "verdict"].iloc[0])
+    verdict = str(table.loc[table.index == "cash_out_refinance", "verdict"].iloc[0])
     assert verdict == "merge: below minimum share"
 
 
@@ -94,7 +94,7 @@ def test_continuous_profile_detects_monotone_risk(tmp_path: Path) -> None:
     ]
     _ingested(tmp_path, origination, performance)
 
-    table = profile_continuous("fico_s", (-1.6, -0.8, 0.0), *_sources(tmp_path))
+    table = profile_continuous("credit_score", (620.0, 660.0, 700.0), *_sources(tmp_path))
 
     assert is_monotonic(table)
 
@@ -107,7 +107,7 @@ def test_a_non_monotone_covariate_is_reported_as_such(tmp_path: Path) -> None:
     Scores are placed at the centre of each band so the assignment is unambiguous,
     and defaults are put in alternating bands so the rate rises and falls.
     """
-    # fico_s = (fico - 700) / 50, bands at -1.6, -0.8, 0.0.
+    # Bands at 620, 660 and 700 points.
     scores = {0: "610", 1: "640", 2: "680", 3: "750"}
     defaulting_bands = {0, 2}
 
@@ -126,7 +126,7 @@ def test_a_non_monotone_covariate_is_reported_as_such(tmp_path: Path) -> None:
             )
     _ingested(tmp_path, origination, performance)
 
-    table = profile_continuous("fico_s", (-1.6, -0.8, 0.0), *_sources(tmp_path))
+    table = profile_continuous("credit_score", (620.0, 660.0, 700.0), *_sources(tmp_path))
 
     assert not is_monotonic(table)
 
@@ -141,7 +141,7 @@ def test_missing_is_excluded_from_the_monotonicity_check(tmp_path: Path) -> None
     ]
     _ingested(tmp_path, origination, performance)
 
-    table = profile_continuous("fico_s", (-1.6, 0.0), *_sources(tmp_path))
+    table = profile_continuous("credit_score", (-1.6, 0.0), *_sources(tmp_path))
 
     assert (table["band"] >= 0).all() or is_monotonic(table)
 
@@ -153,7 +153,7 @@ def test_cut_points_come_back_ordered(tmp_path: Path) -> None:
     performance = [performance_row(f"F{i:09d}", "201503", "0") for i in range(50)]
     _ingested(tmp_path, origination, performance)
 
-    edges = propose_cut_points("orig_ltv", *_sources(tmp_path))
+    edges = propose_cut_points("original_ltv", *_sources(tmp_path))
 
     assert edges == sorted(edges)
     assert len(edges) > 2

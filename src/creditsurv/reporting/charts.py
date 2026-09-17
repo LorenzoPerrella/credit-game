@@ -173,7 +173,7 @@ _TREATMENT = re.compile(r"C\((\w+),\s*Treatment\('[^']*'\)\)\[T\.([^\]]+)\]")
 def _label(parameter: str, covariate: str) -> str:
     """Turn a formulaic term into something readable on an axis.
 
-    ``C(purpose, Treatment('purchase'))[T.refinance_cashout]`` carries the encoding
+    ``C(purpose, Treatment('purchase'))[T.cash_out_refinance]`` carries the encoding
     scheme, the reference level and the level itself. Only the last two are news
     once the reference is stated in the caption.
     """
@@ -429,7 +429,16 @@ def default_rate_and_unemployment(defaults: pd.DataFrame, macro: pd.DataFrame, p
 
 def macro_panel(macro: pd.DataFrame, path: Path) -> Path:
     """The macroeconomic series the model reads, one panel each."""
-    columns = [c for c in ("unemployment_rate", "hpi", "mortgage_rate_30y", "nfci") if c in macro]
+    columns = [
+        c
+        for c in (
+            "unemployment_rate",
+            "house_price_index",
+            "mortgage_rate_30y",
+            "financial_conditions_index",
+        )
+        if c in macro
+    ]
     figure, axes = plt.subplots(
         len(columns), 1, figsize=(8.0, 1.7 * len(columns) + 1.0), sharex=True, facecolor=SURFACE
     )
@@ -437,9 +446,9 @@ def macro_panel(macro: pd.DataFrame, path: Path) -> Path:
 
     labels = {
         "unemployment_rate": "Unemployment rate (%)",
-        "hpi": "House price index (Jan 2000 = 100)",
+        "house_price_index": "House price index (Jan 2000 = 100)",
         "mortgage_rate_30y": "30-year mortgage rate (%)",
-        "nfci": "Financial conditions (0 = average)",
+        "financial_conditions_index": "Financial conditions (0 = average)",
     }
     for axis, name in zip(np.atleast_1d(axes), columns, strict=True):
         axis.set_facecolor(SURFACE)

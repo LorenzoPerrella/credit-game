@@ -146,7 +146,7 @@ def distribution_comparison(
     Each family is also held to the expected signs. A family that fits worse *and* points a
     declared prior the wrong way is rejected twice, for independent reasons: the
     validation's log-logistic fit on the specification before it was 623,126 AIC points
-    behind the Weibull and turned ``orig_ltv`` around.
+    behind the Weibull and turned ``original_ltv`` around.
     """
     rows = []
     for distribution in distributions:
@@ -248,7 +248,7 @@ def likelihood_ratio_test(
 #: late, 0.9522 against 0.9533 surviving at 60 months and 0.9258 against 0.9246 at 91 --
 #: and no scale factor maps one such curve onto the other, so it is where a shape that
 #: varies has something to find. The report used to relax the first covariate of the
-#: specification, ``fico_s``, and so answered a question nobody had asked.
+#: specification, ``credit_score``, and so answered a question nobody had asked.
 SHAPE_COVARIATE: Final = "occupancy"
 
 
@@ -394,22 +394,23 @@ PVALUE_THRESHOLD: Final = 0.05
 #: eliminated on the sign alone. A model that says higher credit scores default sooner
 #: fits its sample and will not survive the next one.
 EXPECTED_SIGNS: Final[dict[str, int]] = {
-    "fico_s": +1,  # better credit survives longer
-    "orig_ltv": -1,  # more leverage fails sooner
-    "orig_cltv": -1,
-    "dti": -1,  # more debt burden fails sooner
-    "cltv_drift": -1,  # leverage rising after origination fails sooner
-    "unemp_gap": -1,  # unemployment above origination fails sooner
-    "nfci_lagged": -1,  # tighter financial conditions fail sooner
-    "mi_percent": +1,  # insured loans are underwritten against a stricter standard
+    "credit_score": +1,  # better credit survives longer
+    "original_ltv": -1,  # more leverage fails sooner
+    "original_cltv": -1,
+    "debt_to_income": -1,  # more debt burden fails sooner
+    "ltv_change": -1,  # leverage rising after origination fails sooner
+    "unemployment_change": -1,  # unemployment above origination fails sooner
+    "financial_conditions": -1,  # tighter financial conditions fail sooner
+    "insurance_coverage": +1,  # insured loans are underwritten against a stricter standard
     # Macro candidates. Only where theory actually commits to a direction: a
     # covariate listed here with no clear prior would be eliminated for disagreeing
     # with a guess, which is worse than not testing it.
-    "vix": -1,  # high implied volatility is a stressed economy
-    "vix_gap": -1,  # volatility risen since origination is stress the loan was not written in
-    "hpi_growth": +1,  # rising house prices build equity
+    "equity_volatility": -1,  # high implied volatility is a stressed economy
+    # Volatility risen since origination is stress the loan was not written in.
+    "volatility_change": -1,
+    "house_price_growth": +1,  # rising house prices build equity
     #
-    # ``rate_gap`` and ``policy_rate_gap`` were briefly given revised signs here, on
+    # ``mortgage_rate_decline`` and ``policy_rate_change`` were briefly given revised signs here, on
     # the strength of their marginal orderings and a mechanism about fixed-rate books.
     # That revision is **retracted**: conditional on the rest of the specification both
     # effects are inside the noise, and the marginal ordering that justified it was the
@@ -419,17 +420,17 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
 #: Covariates deliberately left out of ``EXPECTED_SIGNS``, with the reason. Listed so
 #: the omission reads as a decision rather than an oversight.
 #:
-#: ``rate_gap`` is the near miss. The sign above is the dominant channel -- rates
+#: ``mortgage_rate_decline`` is the near miss. The sign above is the dominant channel -- rates
 #: below the note rate mean refinancing is available and the payment burden is
 #: easier -- but the opposite channel is real: the borrowers who *cannot* refinance
 #: when everyone else can are adversely selected, and they are the ones left in the
 #: book. The constraint is kept because the first channel dominates in the
 #: literature, and this note is here because it is a prior, not a finding.
 AMBIGUOUS_SIGNS: Final[dict[str, str]] = {
-    "term_spread": "a steep curve is both cheap short funding and an expected slowdown",
-    "inflation": "erodes the real debt, squeezes the real income",
-    "inflation_gap": "the same two channels, measured against the loan's own start",
-    "dti": "kept as negative, but it is measured at origination and never updated",
+    "yield_curve_slope": "a steep curve is both cheap short funding and an expected slowdown",
+    "inflation_rate": "erodes the real debt, squeezes the real income",
+    "inflation_change": "the same two channels, measured against the loan's own start",
+    "debt_to_income": "kept as negative, but it is measured at origination and never updated",
 }
 
 

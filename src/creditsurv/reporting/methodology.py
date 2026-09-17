@@ -212,10 +212,10 @@ Three exclusions are deliberate and matter more than the inclusions:
         ]
     ).text(
         """
-Loan-to-value is decomposed rather than indexed. `orig_ltv` and `indexed_cltv` are
+Loan-to-value is decomposed rather than indexed. `original_ltv` and `indexed_cltv` are
 *equal* at origination and stay strongly correlated afterwards, so fitting both
-gives unstable coefficients. They are split into a level -- `orig_ltv`,
-underwriting quality -- and a movement -- `cltv_drift`, how far house prices have
+gives unstable coefficients. They are split into a level -- `original_ltv`,
+underwriting quality -- and a movement -- `ltv_change`, how far house prices have
 carried the position since, zero at origination by construction.
 """
     )
@@ -315,7 +315,7 @@ rather than fitting the data -- and the survival curve against Kaplan-Meier, ove
 horizons a lifetime PD is quoted on. The three need not agree, and when they do not the
 report says so rather than choosing for the reader. The validation made this comparison on
 the specification before it: the log-logistic came 623,126 AIC points behind the Weibull
-and turned `orig_ltv`, `term_years` and investor occupancy around. The tables are this
+and turned `original_ltv`, `term_years` and investor occupancy around. The tables are this
 run's own comparison, on this run's specification.
 
 The log-normal is absent because it does not converge on this panel structure --
@@ -421,7 +421,7 @@ over a horizon of {len(band)} months. That is what the comparison is for.
 This check earned its place. An earlier version of the comparison predicted each
 loan's curve from its origination covariates and averaged those, which put only
 half the horizon inside the band and overstated five-year survival by eight
-percentage points. The cause is that `cltv_drift` and `unemp_gap` are zero at
+percentage points. The cause is that `ltv_change` and `unemployment_change` are zero at
 origination *by construction*, so freezing them there assumes house prices never
 move and unemployment never changes. The curve below chains the monthly hazard
 along each loan's realised covariate path instead.

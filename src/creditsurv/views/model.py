@@ -74,7 +74,7 @@ def _actual_expected_by_segment(
 
 
 def _vintage_years(frame: pd.DataFrame) -> np.ndarray:
-    return pd.PeriodIndex(frame["orig_period"]).year.to_numpy()
+    return pd.PeriodIndex(frame["origination_period"]).year.to_numpy()
 
 
 def _months(frame: pd.DataFrame) -> pd.Series:

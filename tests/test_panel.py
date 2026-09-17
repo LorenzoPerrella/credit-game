@@ -168,13 +168,13 @@ def test_weighted_reconstruction_matches_the_loan_level_view() -> None:
     panel = make_panel({1: (3, True), 2: (5, False), 3: (3, False), 4: (7, True)})
     loans = to_loan_level(panel)
 
-    panel = panel.assign(n=1.0)
+    panel = panel.assign(loan_months=1.0)
     weighted = to_loan_level_weighted(panel)
 
     expected = (
         loans.groupby(["duration", "event"], observed=True)
         .size()
-        .rename("n")
+        .rename("loan_months")
         .reset_index()
         .sort_values("duration")
         .reset_index(drop=True)
@@ -183,8 +183,8 @@ def test_weighted_reconstruction_matches_the_loan_level_view() -> None:
     expected = expected.sort_values(["duration", "event"]).reset_index(drop=True)
 
     pd.testing.assert_frame_equal(
-        recovered[["duration", "event", "n"]],
-        expected[["duration", "event", "n"]].astype({"n": float}),
+        recovered[["duration", "event", "loan_months"]],
+        expected[["duration", "event", "loan_months"]].astype({"loan_months": float}),
     )
 
 
@@ -196,18 +196,24 @@ def test_weighted_reconstruction_survives_a_collapsed_panel() -> None:
     carrying the rows.
     """
     panel = make_panel(dict.fromkeys(range(1, 21), (4, True)) | {21: (6, False)})
-    one_by_one = to_loan_level_weighted(panel.assign(n=1.0))
+    one_by_one = to_loan_level_weighted(panel.assign(loan_months=1.0))
 
     collapsed = (
-        panel.assign(n=1.0).groupby(["age", "event"], observed=True)["n"].sum().reset_index()
+        panel.assign(loan_months=1.0)
+        .groupby(["age", "event"], observed=True)["loan_months"]
+        .sum()
+        .reset_index()
     )
     pd.testing.assert_frame_equal(one_by_one, to_loan_level_weighted(collapsed))
 
 
 def test_duration_view_takes_both_paths() -> None:
     panel = make_panel({1: (3, True), 2: (5, False)})
-    assert "n" not in duration_view(panel).columns
-    assert duration_view(panel.assign(n=2.0), weights_col="n")["n"].sum() == 4.0
+    assert "loan_months" not in duration_view(panel).columns
+    assert (
+        duration_view(panel.assign(loan_months=2.0), weights_col="loan_months")["loan_months"].sum()
+        == 4.0
+    )
 
 
 def test_the_episode_frame_is_built_narrow(macro: pd.DataFrame) -> None:
@@ -220,23 +226,23 @@ def test_the_episode_frame_is_built_narrow(macro: pd.DataFrame) -> None:
     """
     cells = pd.DataFrame(
         {
-            "orig_month": [2006 * 12] * 6,
-            "purpose": ["purchase", "refinance_cashout"] * 3,
-            "fico_s": [0.4] * 6,
-            "orig_ltv": [85.0] * 6,
+            "origination_month": [2006 * 12] * 6,
+            "purpose": ["purchase", "cash_out_refinance"] * 3,
+            "credit_score": [0.4] * 6,
+            "original_ltv": [85.0] * 6,
             "age": [0, 1, 2, 3, 4, 5],
             "event": [False] * 5 + [True],
-            "n": [100] * 6,
+            "loan_months": [100] * 6,
         }
     )
 
     everything = cells_to_episodes(cells, macro)
-    narrow = cells_to_episodes(cells, macro, covariates=["cltv_drift", "unemp_gap"])
+    narrow = cells_to_episodes(cells, macro, covariates=["ltv_change", "unemployment_change"])
 
     assert isinstance(everything["purpose"].dtype, pd.CategoricalDtype)
-    assert everything["cltv_drift"].dtype == np.float32
-    assert "sentiment" in everything.columns
-    assert "sentiment" not in narrow.columns, "an unrequested covariate must not be built"
+    assert everything["ltv_change"].dtype == np.float32
+    assert "consumer_sentiment" in everything.columns
+    assert "consumer_sentiment" not in narrow.columns, "an unrequested covariate must not be built"
     assert narrow.memory_usage(deep=True).sum() < everything.memory_usage(deep=True).sum()
 
 
@@ -246,12 +252,12 @@ def test_an_infinite_upper_bound_survives_single_precision(macro: pd.DataFrame) 
     an observed default."""
     cells = pd.DataFrame(
         {
-            "orig_month": [2006 * 12] * 4,
-            "fico_s": [0.4] * 4,
-            "orig_ltv": [85.0] * 4,
+            "origination_month": [2006 * 12] * 4,
+            "credit_score": [0.4] * 4,
+            "original_ltv": [85.0] * 4,
             "age": [0, 1, 2, 3],
             "event": [False, False, False, True],
-            "n": [10] * 4,
+            "loan_months": [10] * 4,
         }
     )
 
@@ -269,11 +275,11 @@ def test_a_quarterly_cell_table_is_read_but_warns(macro: pd.DataFrame) -> None:
     cells = pd.DataFrame(
         {
             "vintage": ["2006Q1"] * 4,
-            "fico_s": [0.4] * 4,
-            "orig_ltv": [85.0] * 4,
+            "credit_score": [0.4] * 4,
+            "original_ltv": [85.0] * 4,
             "age": [0, 1, 2, 3],
             "event": [False, False, False, True],
-            "n": [10] * 4,
+            "loan_months": [10] * 4,
         }
     )
 
@@ -293,13 +299,13 @@ def _calendar_cells() -> pd.DataFrame:
     vintages = [1997 * 12, 2006 * 12, 2007 * 12]
     return pd.DataFrame(
         {
-            "orig_month": [month for month in vintages for _ in range(6)],
-            "purpose": pd.Categorical(["purchase", "refinance_cashout"] * 9),
-            "fico_s": [0.4] * 18,
-            "orig_ltv": [85.0] * 18,
+            "origination_month": [month for month in vintages for _ in range(6)],
+            "purpose": pd.Categorical(["purchase", "cash_out_refinance"] * 9),
+            "credit_score": [0.4] * 18,
+            "original_ltv": [85.0] * 18,
             "age": list(range(6)) * 3,
             "event": ([False] * 5 + [True]) * 3,
-            "n": [100] * 18,
+            "loan_months": [100] * 18,
         }
     )
 
@@ -326,12 +332,12 @@ def test_the_step_is_read_off_the_whole_table(macro: pd.DataFrame) -> None:
     """A selection holding ages 0 and 12 is not a table of year-long episodes."""
     cells = pd.DataFrame(
         {
-            "orig_month": [2006 * 12] * 4,
-            "fico_s": [0.4] * 4,
-            "orig_ltv": [85.0] * 4,
+            "origination_month": [2006 * 12] * 4,
+            "credit_score": [0.4] * 4,
+            "original_ltv": [85.0] * 4,
             "age": [0, 1, 2, 12],
             "event": [False] * 4,
-            "n": [10] * 4,
+            "loan_months": [10] * 4,
         }
     )
 
@@ -371,10 +377,10 @@ def test_loans_entering_late_are_measured_not_silently_absorbed() -> None:
 
     contiguous = make_panel({1: (4, False), 2: (4, True)})
     late = pd.DataFrame({"loan_id": 3, "age": [2, 3], "event": False, "covariate": 1.5})
-    panel = pd.concat([contiguous, late], ignore_index=True).assign(n=1.0)
+    panel = pd.concat([contiguous, late], ignore_index=True).assign(loan_months=1.0)
 
     assert net_entries(panel).to_dict() == {2: 1.0}
-    assert net_entries(contiguous.assign(n=1.0)).empty
+    assert net_entries(contiguous.assign(loan_months=1.0)).empty
     with pytest.warns(UserWarning, match="after age zero"):
         to_loan_level_weighted(panel)
 
@@ -384,11 +390,13 @@ def test_blocks_of_a_selection_are_the_selected_rows() -> None:
     from creditsurv.data.panel import model_blocks
 
     panel = to_interval_censored(make_panel({1: (5, True), 2: (6, False), 3: (4, False)})).assign(
-        n=1.0
+        loan_months=1.0
     )
     selected = panel["loan_id"].to_numpy() != 2
 
-    blocks = list(model_blocks(panel, ["covariate"], rows=3, weights_col="n", where=selected))
+    blocks = list(
+        model_blocks(panel, ["covariate"], rows=3, weights_col="loan_months", where=selected)
+    )
 
-    expected = model_frame(panel[selected], ["covariate"]).assign(n=1.0)
+    expected = model_frame(panel[selected], ["covariate"]).assign(loan_months=1.0)
     pd.testing.assert_frame_equal(pd.concat(blocks), expected)

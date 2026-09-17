@@ -130,7 +130,7 @@ def _check_frequency_weights(weights: pd.Series, name: str) -> None:
     inference, because lifelines derives the standard errors by treating weights
     as replication counts and warns that non-integer weights bias them.
 
-    If exposure should influence the model, ``log_orig_upb`` is already a
+    If exposure should influence the model, ``log_original_balance`` is already a
     covariate, and loss severity belongs in a separate model.
     """
     values = weights.to_numpy(dtype=float)
@@ -142,7 +142,7 @@ def _check_frequency_weights(weights: pd.Series, name: str) -> None:
             f"Weight column {name!r} is not integer-valued. Grouped estimation "
             "expects frequency weights: counts of identical loan-months. Weighting "
             "by exposure estimates a value-weighted default rate rather than a "
-            "borrower PD, and biases the standard errors. Use log_orig_upb as a "
+            "borrower PD, and biases the standard errors. Use log_original_balance as a "
             "covariate if exposure should matter."
         )
         raise ValueError(message)

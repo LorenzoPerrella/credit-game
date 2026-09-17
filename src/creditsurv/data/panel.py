@@ -49,7 +49,7 @@ AGE_STOP: Final = "age_stop"
 LOWER_BOUND: Final = "lower_bound"
 UPPER_BOUND: Final = "upper_bound"
 EXACT_OBSERVATION: Final = "exact_observation"
-WEIGHT: Final = "n"
+WEIGHT: Final = "loan_months"
 
 #: Columns every canonical loan-month panel must carry.
 REQUIRED_COLUMNS: Final[tuple[str, ...]] = (LOAN_ID, AGE, EVENT)
@@ -428,7 +428,7 @@ def cells_to_episodes(
     disagree with the width it was built with.
 
     Macro covariates are recomputed here from the origination month and the age, which
-    is why they were kept out of the grouping key: ``period = orig_month + age``, so
+    is why they were kept out of the grouping key: ``period = origination_month + age``, so
     nothing was lost by leaving them out and the cardinality was spared. See
     :func:`creditsurv.features.add_macro_family` for the family and why it is free.
 
@@ -476,17 +476,17 @@ def cells_to_episodes(
     episodes[AGE_START] = start_ages
     episodes[AGE_STOP] = start_ages + np.float32(step)
 
-    orig_month = origination_months(episodes)
+    origination_month = origination_months(episodes)
     # A period ordinal in months since year zero, so age can simply be added.
-    observation = orig_month + episodes[AGE].astype(int)
+    observation = origination_month + episodes[AGE].astype(int)
 
-    add_macro_family(episodes, macro, orig_month, observation, lag_months, names=covariates)
+    add_macro_family(episodes, macro, origination_month, observation, lag_months, names=covariates)
 
     # Calendar columns, so a split can be taken on time without recomputing them.
     # The episode is dated at its start: a band spans several months and has to be
     # attributed to one of them, and the start is the only choice that cannot place
     # an episode after a reporting date its loan was still performing at.
-    episodes["orig_period"] = _months_to_periods(orig_month)
+    episodes["origination_period"] = _months_to_periods(origination_month)
     episodes["period"] = _months_to_periods(observation)
 
     defaulted = episodes[EVENT].to_numpy(dtype=bool)
@@ -529,7 +529,7 @@ def origination_months(cells: pd.DataFrame) -> pd.Series:
     Two key shapes are accepted, and which one a table carries is the difference
     between a correct calendar and one two months early:
 
-    * ``orig_month`` -- the month itself, which is what the aggregation now emits;
+    * ``origination_month`` -- the month itself, which is what the aggregation now emits;
     * ``vintage`` -- the origination *quarter*, which it used to. Reconstructing the
       month from it takes the quarter's first month, and loans are not all written in
       it: the mean offset is **+2.15 months**, so every macro covariate is read that
@@ -538,8 +538,8 @@ def origination_months(cells: pd.DataFrame) -> pd.Series:
     The quarterly branch is kept so an older cell table can still be read, and it warns
     rather than pretending the two are equivalent.
     """
-    if "orig_month" in cells.columns:
-        return cells["orig_month"].astype(int)
+    if "origination_month" in cells.columns:
+        return cells["origination_month"].astype(int)
 
     warnings.warn(
         "This cell table is keyed by origination quarter, so the observation month is "

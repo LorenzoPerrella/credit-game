@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
     from creditsurv.models.aft import FitResult
 
-ORIGINATION = "orig_period"
+ORIGINATION = "origination_period"
 
 
 @dataclass(frozen=True)

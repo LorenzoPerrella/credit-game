@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
 PERIOD = "period"
-ORIGINATION = "orig_period"
+ORIGINATION = "origination_period"
 
 
 @dataclass(frozen=True)

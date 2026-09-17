@@ -106,6 +106,23 @@ def _cached_start(path: Path) -> pd.Timestamp:
     return pd.Timestamp.min if recorded is None else pd.Timestamp(recorded.decode())
 
 
+def _cached_column(cache_file: Path, spec: SeriesSpec) -> pd.Series:
+    """The cached series, under the column name it has now.
+
+    The cache is keyed by series id, so a file written before the macro columns were renamed
+    holds the same observations under the former name.
+    """
+    from creditsurv import names
+
+    frame = pd.read_parquet(cache_file)
+    if spec.column not in frame.columns:
+        former = names.variable(spec.column, kind=names.Kind.SERIES).former
+        if former in frame.columns:
+            return frame[former].rename(spec.column)
+    series: pd.Series = frame[spec.column]
+    return series
+
+
 def load_series(
     spec: SeriesSpec, *, start: str = MACRO_START, end: str | None = None, refresh: bool = False
 ) -> pd.Series:
@@ -131,7 +148,7 @@ def load_series(
     cache_file = _cache_path(spec.series_id)
 
     if not refresh and cache_file.exists() and _cached_start(cache_file) <= pd.Timestamp(start):
-        cached = pd.read_parquet(cache_file)[spec.column]
+        cached = _cached_column(cache_file, spec)
         _LOGGER.debug("Loaded %s from cache (%d observations)", spec.series_id, len(cached))
         return cached
 
@@ -144,7 +161,7 @@ def load_series(
                 f"using the cached copy at {cache_file}.",
                 stacklevel=2,
             )
-            return pd.read_parquet(cache_file)[spec.column]
+            return _cached_column(cache_file, spec)
         message = f"{spec.series_id} is not cached and could not be downloaded: {error}"
         raise FredUnavailableError(message) from error
 

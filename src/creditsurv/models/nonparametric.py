@@ -137,8 +137,8 @@ def predicted_survival_curve(
 
     The obvious approach -- predict each loan's survival curve from its
     origination covariates and average -- is wrong here, and quietly so. Half the
-    covariates vary over the life of the loan, and two of them (``cltv_drift`` and
-    ``unemp_gap``) are zero at origination by construction. Freezing them there
+    covariates vary over the life of the loan, and two of them (``ltv_change`` and
+    ``unemployment_change``) are zero at origination by construction. Freezing them there
     assumes house prices never move and unemployment never changes, which
     understates risk and overstates survival by more at every further horizon.
 

@@ -11,7 +11,7 @@ the group-by all have to happen out of core — the inputs are far larger than m
 and never need to be resident.
 
 **The macro series are deliberately absent from the grouping key.** Since
-``period = orig_period + age``, unemployment, house prices and financial conditions
+``period = origination_period + age``, unemployment, house prices and financial conditions
 are a deterministic function of two columns that are already in the key, so they can
 be recomputed on the aggregate at no cost in cardinality. Putting them in the key
 instead would multiply it by the number of distinct months and destroy the collapse.
@@ -233,7 +233,8 @@ def _state_of_the_book_sql(
     as the cells do. Off, they are kept, so :func:`incomplete_cases` can say what is lost.
     """
     complete = (
-        "WHERE o.credit_score IS NOT NULL AND o.orig_ltv IS NOT NULL AND o.dti IS NOT NULL"
+        "WHERE o.credit_score IS NOT NULL AND o.original_ltv IS NOT NULL "
+        "AND o.debt_to_income IS NOT NULL"
         if complete_only
         else ""
     )
@@ -312,15 +313,15 @@ def _state_of_the_book_sql(
             -- ordinary numbers, and left in place they produce a portfolio whose
             -- average credit score is several thousand.
             NULLIF(TRY_CAST(classic_fico AS DOUBLE), 9999)              AS credit_score,
-            NULLIF(TRY_CAST(original_ltv AS DOUBLE), 999)               AS orig_ltv,
-            NULLIF(TRY_CAST(original_cltv AS DOUBLE), 999)              AS orig_cltv,
-            NULLIF(TRY_CAST(original_dti AS DOUBLE), 999)               AS dti,
-            TRY_CAST(original_upb AS DOUBLE)                            AS orig_upb,
+            NULLIF(TRY_CAST(original_ltv AS DOUBLE), 999)               AS original_ltv,
+            NULLIF(TRY_CAST(original_cltv AS DOUBLE), 999)              AS original_cltv,
+            NULLIF(TRY_CAST(original_dti AS DOUBLE), 999)               AS debt_to_income,
+            TRY_CAST(original_upb AS DOUBLE)                            AS original_balance,
             TRY_CAST(original_interest_rate AS DOUBLE)                  AS note_rate,
             TRY_CAST(original_loan_term AS INTEGER)                     AS orig_term,
-            -- 999 is "not available" for MI exactly as for LTV and DTI. Untreated, has_mi
-            -- read a missing percentage as an insured loan.
-            NULLIF(TRY_CAST(mortgage_insurance_percentage AS DOUBLE), 999) AS mi_percent,
+            -- 999 is "not available" for MI exactly as for LTV and DTI. Untreated,
+            -- mortgage_insurance read a missing percentage as an insured loan.
+            NULLIF(TRY_CAST(mortgage_insurance_percentage AS DOUBLE), 999) AS insurance_coverage,
             -- Raw codes, deliberately. The mapping lives in _CATEGORICAL, where the
             -- choices are documented next to the frequencies that justify them, and
             -- an ELSE branch here would silently fold a "not available" code into a
@@ -350,18 +351,18 @@ def _state_of_the_book_sql(
 
 #: Source expression for each continuous covariate, keyed by the name it takes.
 _SOURCE: Final[dict[str, str]] = {
-    "fico_s": "(credit_score - 700.0) / 50.0",
-    "orig_ltv": "orig_ltv",
-    "orig_cltv": "orig_cltv",
-    "dti": "dti",
-    "log_orig_upb": "ln(orig_upb)",
+    "credit_score": "credit_score",
+    "original_ltv": "original_ltv",
+    "original_cltv": "original_cltv",
+    "debt_to_income": "debt_to_income",
+    "log_original_balance": "ln(original_balance)",
     # Freddie's own mark-to-market valuation. Available as a covariate, but not in
     # the default specification: coverage runs from 0.8% of the 1999 vintage to 94%
     # of 2021, so a model using it would be estimating a different quantity in every
     # decade. The house-price-indexed drift computed in cells_to_episodes covers
     # every vintage evenly instead.
-    "eltv_drift": "COALESCE(eltv, orig_ltv) - orig_ltv",
-    "mi_percent": "mi_percent",
+    "estimated_ltv_change": "COALESCE(eltv, original_ltv) - original_ltv",
+    "insurance_coverage": "insurance_coverage",
 }
 
 #: Categorical covariates and the SQL that produces them.
@@ -387,12 +388,12 @@ _SOURCE: Final[dict[str, str]] = {
 #: See docs/variable_selection.md for the frequencies these rest on.
 _CATEGORICAL: Final[dict[str, str]] = {
     "purpose": (
-        "CASE loan_purpose WHEN 'P' THEN 'purchase' WHEN 'C' THEN 'refinance_cashout' "
-        "WHEN 'N' THEN 'refinance_rate_term' WHEN 'R' THEN 'refinance_rate_term' END"
+        "CASE loan_purpose WHEN 'P' THEN 'purchase' WHEN 'C' THEN 'cash_out_refinance' "
+        "WHEN 'N' THEN 'rate_term_refinance' WHEN 'R' THEN 'rate_term_refinance' END"
     ),
     "occupancy": (
         "CASE occupancy_status WHEN 'P' THEN 'owner_occupied' "
-        "WHEN 'S' THEN 'second_home' WHEN 'I' THEN 'investor' END"
+        "WHEN 'S' THEN 'second_home' WHEN 'I' THEN 'investment_property' END"
     ),
     # Retail against everything else, because the finer split is not comparable
     # across the history. Until 2008 roughly half of originations are coded T,
@@ -404,35 +405,39 @@ _CATEGORICAL: Final[dict[str, str]] = {
     # split is the part that means the same thing in every vintage.
     "channel": (
         "CASE channel WHEN 'R' THEN 'retail' "
-        "WHEN 'B' THEN 'third_party' WHEN 'C' THEN 'third_party' "
-        "WHEN 'T' THEN 'third_party' END"
+        "WHEN 'B' THEN 'broker_or_correspondent' WHEN 'C' THEN 'broker_or_correspondent' "
+        "WHEN 'T' THEN 'broker_or_correspondent' END"
     ),
     "region": "region",
     # In the cell key, so a 9 -- "not available" -- drops the loan. Measured across the
     # whole book that is 19,053 of 49.2 million loans, 0.04%, and at most 0.92% of any
     # vintage (1999): too small for the drop to be the informative loss D4 is about.
-    "first_time_buyer": (
-        "CASE first_time_homebuyer_indicator WHEN 'Y' THEN 'Y' WHEN 'N' THEN 'N' END"
+    "buyer_type": (
+        "CASE first_time_homebuyer_indicator WHEN 'Y' THEN 'first_time' WHEN 'N' THEN 'repeat' END"
     ),
     # SF, PU and CO carry 99.3% between them; the rest is a tail of half-percents.
     "property_type": (
-        "CASE property_type WHEN 'SF' THEN 'single_family' WHEN 'PU' THEN 'planned_unit' "
-        "WHEN 'CO' THEN 'condo' WHEN 'MH' THEN 'other' WHEN 'CP' THEN 'other' END"
+        "CASE property_type WHEN 'SF' THEN 'single_family' "
+        "WHEN 'PU' THEN 'planned_unit_development' WHEN 'CO' THEN 'condominium' "
+        "WHEN 'MH' THEN 'manufactured_or_coop' WHEN 'CP' THEN 'manufactured_or_coop' END"
     ),
     # 98.1% are single-unit; two, three and four are one category together.
     "units": (
-        "CASE WHEN TRY_CAST(number_of_units AS INTEGER) = 1 THEN '1' "
-        "WHEN TRY_CAST(number_of_units AS INTEGER) BETWEEN 2 AND 4 THEN '2-4' END"
+        "CASE WHEN TRY_CAST(number_of_units AS INTEGER) = 1 THEN 'one_unit' "
+        "WHEN TRY_CAST(number_of_units AS INTEGER) BETWEEN 2 AND 4 THEN 'two_to_four_units' END"
     ),
     # Both branches explicit. With an ELSE, a term that failed to parse became thirty years.
     "term_years": "CASE WHEN orig_term <= 190 THEN 15 WHEN orig_term > 190 THEN 30 END",
-    # Both branches explicit, reading a mi_percent the 999 sentinel has been removed from.
-    # With an ELSE and no sentinel treatment, a percentage recorded as "not available"
-    # read as *insured*: 735 loans, negligible in number, and precisely the two rules
-    # this module states -- sentinels are real numbers, no ELSE -- broken in the covariate
-    # the cardinality argument had just been corrected to admit. Its content is real: the
-    # insured share runs from 6.8% of the 2010 vintage to 38.9% of 2023's.
-    "has_mi": "CASE WHEN mi_percent > 0 THEN 'Y' WHEN mi_percent = 0 THEN 'N' END",
+    # Both branches explicit, reading an insurance coverage the 999 sentinel has been removed from.
+    # With an ELSE and no sentinel treatment, a percentage recorded as "not available" read as
+    # *insured*: 735 loans, negligible in number, and precisely the two rules this module states --
+    # sentinels are real numbers, no ELSE -- broken in the covariate the cardinality argument had
+    # just been corrected to admit. Its content is real: the insured share runs from 6.8% of the
+    # 2010 vintage to 38.9% of 2023's.
+    "mortgage_insurance": (
+        "CASE WHEN insurance_coverage > 0 THEN 'insured' "
+        "WHEN insurance_coverage = 0 THEN 'uninsured' END"
+    ),
     # Screened like everything else rather than ingested and forgotten. It reached the
     # parquet without appearing in any screening table or in DEGENERATE_FIELDS, which is
     # the gap that let three performance fields disappear silently.
@@ -443,10 +448,12 @@ _CATEGORICAL: Final[dict[str, str]] = {
     # mapping would have dropped 98% of the book the day the flag entered a key. It is not
     # in one. No loan before 2008 is Y, because the category did not exist, so its N for
     # those vintages records a date rather than a loan.
-    "super_conforming": "CASE super_conforming_flag WHEN 'Y' THEN 'Y' WHEN 'N' THEN 'N' END",
-    "n_borrowers": (
-        "CASE WHEN TRY_CAST(number_of_borrowers AS INTEGER) = 1 THEN '1' "
-        "WHEN TRY_CAST(number_of_borrowers AS INTEGER) BETWEEN 2 AND 5 THEN '2+' END"
+    "loan_size": (
+        "CASE super_conforming_flag WHEN 'Y' THEN 'super_conforming' WHEN 'N' THEN 'conforming' END"
+    ),
+    "borrower_count": (
+        "CASE WHEN TRY_CAST(number_of_borrowers AS INTEGER) = 1 THEN 'one' "
+        "WHEN TRY_CAST(number_of_borrowers AS INTEGER) BETWEEN 2 AND 5 THEN 'two_or_more' END"
     ),
 }
 
@@ -518,18 +525,18 @@ class CellSpec:
 #: thresholds dropped are the finer ones; the MI break at 80 and the underwriting
 #: break at 43 survive, and those are the two the economics actually turns on.
 PRODUCTION_EDGES: Final[dict[str, tuple[float, ...]]] = {
-    "fico_s": (-2.4, -0.8, 0.0, 0.8, 1.2, 2.4),
-    "orig_ltv": (30.0, 70.0, 80.0, 90.0, 100.0),
-    "dti": (10.0, 28.0, 36.0, 43.0, 55.0),
+    "credit_score": (580.0, 660.0, 700.0, 740.0, 760.0, 820.0),
+    "original_ltv": (30.0, 70.0, 80.0, 90.0, 100.0),
+    "debt_to_income": (10.0, 28.0, 36.0, 43.0, 55.0),
 }
 
 DEFAULT_SPEC: Final = CellSpec(
     continuous=PRODUCTION_EDGES,
-    # cltv_drift is absent on purpose: it is a function of orig_ltv and the macro
+    # ltv_change is absent on purpose: it is a function of original_ltv and the macro
     # path, both recoverable from the key, so carrying it would multiply the
     # cardinality for information already there.
     #
-    # has_mi and first_time_buyer are present because the argument that excluded them
+    # mortgage_insurance and buyer_type are present because the argument that excluded them
     # was wrong. It asserted a cost of "up to 16x the table" from the product of the
     # level counts; the cell space is sparse and the measured cost of the two together
     # is **1.23x**. Mortgage insurance is a classic credit predictor and already had an
@@ -539,8 +546,8 @@ DEFAULT_SPEC: Final = CellSpec(
         "purpose",
         "occupancy",
         "term_years",
-        "has_mi",
-        "first_time_buyer",
+        "mortgage_insurance",
+        "buyer_type",
     ),
 )
 
@@ -576,7 +583,9 @@ def _not_null_filter(spec: CellSpec) -> str:
 #:
 #: It costs 3.11x the cells, measured. The convention matches ``_months_to_periods``:
 #: ``year * 12 + (month - 1)``.
-_ORIGINATION_MONTH: Final = "(period_key // 100) * 12 + (period_key % 100) - 1 - age AS orig_month"
+_ORIGINATION_MONTH: Final = (
+    "(period_key // 100) * 12 + (period_key % 100) - 1 - age AS origination_month"
+)
 
 
 def _select_columns(spec: CellSpec) -> str:
@@ -644,7 +653,7 @@ def _cells_for_quarter(
             {_select_columns(spec)}
         FROM book
     )
-    SELECT '{vintage}' AS vintage, *, COUNT(*) AS n
+    SELECT '{vintage}' AS vintage, *, COUNT(*) AS loan_months
     FROM classed
     -- A categorical that mapped to NULL is a code nobody has looked at. The loan is
     -- dropped rather than aggregated into a NULL level, for the same reason a loan
@@ -688,7 +697,9 @@ def build_cells(
         vintage = Path(perf_path).stem
         cells = _compact(_cells_for_quarter(con, perf_path, orig_path, vintage, spec, policy))
         frames.append(cells)
-        _LOGGER.info("%s: %d cells from %d loan-months", vintage, len(cells), int(cells["n"].sum()))
+        _LOGGER.info(
+            "%s: %d cells from %d loan-months", vintage, len(cells), int(cells["loan_months"].sum())
+        )
 
     # Vintage is in the key and constant within a quarter, so the pieces are already
     # disjoint: concatenating needs no second group-by.
@@ -709,8 +720,8 @@ def _compact(cells: pd.DataFrame) -> pd.DataFrame:
     for column in cells.columns:
         if cells[column].dtype == object:
             cells[column] = cells[column].astype("category")
-    if "orig_month" in cells.columns:
-        cells["orig_month"] = cells["orig_month"].astype("int32")
+    if "origination_month" in cells.columns:
+        cells["origination_month"] = cells["origination_month"].astype("int32")
     return cells
 
 
@@ -764,14 +775,14 @@ def cardinality_report(
                 "loan_months": rows,
                 "cells": len(cells),
                 "compression": rows / max(len(cells), 1),
-                "weight_total": int(cells["n"].sum()),
+                "weight_total": int(cells["loan_months"].sum()),
             }
         ]
     )
 
 
 #: Origination fields whose absence drops a loan before the categorical keys are read.
-_COMPLETE_CASE_FIELDS: Final[tuple[str, ...]] = ("credit_score", "orig_ltv", "dti")
+_COMPLETE_CASE_FIELDS: Final[tuple[str, ...]] = ("credit_score", "original_ltv", "debt_to_income")
 
 
 def incomplete_cases(

@@ -52,8 +52,8 @@ def test_identical_loans_collapse_into_one_cell(tmp_path: Path) -> None:
     # Episodes are monthly because the time-varying covariates are, so age is not
     # collapsed and the compression comes from identical loans instead.
     assert len(cells) == 3
-    assert set(cells["n"]) == {20}
-    assert int(cells["n"].sum()) == 60
+    assert set(cells["loan_months"]) == {20}
+    assert int(cells["loan_months"].sum()) == 60
 
 
 def test_weights_account_for_every_loan_month(tmp_path: Path) -> None:
@@ -65,7 +65,7 @@ def test_weights_account_for_every_loan_month(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells["n"].sum()) == 24
+    assert int(cells["loan_months"].sum()) == 24
 
 
 def test_default_is_flagged_once_and_the_loan_is_cut(tmp_path: Path) -> None:
@@ -82,8 +82,8 @@ def test_default_is_flagged_once_and_the_loan_is_cut(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells["n"].sum()) == 3, "the loan should stop at its first defaulted month"
-    assert int(cells.loc[cells["event"], "n"].sum()) == 1
+    assert int(cells["loan_months"].sum()) == 3, "the loan should stop at its first defaulted month"
+    assert int(cells.loc[cells["event"], "loan_months"].sum()) == 1
     assert int(cells.loc[cells["event"], "age"].iloc[0]) == 2
 
 
@@ -102,7 +102,7 @@ def test_an_reo_code_counts_even_when_delinquency_is_alphanumeric(tmp_path: Path
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells.loc[cells["event"], "n"].sum()) == 1
+    assert int(cells.loc[cells["event"], "loan_months"].sum()) == 1
 
 
 def test_prepayment_is_censoring_not_an_event(tmp_path: Path) -> None:
@@ -116,7 +116,7 @@ def test_prepayment_is_censoring_not_an_event(tmp_path: Path) -> None:
     cells = build_cells(*_sources(tmp_path))
 
     assert not cells["event"].any()
-    assert int(cells["n"].sum()) == 2
+    assert int(cells["loan_months"].sum()) == 2
 
 
 def test_sentinel_values_drop_the_loan(tmp_path: Path) -> None:
@@ -130,7 +130,7 @@ def test_sentinel_values_drop_the_loan(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells["n"].sum()) == 1
+    assert int(cells["loan_months"].sum()) == 1
 
 
 def test_negative_ages_are_dropped(tmp_path: Path) -> None:
@@ -143,7 +143,7 @@ def test_negative_ages_are_dropped(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells["n"].sum()) == 1
+    assert int(cells["loan_months"].sum()) == 1
     assert int(cells["age"].min()) == 0
 
 
@@ -164,7 +164,7 @@ def test_binning_puts_neighbouring_loans_in_one_cell(tmp_path: Path) -> None:
     cells = build_cells(*_sources(tmp_path))
 
     assert len(cells) == 1
-    assert int(cells["n"].iloc[0]) == 2
+    assert int(cells["loan_months"].iloc[0]) == 2
 
 
 def test_term_is_reduced_to_fifteen_or_thirty_years(tmp_path: Path) -> None:
@@ -246,11 +246,11 @@ def test_a_narrower_spec_collapses_harder(tmp_path: Path) -> None:
     wide = build_cells(*_sources(tmp_path))
     narrow = build_cells(
         *_sources(tmp_path),
-        spec=CellSpec(continuous={"fico_s": (-3.0, 3.0)}, categorical=()),
+        spec=CellSpec(continuous={"credit_score": (-3.0, 3.0)}, categorical=()),
     )
 
     assert len(narrow) < len(wide)
-    assert int(narrow["n"].sum()) == int(wide["n"].sum()) == 24
+    assert int(narrow["loan_months"].sum()) == int(wide["loan_months"].sum()) == 24
 
 
 def test_the_event_flag_is_never_null(tmp_path: Path) -> None:
@@ -274,7 +274,7 @@ def test_the_event_flag_is_never_null(tmp_path: Path) -> None:
 
     assert cells["event"].dtype == bool
     assert not cells["event"].isna().any()
-    assert int(cells.loc[cells["event"], "n"].sum()) == 1
+    assert int(cells.loc[cells["event"], "loan_months"].sum()) == 1
 
 
 def test_no_categorical_mapping_has_an_else_branch() -> None:
@@ -309,7 +309,7 @@ def test_an_unmapped_code_drops_the_loan(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells["n"].sum()) == 1
+    assert int(cells["loan_months"].sum()) == 1
     assert set(cells["purpose"]) == {"purchase"}
 
 
@@ -337,8 +337,8 @@ def test_channel_is_collapsed_to_a_comparable_binary(tmp_path: Path) -> None:
         spec=CellSpec(continuous={}, categorical=("channel",)),
     )
 
-    assert set(cells["channel"]) == {"retail", "third_party"}
-    assert int(cells.loc[cells["channel"] == "third_party", "n"].sum()) == 3
+    assert set(cells["channel"]) == {"retail", "broker_or_correspondent"}
+    assert int(cells.loc[cells["channel"] == "broker_or_correspondent", "loan_months"].sum()) == 3
 
 
 def test_the_default_formula_only_names_covariates_the_cells_carry() -> None:
@@ -447,10 +447,10 @@ def test_the_eliminated_covariates_are_out_of_the_model() -> None:
     silent reversal of a documented decision, and nothing else in the suite would
     notice it.
 
-    The formula is read as names, not as text: ``vix`` is inside ``vix_gap`` and
-    ``inflation`` inside ``inflation_gap``, so a level eliminated beside its own gap form
-    would read as still fitted. And a candidate is anything a cell carries -- the
-    selection screens loan characteristics and categoricals too, not only macro series.
+    The formula is read as names, not as text: ``equity_volatility`` is inside ``volatility_change``
+    and ``inflation_rate`` inside ``inflation_change``, so a level eliminated beside its own gap
+    form would read as still fitted. And a candidate is anything a cell carries -- the selection
+    screens loan characteristics and categoricals too, not only macro series.
     """
     from creditsurv.config import ELIMINATED, default_formula
     from creditsurv.data.aggregate import DEFAULT_SPEC
@@ -482,8 +482,8 @@ def test_the_production_grid_is_a_subset_of_the_documented_one() -> None:
         stray = [edge for edge in edges if edge not in documented]
         assert not stray, f"{name} cuts at {stray}, which BIN_EDGES does not justify"
 
-    assert 43.0 in PRODUCTION_EDGES["dti"], "the documented underwriting threshold is 43"
-    assert 80.0 in PRODUCTION_EDGES["orig_ltv"], "the mortgage-insurance threshold"
+    assert 43.0 in PRODUCTION_EDGES["debt_to_income"], "the documented underwriting threshold is 43"
+    assert 80.0 in PRODUCTION_EDGES["original_ltv"], "the mortgage-insurance threshold"
 
 
 def _moratorium_quarter() -> tuple[list[str], list[str]]:
@@ -586,26 +586,32 @@ def test_text_keys_stay_categorical_through_the_concatenation() -> None:
     first = _compact(
         pd.DataFrame(
             {
-                "occupancy": ["owner_occupied", "investor"],
-                "orig_month": [24_000, 24_001],
-                "n": [3, 4],
+                "occupancy": ["owner_occupied", "investment_property"],
+                "origination_month": [24_000, 24_001],
+                "loan_months": [3, 4],
             }
         )
     )
     second = _compact(
-        pd.DataFrame({"occupancy": ["second_home"], "orig_month": [24_002], "n": [5]})
+        pd.DataFrame(
+            {"occupancy": ["second_home"], "origination_month": [24_002], "loan_months": [5]}
+        )
     )
 
     combined = _concatenate([first, second])
 
     assert isinstance(combined["occupancy"].dtype, pd.CategoricalDtype)
     assert list(combined["occupancy"].cat.categories) == [
-        "investor",
+        "investment_property",
         "owner_occupied",
         "second_home",
     ]
-    assert combined["occupancy"].tolist() == ["owner_occupied", "investor", "second_home"]
-    assert combined["orig_month"].dtype == "int32"
+    assert combined["occupancy"].tolist() == [
+        "owner_occupied",
+        "investment_property",
+        "second_home",
+    ]
+    assert combined["origination_month"].dtype == "int32"
 
 
 def test_cells_are_categorical_as_built_and_as_saved(tmp_path: Path) -> None:
@@ -620,7 +626,7 @@ def test_cells_are_categorical_as_built_and_as_saved(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    for column in ("vintage", "purpose", "occupancy", "has_mi", "first_time_buyer"):
+    for column in ("vintage", "purpose", "occupancy", "mortgage_insurance", "buyer_type"):
         assert isinstance(cells[column].dtype, pd.CategoricalDtype), column
     save_cells(cells, "exclude")
     pd.testing.assert_frame_equal(load_cells("exclude"), cells)
@@ -637,7 +643,7 @@ def test_the_loans_left_out_are_counted_by_what_they_lack_and_how_they_default(
     origination = [
         origination_row("F000000001"),
         origination_row("F000000002"),
-        origination_row("F000000003", dti="999"),
+        origination_row("F000000003", debt_to_income="999"),
         origination_row("F000000004", purpose="9"),
     ]
     performance = [
@@ -650,7 +656,7 @@ def test_the_loans_left_out_are_counted_by_what_they_lack_and_how_they_default(
 
     assert row["loans"] == 4
     assert row["dropped"] == 2
-    assert row["no_dti"] == 1
+    assert row["no_debt_to_income"] == 1
     assert row["no_purpose"] == 1
     assert row["default_rate_kept"] == pytest.approx(0.0)
     assert row["default_rate_dropped"] == pytest.approx(0.5)
@@ -750,14 +756,47 @@ def test_the_super_conforming_flag_is_mapped_from_what_the_field_holds(tmp_path:
     mapping would have dropped 98% of the book had the flag ever entered a key."""
     from creditsurv.data.aggregate import PRODUCTION_EDGES
 
-    origination = [
-        origination_row(f"F{i:09d}", super_conforming="Y" if i < 2 else "N") for i in range(6)
-    ]
+    origination = [origination_row(f"F{i:09d}", loan_size="Y" if i < 2 else "N") for i in range(6)]
     performance = [performance_row(f"F{i:09d}", "201503", "0") for i in range(6)]
     _ingested(tmp_path, origination, performance)
 
-    spec = CellSpec(continuous=PRODUCTION_EDGES, categorical=("super_conforming",))
+    spec = CellSpec(continuous=PRODUCTION_EDGES, categorical=("loan_size",))
     cells = build_cells(*_sources(tmp_path), spec=spec)
 
-    loans = cells.groupby("super_conforming", observed=True)["n"].sum().to_dict()
-    assert loans == {"N": 4, "Y": 2}
+    loans = cells.groupby("loan_size", observed=True)["loan_months"].sum().to_dict()
+    assert loans == {"conforming": 4, "super_conforming": 2}
+
+
+def test_a_cell_table_written_under_the_former_names_reads_under_the_current_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cells on disk predate the rename; they are read, not rebuilt."""
+    from creditsurv.data.store import load_cells
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    former = pd.DataFrame(
+        {
+            "fico_s": [-0.4, 1.0],
+            "orig_ltv": [75.0, 85.0],
+            "purpose": pd.Categorical(["purchase", "refinance_cashout"]),
+            "has_mi": pd.Categorical(["N", "Y"]),
+            "first_time_buyer": pd.Categorical(["Y", "N"]),
+            "orig_month": [24_000, 24_001],
+            "event": [False, True],
+            "n": [10, 3],
+        }
+    )
+    path = tmp_path / "processed" / "cells_exclude.parquet"
+    path.parent.mkdir(parents=True)
+    former.to_parquet(path)
+
+    cells = load_cells("exclude")
+    narrow = load_cells("exclude", columns=["credit_score", "loan_months"])
+
+    assert cells["credit_score"].tolist() == [680.0, 750.0]
+    assert list(cells["mortgage_insurance"]) == ["uninsured", "insured"]
+    assert list(cells["buyer_type"]) == ["first_time", "repeat"]
+    assert list(cells["purpose"]) == ["purchase", "cash_out_refinance"]
+    assert cells["loan_months"].tolist() == [10, 3]
+    assert "origination_month" in cells.columns
+    assert list(narrow.columns) == ["credit_score", "loan_months"]

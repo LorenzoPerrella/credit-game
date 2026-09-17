@@ -116,11 +116,11 @@ def stability_report(
     the mix of business being written. Those should look much the same this quarter
     as last, and a jump means something has changed about who is applying.
 
-    It does not transfer to macro-driven covariates. ``cltv_drift`` and
-    ``unemp_gap`` are *designed* to move with the economy, and train and test come
+    It does not transfer to macro-driven covariates. ``ltv_change`` and
+    ``unemployment_change`` are *designed* to move with the economy, and train and test come
     from different calendar periods by construction, so their index is large
-    whenever anything happened. This backtest returns 9.23 for ``cltv_drift``
-    against 0.03 for ``fico_s``: the first number says the economy changed, which
+    whenever anything happened. This backtest returns 9.23 for ``ltv_change``
+    against 0.03 for ``credit_score``: the first number says the economy changed, which
     is not news and is not a defect, while the second says the book being written
     did not, which is the thing PSI was built to detect.
 

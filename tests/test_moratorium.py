@@ -23,12 +23,12 @@ from fixtures import DEFAULT_PARAMS, build_panel
 if TYPE_CHECKING:
     from pathlib import Path
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
 FORMULA = " + ".join(COVARIATES)
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.9,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=0.14,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -36,7 +36,7 @@ PARAMS = replace(
 
 def _outcome(policy: str, encoded: pd.DataFrame, as_of: pd.Period) -> Outcome:
     split = cell_split(encoded, as_of)
-    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="n")
+    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="loan_months")
     _, result = backtest_split(split, COVARIATES, FORMULA, fitted=fitted)
     return outcome(policy, split, fitted, result)
 
@@ -44,7 +44,7 @@ def _outcome(policy: str, encoded: pd.DataFrame, as_of: pd.Period) -> Outcome:
 @pytest.fixture(scope="module")
 def outcomes(book_dir: Path, macro_module: pd.DataFrame) -> tuple[Outcome, Outcome]:
     panel, _ = build_panel(book_dir, macro_module, n_loans=900, seed=41, params=PARAMS)
-    encoded = to_interval_censored(panel).assign(n=1)
+    encoded = to_interval_censored(panel).assign(loan_months=1)
     return (
         _outcome("exclude", encoded, pd.Period("2008-12", freq="M")),
         _outcome("censor", encoded, pd.Period("2008-06", freq="M")),

@@ -177,12 +177,10 @@ def portfolio() -> None:
     import json
     import logging
 
-    import pandas as pd
-
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.ingest import load_manifest
     from creditsurv.data.panel import AGE, EVENT, WEIGHT, default_rate_by_observation_month
-    from creditsurv.data.store import DEFAULT_POLICY, cells_path
+    from creditsurv.data.store import DEFAULT_POLICY, cells_path, load_cells
     from creditsurv.portfolio import (
         book_summary,
         covariate_evolution,
@@ -225,10 +223,9 @@ def portfolio() -> None:
 
     # Every number docs/portfolio.md quotes (S7). The modelled figures are the cells' own,
     # once the book has been aggregated, so they are the ones every report works from.
-    cells_file = cells_path(DEFAULT_POLICY)
     cells = (
-        pd.read_parquet(cells_file, columns=["orig_month", AGE, WEIGHT, EVENT])
-        if cells_file.exists()
+        load_cells(DEFAULT_POLICY, columns=["origination_month", AGE, WEIGHT, EVENT])
+        if cells_path(DEFAULT_POLICY).exists()
         else None
     )
     performance_rows = sum(int(entry["perf"]) for entry in load_manifest().values())
@@ -356,7 +353,7 @@ def aggregate(
     policy = MoratoriumPolicy(moratorium)
     cells = build_cells(policy=policy)
     path = save_cells(cells, policy.value)
-    typer.echo(f"{len(cells):,} cells covering {int(cells['n'].sum()):,} loan-months")
+    typer.echo(f"{len(cells):,} cells covering {int(cells['loan_months'].sum()):,} loan-months")
     typer.echo(f"Moratorium policy: {policy.value}. Saved to {path}")
 
 
@@ -668,7 +665,7 @@ def views(
     from creditsurv.data.aggregate import MoratoriumPolicy
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import AGE, EVENT, WEIGHT
-    from creditsurv.data.store import cells_path, fit_fingerprint, load_fit
+    from creditsurv.data.store import fit_fingerprint, load_cells, load_fit
     from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
     from creditsurv.models.aft import FitResult as Fitted
     from creditsurv.models.lifetime_pd import origination_book
@@ -746,7 +743,7 @@ def views(
 
     if portfolio:
         typer.echo("The book by segment, the lending, the vintage curves and the macro series...")
-        cells = pd.read_parquet(cells_path(moratorium), columns=["orig_month", AGE, WEIGHT, EVENT])
+        cells = load_cells(moratorium, columns=["origination_month", AGE, WEIGHT, EVENT])
         write_views(
             portfolio_views(cells, load_macro_panel(), policy=MoratoriumPolicy(moratorium)),
             destination,
@@ -823,7 +820,7 @@ def select(
     del cells
     train = cells_to_episodes(selected, load_macro_panel(), covariates=candidates, step=step)
     del selected
-    halves = (train["orig_month"].to_numpy() // 12) % 2 == 0
+    halves = (train["origination_month"].to_numpy() // 12) % 2 == 0
 
     # Only what a fit or a covariance reads. The calendar columns, the episode end and the
     # vintage label are a quarter of the frame on ~60 million rows, and every fit in the
@@ -927,7 +924,7 @@ def _fit_description(
     as_of: str,
     moratorium: str,
     distribution: str = "weibull",
-    weights_col: str | None = "n",
+    weights_col: str | None = "loan_months",
     ancillary: str | None = None,
     likelihood: Likelihood | None = None,
 ) -> dict[str, object]:

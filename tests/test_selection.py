@@ -37,14 +37,14 @@ from fixtures import DEFAULT_PARAMS, build_panel
 if TYPE_CHECKING:
     from pathlib import Path
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
 FORMULA = " + ".join(COVARIATES)
 
 #: The generator is Weibull with a constant shape. Selection should say so.
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.9,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=0.14,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -90,7 +90,7 @@ def test_shape_test_does_not_reject_a_constant_shape(encoded: pd.DataFrame) -> N
     """The generator uses one shape for every loan, so the extra parameter should
     fail to earn its place. A test that rejected here would be finding structure
     that is not in the data."""
-    result = shape_depends_on_covariates(encoded, COVARIATES, FORMULA, "fico_s")
+    result = shape_depends_on_covariates(encoded, COVARIATES, FORMULA, "credit_score")
 
     assert result.iloc[0]["p_value"] > 0.05
     assert result.iloc[0]["added_parameters"] == 1
@@ -165,7 +165,9 @@ def test_stratified_curves_separate_by_credit_quality(panel: pd.DataFrame) -> No
     """Stratification is all Kaplan-Meier can do with a covariate, and only for
     one fixed at origination."""
     banded = panel.copy()
-    banded["quality"] = pd.cut(banded["fico_s"], bins=[-10.0, 0.0, 10.0], labels=["weak", "strong"])
+    banded["quality"] = pd.cut(
+        banded["credit_score"], bins=[0.0, 700.0, 1000.0], labels=["weak", "strong"]
+    )
 
     curves = kaplan_meier_by_stratum(banded, "quality")
 
@@ -219,11 +221,11 @@ def test_vif_is_weighted_by_exposure() -> None:
         {
             "a": base,
             "b": base * 0.5 + rng.normal(scale=0.02, size=400),
-            "n": rng.integers(1, 1000, 400),
+            "loan_months": rng.integers(1, 1000, 400),
         }
     )
 
-    weighted = variance_inflation(frame, ["a", "b"], weight="n")
+    weighted = variance_inflation(frame, ["a", "b"], weight="loan_months")
     unweighted = variance_inflation(frame, ["a", "b"])
 
     assert float(weighted.iloc[0]["vif"]) != float(unweighted.iloc[0]["vif"])
@@ -331,28 +333,33 @@ def test_factors_read_back_from_a_saved_correlation_are_the_ones_the_rows_give()
             "a": base,
             "b": base + 0.1 * rng.normal(size=4000),
             "c": rng.normal(size=4000),
-            "n": rng.integers(1, 5, 4000).astype(float),
+            "loan_months": rng.integers(1, 5, 4000).astype(float),
         }
     )
 
-    rows = variance_inflation(frame, ["a", "b", "c"], weight="n").set_index("covariate")["vif"]
-    saved = weighted_correlation(frame, ["a", "b", "c"], weight="n")
+    rows = variance_inflation(frame, ["a", "b", "c"], weight="loan_months").set_index("covariate")[
+        "vif"
+    ]
+    saved = weighted_correlation(frame, ["a", "b", "c"], weight="loan_months")
     table = inflation_from_covariance(saved).set_index("covariate")["vif"]
 
     np.testing.assert_allclose(table.loc[rows.index], rows, rtol=1e-8)
 
 
 def test_the_shape_test_relaxes_the_covariate_whose_curves_cross() -> None:
-    """S3: the report relaxed the first covariate, ``fico_s``, while the stratum whose curves
+    """S3: the report relaxed the first covariate, ``credit_score``, while the stratum whose curves
     cross -- the assumption the test exists for -- was ``occupancy``."""
-    covariates = ["fico_s", "cltv_drift", "purpose", "occupancy"]
+    covariates = ["credit_score", "ltv_change", "purpose", "occupancy"]
     references = {"purpose": "purchase", "occupancy": "owner_occupied"}
 
     assert shape_formula(covariates, references) == (
         "occupancy",
         "C(occupancy, Treatment('owner_occupied'))",
     )
-    assert shape_formula(["fico_s", "purpose"], {"purpose": "purchase"}) == ("fico_s", "fico_s")
+    assert shape_formula(["credit_score", "purpose"], {"purpose": "purchase"}) == (
+        "credit_score",
+        "credit_score",
+    )
 
 
 def test_the_comparison_fits_through_the_function_it_is_given(encoded: pd.DataFrame) -> None:

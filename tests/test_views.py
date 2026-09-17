@@ -32,13 +32,13 @@ from fixtures import DEFAULT_PARAMS, build_panel
 if TYPE_CHECKING:
     from pathlib import Path
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
 FORMULA = " + ".join(COVARIATES)
 
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.9,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=0.14,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -148,7 +148,7 @@ def test_the_backtest_deciles_are_the_shared_buckets(
 
 
 def test_credit_score_bands_are_named_as_scores() -> None:
-    frame = pd.DataFrame({"fico_s": [-2.0, -0.5, 0.4, 1.0, 2.0, 3.5]})
+    frame = pd.DataFrame({"credit_score": [600.0, 675.0, 720.0, 750.0, 800.0, 875.0]})
 
     labels = SEGMENTS["fico"].label(frame)
 
@@ -249,20 +249,20 @@ def test_the_coefficient_view_puts_covariates_on_one_scale(
     split: Split, split_fit: FitResult
 ) -> None:
     table = coefficient_view(split_fit, split.train, COVARIATES).frame
-    fico = table[(table["parameter"] == "lambda_") & (table["term"] == "fico_s")].iloc[0]
+    fico = table[(table["parameter"] == "lambda_") & (table["term"] == "credit_score")].iloc[0]
 
     assert fico["effect_1sd"] == pytest.approx(fico["coef"] * fico["one_sd"])
     assert fico["one_sd"] > 0
 
 
 def test_covariates_over_time_are_monthly_exposure_weighted_means(split: Split) -> None:
-    table = covariates_over_time(split, ["cltv_drift"]).frame
+    table = covariates_over_time(split, ["ltv_change"]).frame
     frame = pd.concat([split.train, split.test])
     first = str(pd.PeriodIndex(frame["period"]).min())
     rows = frame[pd.PeriodIndex(frame["period"]).astype(str) == first]
 
-    value = table[(table["month"] == first) & (table["covariate"] == "cltv_drift")]["mean"]
-    assert value.iloc[0] == pytest.approx(np.average(rows["cltv_drift"], weights=rows[WEIGHT]))
+    value = table[(table["month"] == first) & (table["covariate"] == "ltv_change")]["mean"]
+    assert value.iloc[0] == pytest.approx(np.average(rows["ltv_change"], weights=rows[WEIGHT]))
 
 
 def test_projections_by_segment_weight_back_to_the_book(
@@ -294,8 +294,8 @@ def test_the_views_command_publishes_the_selection_record_as_long_tables(
     reports.mkdir()
     pd.DataFrame(
         [[1.0, -0.8], [-0.8, 1.0]],
-        index=["rate_gap", "policy_rate_gap"],
-        columns=["rate_gap", "policy_rate_gap"],
+        index=["mortgage_rate_decline", "policy_rate_change"],
+        columns=["mortgage_rate_decline", "policy_rate_change"],
     ).to_csv(reports / "selection_correlation.csv")
     monkeypatch.setenv("CREDITSURV_REPORTS_DIR", str(reports))
     monkeypatch.setenv("CREDITSURV_TABLES_DIR", str(tables))
@@ -306,5 +306,7 @@ def test_the_views_command_publishes_the_selection_record_as_long_tables(
     assert set(load_manifest(tables)) == {"selection_correlation"}
     table = load_view("selection_correlation", tables)
     assert len(table) == 4
-    pair = table[(table["first"] == "rate_gap") & (table["second"] == "policy_rate_gap")]
+    pair = table[
+        (table["first"] == "mortgage_rate_decline") & (table["second"] == "policy_rate_change")
+    ]
     assert pair["correlation"].iloc[0] == pytest.approx(-0.8)

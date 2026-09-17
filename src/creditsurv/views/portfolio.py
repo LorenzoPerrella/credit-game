@@ -49,21 +49,25 @@ PORTFOLIO_CATEGORICAL: Final[tuple[str, ...]] = (
     "channel",
     "region",
     "property_type",
-    "first_time_buyer",
-    "has_mi",
+    "buyer_type",
+    "mortgage_insurance",
     "term_years",
 )
 
 #: Banded fields, labelled after the query by the segment of the same grid.
-PORTFOLIO_BANDED: Final[dict[str, str]] = {"fico_s": "fico", "orig_ltv": "ltv", "dti": "dti"}
+PORTFOLIO_BANDED: Final[dict[str, str]] = {
+    "credit_score": "fico",
+    "original_ltv": "ltv",
+    "debt_to_income": "dti",
+}
 
 #: How each column of the book is labelled: a segment where one exists, the level as it is
 #: mapped otherwise.
 _SEGMENT_OF: Final[dict[str, str]] = {
     "purpose": "purpose",
     "occupancy": "occupancy",
-    "first_time_buyer": "first_time_buyer",
-    "has_mi": "has_mi",
+    "buyer_type": "buyer_type",
+    "mortgage_insurance": "mortgage_insurance",
     "term_years": "term",
     **PORTFOLIO_BANDED,
 }
@@ -188,18 +192,18 @@ def lending_by_segment(
     query = f"""
     WITH book AS ({_state_of_the_book_sql(MoratoriumPolicy.EXCLUDE, complete_only=False)}),
     labelled AS (
-        SELECT loan_identifier, period_key, orig_upb, {", ".join(_labelled_columns())},
+        SELECT loan_identifier, period_key, original_balance, {", ".join(_labelled_columns())},
                {_ORIGINATION_YEAR} AS vintage_year
         FROM book
     ),
     loans AS (
         SELECT loan_identifier, ARG_MIN(vintage_year, period_key) AS vintage_year,
-               ARG_MIN(orig_upb, period_key) AS orig_upb, {firsts}
+               ARG_MIN(original_balance, period_key) AS original_balance, {firsts}
         FROM labelled
         GROUP BY loan_identifier
     )
     SELECT vintage_year, {gaps}, {", ".join(fields)},
-           COUNT(*) AS loans, SUM(orig_upb) AS amount
+           COUNT(*) AS loans, SUM(original_balance) AS amount
     FROM loans
     GROUP BY GROUPING SETS ({sets}, (vintage_year))
     """
