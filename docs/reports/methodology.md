@@ -38,7 +38,7 @@ specification that fits this sample and would not survive the next one.
 Three exclusions are deliberate and matter more than the inclusions:
 
 - **Origination vintage** is reserved for the out-of-time split. As a covariate it absorbs exactly the macroeconomic effects the model exists to estimate.
-- **Contemporaneous revised macro** is excluded; every revised series is lagged three months. Look-ahead is invisible in results -- a model that quietly reads next quarter's unemployment looks excellent and is worthless.
+- **Contemporaneous macro** is excluded: every series is lagged three months, revised ones because they are published late and market quotes because a loan ninety days delinquent in a month missed its payments in the three before it. Look-ahead is invisible in results -- a model that quietly reads next quarter's unemployment looks excellent and is worthless.
 - **Current delinquency status** is excluded as a mediator, not a predictor. Including it inflates every metric while destroying the model's actual use, which is predicting lifetime PD from origination.
 
 Loan-to-value is decomposed rather than indexed. `orig_ltv` and `indexed_cltv` are
@@ -75,7 +75,7 @@ each.
 The exponential is a Weibull with shape one, so the constant-hazard hypothesis is
 exactly `log rho = 0` and reads straight off the fitted coefficient table.
 
-**rho = 1.3959, z = 566, p = 0.00e+00.**
+**rho = 1.4214, z = 483, p = 0.00e+00.**
 The hazard **rises** with loan age, which is the seasoning pattern mortgages are expected to show, and the constant-hazard hypothesis
 is settled without estimating anything further.
 
@@ -108,12 +108,21 @@ the one that decides.
 
 | distribution | log_likelihood | aic | n_parameters | delta_aic |
 |---|---|---|---|---|
-| lognormal | -1.5e+07 | 3.01e+07 | 2 | 0.00 |
-| loglogistic | -1.51e+07 | 3.02e+07 | 2 | 79669.98 |
-| weibull | -1.51e+07 | 3.02e+07 | 2 | 96341.87 |
-| exponential | -1.52e+07 | 3.04e+07 | 1 | 309835.31 |
+| lognormal | -1.21e+07 | 2.41e+07 | 2 | 0.00 |
+| loglogistic | -1.21e+07 | 2.42e+07 | 2 | 77731.60 |
+| weibull | -1.21e+07 | 2.42e+07 | 2 | 91920.15 |
+| exponential | -1.22e+07 | 2.45e+07 | 1 | 336551.83 |
 
 ### 3. Regression fits on identical episodes
+
+The comparison is made with the covariates and read three ways: the likelihood, the
+declared priors -- a family pointing one the wrong way is contradicting the economics
+rather than fitting the data -- and the survival curve against Kaplan-Meier, over the long
+horizons a lifetime PD is quoted on. The three need not agree, and when they do not the
+report says so rather than choosing for the reader. The validation made this comparison on
+the specification before it: the log-logistic came 623,126 AIC points behind the Weibull
+and turned `orig_ltv`, `term_years` and investor occupancy around. The tables are this
+run's own comparison, on this run's specification.
 
 The log-normal is absent because it does not converge on this panel structure --
 observed across sample sizes, with and without a penalizer, under two optimisers,
@@ -126,7 +135,25 @@ sums over. It ranks distributions on one panel and means nothing across differen
 panel constructions -- comparing an interval-censored episode panel with a
 loan-level right-censored one by AIC is not a comparison at all.
 
-> **Not run.** comparing distributions costs a fit of its own, which on the whole population is hours rather than seconds. Re-run with `--extra-fits` to compute it.
+| distribution | log_likelihood | aic | n_episodes | seconds | signs_against_prior | delta_aic |
+|---|---|---|---|---|---|---|
+| loglogistic | -1.09e+07 | 2.18e+07 | 59663961 | 4691.30 | nfci_lagged | 0.00 |
+| weibull | -1.09e+07 | 2.18e+07 | 59663961 | 562.12 |  | 83961.35 |
+
+On this specification the **loglogistic** has the better likelihood, by 83,961 AIC points.
+
+The loglogistic turns `nfci_lagged` against its declared prior.
+
+Against Kaplan-Meier the **loglogistic** is closer on average, 1.21 percentage points of survival.
+
+The model reported throughout is the weibull, and `docs/variable_selection.md` records why it was kept against a better likelihood.
+
+**Each family against Kaplan-Meier, in percentage points of survival**
+
+| distribution | largest_deviation | mean_deviation | last_month | predicted_survival | deviation_at_last_month |
+|---|---|---|---|---|---|
+| weibull | 3.26 | 1.26 | 312 | 76.19 | -3.20 |
+| loglogistic | 2.90 | 1.21 | 312 | 76.64 | -2.74 |
 
 ### 4. Does the hazard's shape vary with covariates?
 
@@ -138,9 +165,11 @@ It matters for lifetime PD specifically: if the shape genuinely varies, the term
 structure differs by loan rather than merely shifting, and a single shape misstates
 the timing of losses even when it gets the total right.
 
-Tested on `fico_s`:
+Tested on `occupancy`, the one covariate whose survival curves cross: investor loans default faster early and slower late, which no scale factor can represent:
 
-> **Not run.** testing the shape costs a fit of its own, which on the whole population is hours rather than seconds. Re-run with `--extra-fits` to compute it.
+| restricted_log_likelihood | full_log_likelihood | added_parameters | statistic | p_value | restricted_aic | full_aic |
+|---|---|---|---|---|---|---|
+| -1.09e+07 | -1.09e+07 | 2 | 220.6226 | 1.24e-48 | 2.18e+07 | 2.18e+07 |
 
 ### 5. Against the non-parametric estimate
 
@@ -148,19 +177,19 @@ The strongest evidence available, because Kaplan-Meier assumes nothing about the
 distribution. A fitted curve straying outside its confidence band is being
 contradicted by the data rather than merely smoothing it.
 
-**3 of 312 points fall inside the band** -- and on this panel that
+**2 of 312 points fall inside the band** -- and on this panel that
 number carries almost no information, which is worth explaining rather than reporting
 as a verdict.
 
 A confidence band narrows as the square root of the sample, and on 48 million loans it
-collapses. At five years this one runs from 0.9497 to
-0.9498 -- a width of **0.0178 percentage
-points**, and the median across the horizon is 0.0511. Every smooth
+collapses. At five years this one runs from 0.9602 to
+0.9603 -- a width of **0.0163 percentage
+points**, and the median across the horizon is 0.0480. Every smooth
 parametric curve is outside a band that narrow, so the in-or-out test answers a question
 nobody is asking at this size.
 
 The quantity that does carry information is how far the curve is from the data: **largest
-deviation 2.32 percentage points of survival, mean 0.97**,
+deviation 3.26 percentage points of survival, mean 1.26**,
 over a horizon of 312 months. That is what the comparison is for.
 
 This check earned its place. An earlier version of the comparison predicted each
@@ -177,32 +206,32 @@ along each loan's realised covariate path instead.
 
 | month | predicted | km_lower | km_upper | inside | deviation | band_width |
 |---|---|---|---|---|---|---|
-| 1.0000 | 0.9998 | 1.0000 | 1.0000 | False | -0.0002 | 1.46e-06 |
-| 32.0000 | 0.9812 | 0.9798 | 0.9799 | False | 0.0014 | 9.36e-05 |
-| 63.0000 | 0.9529 | 0.9497 | 0.9498 | False | 0.0031 | 0.0002 |
-| 94.0000 | 0.9189 | 0.9202 | 0.9205 | False | -0.0015 | 0.0003 |
-| 125.0000 | 0.8913 | 0.8961 | 0.8964 | False | -0.0050 | 0.0004 |
-| 156.0000 | 0.8665 | 0.8739 | 0.8744 | False | -0.0076 | 0.0005 |
-| 187.0000 | 0.8370 | 0.8467 | 0.8475 | False | -0.0102 | 0.0008 |
-| 218.0000 | 0.7981 | 0.8126 | 0.8139 | False | -0.0151 | 0.0013 |
-| 249.0000 | 0.7717 | 0.7905 | 0.7923 | False | -0.0198 | 0.0018 |
-| 280.0000 | 0.7479 | 0.7686 | 0.7719 | False | -0.0224 | 0.0033 |
-| 311.0000 | 0.7273 | 0.7460 | 0.7540 | False | -0.0227 | 0.0080 |
+| 1.0000 | 0.9999 | 1.0000 | 1.0000 | False | -9.74e-05 | 1.46e-06 |
+| 32.0000 | 0.9863 | 0.9852 | 0.9853 | False | 0.0010 | 8.09e-05 |
+| 63.0000 | 0.9630 | 0.9602 | 0.9603 | False | 0.0028 | 0.0002 |
+| 94.0000 | 0.9349 | 0.9346 | 0.9349 | True | 9.6e-05 | 0.0003 |
+| 125.0000 | 0.9103 | 0.9134 | 0.9138 | False | -0.0033 | 0.0003 |
+| 156.0000 | 0.8882 | 0.8948 | 0.8953 | False | -0.0068 | 0.0005 |
+| 187.0000 | 0.8625 | 0.8737 | 0.8745 | False | -0.0116 | 0.0007 |
+| 218.0000 | 0.8315 | 0.8540 | 0.8551 | False | -0.0231 | 0.0011 |
+| 249.0000 | 0.8083 | 0.8355 | 0.8371 | False | -0.0280 | 0.0016 |
+| 280.0000 | 0.7848 | 0.8139 | 0.8174 | False | -0.0308 | 0.0035 |
+| 311.0000 | 0.7625 | 0.7887 | 0.7990 | False | -0.0313 | 0.0103 |
 
 ## Fit summary
 
 - **distribution**: weibull
 - **likelihood**: interval_censored
-- **episodes**: 14874002
-- **defaults**: 935939
-- **log-likelihood**: -1.38e+07
-- **AIC (episode scale)**: 2.75e+07
-- **fit seconds**: 2238.38
+- **episodes**: 59663961
+- **defaults**: 1460306
+- **log-likelihood**: -1.09e+07
+- **AIC (episode scale)**: 2.18e+07
+- **fit seconds**: 562.12
 
 ---
 
 ## How this was produced
 
 - `uv run creditsurv report`
-- Formula: `fico_s + orig_ltv + dti + cltv_drift + unemp_gap + vix + inflation + term_years + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied'))`
+- Formula: `fico_s + orig_ltv + dti + cltv_drift + unemp_gap + nfci_lagged + policy_rate_gap + sentiment + starts_growth + inflation_gap + term_years + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(has_mi, Treatment('N')) + C(first_time_buyer, Treatment('N'))`
 - Loan data: Freddie Mac Single-Family Loan-Level Dataset. Macro: FRED; see `docs/data_dictionary.md`.

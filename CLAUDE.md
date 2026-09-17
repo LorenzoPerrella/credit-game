@@ -185,7 +185,21 @@ so the complete-case rule drops them: 18% of the 2009Q2-2019Q1 vintages, about t
 likely to default as the loans kept (`docs/data_preparation.md`). Covering them takes a level
 of their own in the key -- a re-aggregation and a new selection -- never an imputed DTI.
 
-**`occupancy` survival curves cross** at 90 months: investor loans die faster early and
-slower late. No scale factor reconciles that, so the AFT assumption is violated for
-that covariate. The remedy is `ancillary` on the shape parameter — still one parametric
-model, not a segmentation — and it is untested because it costs a fit.
+**The Weibull against the log-logistic.** On the selected specification the log-logistic
+has the better likelihood by 83,961 AIC points and sits slightly closer to Kaplan-Meier
+(1.21 points of survival on average against 1.26, -2.74 at 312 months against -3.20), but
+turns `nfci_lagged` against its prior; on the specification before the validation the
+Weibull led by 623,126. Switching family means `creditsurv select` with log-logistic fits,
+~15 hours, since every rule of steps 8 and 9 reads the family's coefficients. See
+`docs/variable_selection.md`.
+
+**The backtest fails its decile criterion.** Overall actual over expected 0.920 and Gini
+0.561 pass; the deciles run 0.597 to 0.995, every one below 1, so the model overpredicts
+throughout and most in the safer deciles. The criteria were fixed before the run, so the
+model is not to be tuned to them on the test window.
+
+**`occupancy` changes the hazard's shape, a little.** Its curves cross at 90 months, which
+no scale factor reconciles, and letting occupancy into the shape parameter is significant --
+likelihood ratio 220.6 on two parameters, p = 1e-48 -- and small: a third of what
+`first_time_buyer` earns at the screen (696) and under a thousandth of `cltv_drift`
+(542,917). The model stays scale-only in occupancy.

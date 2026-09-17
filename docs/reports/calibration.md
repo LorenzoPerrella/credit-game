@@ -20,20 +20,25 @@ what it is.
 
 | param | covariate | coef | se(coef) | time_ratio | coef lower 95% | coef upper 95% | p |
 |---|---|---|---|---|---|---|---|
-| lambda_ | Intercept | 9.4181 | 0.0057 | 12308.8798 | 9.4069 | 9.4292 | 0.0000 |
-| lambda_ | fico_s | 0.3838 | 0.0005 | 1.4679 | 0.3828 | 0.3849 | 0.0000 |
-| lambda_ | orig_ltv | -0.0155 | 4e-05 | 0.9846 | -0.0156 | -0.0154 | 0.0000 |
-| lambda_ | dti | -0.0186 | 5.17e-05 | 0.9815 | -0.0187 | -0.0185 | 0.0000 |
-| lambda_ | cltv_drift | -0.0154 | 4.59e-05 | 0.9847 | -0.0155 | -0.0153 | 0.0000 |
-| lambda_ | unemp_gap | -0.0377 | 0.0003 | 0.9630 | -0.0382 | -0.0372 | 0.0000 |
-| lambda_ | vix | -0.0288 | 4.74e-05 | 0.9716 | -0.0289 | -0.0287 | 0.0000 |
-| lambda_ | inflation | 5.0810 | 0.0315 | 160.9311 | 5.0192 | 5.1428 | 0.0000 |
-| lambda_ | term_years | -0.0383 | 0.0001 | 0.9624 | -0.0386 | -0.0381 | 0.0000 |
-| lambda_ | C(purpose, Treatment('purchase'))[T.refinance_cashout] | -0.2144 | 0.0014 | 0.8070 | -0.2171 | -0.2117 | 0.0000 |
-| lambda_ | C(purpose, Treatment('purchase'))[T.refinance_rate_term] | 0.0197 | 0.0014 | 1.0199 | 0.0170 | 0.0225 | 2.51e-44 |
-| lambda_ | C(occupancy, Treatment('owner_occupied'))[T.investor] | -0.0913 | 0.0023 | 0.9127 | -0.0958 | -0.0869 | 0.0000 |
-| lambda_ | C(occupancy, Treatment('owner_occupied'))[T.second_home] | 0.1407 | 0.0032 | 1.1511 | 0.1345 | 0.1469 | 0.0000 |
-| rho_ | Intercept | 0.3335 | 0.0006 | 1.3959 | 0.3324 | 0.3347 | 0.0000 |
+| lambda_ | Intercept | 8.3070 | 0.0079 | 4052.0510 | 8.2914 | 8.3225 | 0.0000 |
+| lambda_ | fico_s | 0.4144 | 0.0006 | 1.5135 | 0.4132 | 0.4156 | 0.0000 |
+| lambda_ | orig_ltv | -0.0129 | 5.79e-05 | 0.9872 | -0.0130 | -0.0128 | 0.0000 |
+| lambda_ | dti | -0.0156 | 5.57e-05 | 0.9845 | -0.0157 | -0.0155 | 0.0000 |
+| lambda_ | cltv_drift | -0.0167 | 5.68e-05 | 0.9834 | -0.0169 | -0.0166 | 0.0000 |
+| lambda_ | unemp_gap | -0.0353 | 0.0004 | 0.9653 | -0.0360 | -0.0346 | 0.0000 |
+| lambda_ | nfci_lagged | -0.0065 | 0.0012 | 0.9935 | -0.0089 | -0.0042 | 4.31e-08 |
+| lambda_ | policy_rate_gap | 0.0538 | 0.0004 | 1.0553 | 0.0531 | 0.0546 | 0.0000 |
+| lambda_ | sentiment | 0.0068 | 7.16e-05 | 1.0068 | 0.0066 | 0.0069 | 0.0000 |
+| lambda_ | starts_growth | 0.3920 | 0.0039 | 1.4799 | 0.3844 | 0.3996 | 0.0000 |
+| lambda_ | inflation_gap | 2.4701 | 0.0346 | 11.8242 | 2.4023 | 2.5380 | 0.0000 |
+| lambda_ | term_years | -0.0361 | 0.0001 | 0.9646 | -0.0363 | -0.0358 | 0.0000 |
+| lambda_ | C(purpose, Treatment('purchase'))[T.refinance_cashout] | -0.2968 | 0.0017 | 0.7432 | -0.3001 | -0.2934 | 0.0000 |
+| lambda_ | C(purpose, Treatment('purchase'))[T.refinance_rate_term] | -0.0875 | 0.0017 | 0.9162 | -0.0909 | -0.0841 | 0.0000 |
+| lambda_ | C(occupancy, Treatment('owner_occupied'))[T.investor] | -0.0679 | 0.0026 | 0.9343 | -0.0730 | -0.0629 | 1.94e-151 |
+| lambda_ | C(occupancy, Treatment('owner_occupied'))[T.second_home] | 0.0960 | 0.0035 | 1.1008 | 0.0892 | 0.1029 | 2.38e-166 |
+| lambda_ | C(has_mi, Treatment('N'))[T.Y] | -0.1020 | 0.0019 | 0.9030 | -0.1057 | -0.0984 | 0.0000 |
+| lambda_ | C(first_time_buyer, Treatment('N'))[T.Y] | -0.0025 | 0.0021 | 0.9975 | -0.0066 | 0.0016 | 0.2250 |
+| rho_ | Intercept | 0.3516 | 0.0007 | 1.4214 | 0.3502 | 0.3531 | 0.0000 |
 
 ![Coefficient estimates with 95% confidence intervals](figures/coefficients.png)
 
@@ -51,12 +56,16 @@ in percentage points, holding everything else where it is.
 
 | covariate | kind | one_sd | baseline_pd | shocked_pd | change_pp |
 |---|---|---|---|---|---|
-| fico_s | static | 0.6637 | 0.0014 | 0.0010 | -0.0428 |
-| orig_ltv | static | 17.5618 | 0.0014 | 0.0019 | 0.0426 |
-| dti | static | 9.8075 | 0.0014 | 0.0018 | 0.0415 |
-| cltv_drift | time-varying | 10.2651 | 0.0014 | 0.0018 | 0.0353 |
-| unemp_gap | time-varying | 3.0205 | 0.0014 | 0.0017 | 0.0246 |
-| inflation | static | 0.0095 | 0.0014 | 0.0014 | 0.0000 |
+| fico_s | static | 1.0482 | 0.0005 | 0.0003 | -0.0223 |
+| cltv_drift | time-varying | 10.8488 | 0.0005 | 0.0006 | 0.0143 |
+| dti | static | 11.2460 | 0.0005 | 0.0006 | 0.0137 |
+| policy_rate_gap | time-varying | 2.3204 | 0.0005 | 0.0004 | -0.0079 |
+| orig_ltv | static | 15.7540 | 0.0005 | 0.0006 | 0.0071 |
+| unemp_gap | time-varying | 2.6549 | 0.0005 | 0.0006 | 0.0069 |
+| sentiment | time-varying | 13.2482 | 0.0005 | 0.0004 | -0.0058 |
+| starts_growth | time-varying | 0.1955 | 0.0005 | 0.0004 | -0.0050 |
+| inflation_gap | time-varying | 0.0228 | 0.0005 | 0.0004 | -0.0037 |
+| nfci_lagged | time-varying | 0.5606 | 0.0005 | 0.0005 | 0.0003 |
 
 ## PD term structure
 
@@ -72,29 +81,36 @@ the two appear.
 
 | month | survival | cumulative_pd | marginal_pd | hazard |
 |---|---|---|---|---|
-| 1 | 1.0000 | 4.74e-05 | 4.74e-05 | 4.74e-05 |
-| 6 | 0.9994 | 0.0006 | 0.0001 | 0.0001 |
-| 11 | 0.9986 | 0.0014 | 0.0002 | 0.0002 |
-| 16 | 0.9974 | 0.0026 | 0.0003 | 0.0003 |
-| 21 | 0.9960 | 0.0040 | 0.0003 | 0.0003 |
-| 26 | 0.9946 | 0.0054 | 0.0003 | 0.0003 |
-| 31 | 0.9930 | 0.0070 | 0.0003 | 0.0003 |
-| 36 | 0.9913 | 0.0087 | 0.0003 | 0.0003 |
-| 41 | 0.9895 | 0.0105 | 0.0004 | 0.0004 |
-| 46 | 0.9877 | 0.0123 | 0.0004 | 0.0004 |
-| 51 | 0.9858 | 0.0142 | 0.0004 | 0.0004 |
-| 56 | 0.9838 | 0.0162 | 0.0004 | 0.0004 |
+| 1 | 1.0000 | 1.52e-05 | 1.52e-05 | 1.52e-05 |
+| 6 | 0.9998 | 0.0002 | 4.41e-05 | 4.41e-05 |
+| 11 | 0.9995 | 0.0005 | 6.08e-05 | 6.08e-05 |
+| 16 | 0.9992 | 0.0008 | 7.78e-05 | 7.78e-05 |
+| 21 | 0.9988 | 0.0012 | 8.74e-05 | 8.75e-05 |
+| 26 | 0.9983 | 0.0017 | 9.58e-05 | 9.6e-05 |
+| 31 | 0.9978 | 0.0022 | 0.0001 | 0.0001 |
+| 36 | 0.9973 | 0.0027 | 0.0001 | 0.0001 |
+| 41 | 0.9967 | 0.0033 | 0.0001 | 0.0001 |
+| 46 | 0.9961 | 0.0039 | 0.0001 | 0.0001 |
+| 51 | 0.9955 | 0.0045 | 0.0001 | 0.0001 |
+| 56 | 0.9948 | 0.0052 | 0.0001 | 0.0001 |
 
-- **12-month PD**: 0.0014
-- **lifetime PD (60m)**: 0.0154
+- **12-month PD**: 0.0005
+- **lifetime PD (60m)**: 0.0052
 
 ## Macroeconomic scenarios
 
-The adverse path is shaped like 2008 rather than scaled to it: unemployment climbs
-over a year and stays high, house prices fall for two years, credit tightens. The
-baseline is a random walk from the last observation, which is **not a forecast** and
-is not offered as one -- it is what makes the relative effect of a scenario
-interpretable without smuggling in a view on the economy.
+The adverse path is shaped like 2008 rather than scaled to it, and it moves only series the
+fitted model reads: each leg is listed below with the move it makes, the month it gets
+there, where it stands at three years and the covariates it feeds. The baseline is a random
+walk from the last observation, which is **not a forecast** and is not offered as one: it is
+what makes the relative effect of a scenario interpretable without smuggling in a view on
+the economy.
+
+Twice the scenario and the specification parted company, and twice the report kept
+describing a path the model did not see: first two legs fed no covariate and two
+covariates had no leg, then the reselection removed volatility and added financial
+conditions, the policy rate, sentiment and housing starts. A test now fails whenever the
+shocked series and the formula part, and this table is built from the scenario itself.
 
 Because the covariates are time-varying, the scenario is applied by projecting the
 covariate paths and chaining conditional survival, not by re-scoring frozen
@@ -104,7 +120,19 @@ date, so the projected macro path was never reached and both scenarios returned
 almost the same answer. The model looked stable when it was simply not being asked
 the question.
 
-**Adverse lifetime PD is 1.46x the baseline.**
+**Adverse lifetime PD is 2.39x the baseline.**
+
+**The adverse legs: moves are proportional where shown in per cent**
+
+| series | move | month reached | by month 36 | read by |
+|---|---|---|---|---|
+| unemployment_rate | +4.0 | 12 | +4.0 | unemp_gap |
+| hpi | -20% | 24 | -20% | cltv_drift |
+| cpi | -2% | 12 | -2% | inflation_gap |
+| nfci | +3.4 | 16 | +0.0 | nfci_lagged |
+| policy_rate | -95% | 30 | -95% | policy_rate_gap |
+| sentiment | -39% | 16 | -39% | sentiment |
+| housing_starts | -65% | 21 | -65% | starts_growth |
 
 ![Distribution of lifetime PD under each scenario](figures/scenarios.png)
 
@@ -113,13 +141,13 @@ the question.
 | statistic | baseline | adverse |
 |---|---|---|
 | count | 500.0000 | 500.0000 |
-| mean | 0.0087 | 0.0128 |
-| std | 0.0089 | 0.0138 |
-| min | 0.0008 | 0.0011 |
-| 25% | 0.0027 | 0.0038 |
-| 50% | 0.0054 | 0.0075 |
-| 75% | 0.0118 | 0.0173 |
-| max | 0.0604 | 0.0838 |
+| mean | 0.0027 | 0.0066 |
+| std | 0.0018 | 0.0044 |
+| min | 0.0007 | 0.0016 |
+| 25% | 0.0015 | 0.0035 |
+| 50% | 0.0022 | 0.0052 |
+| 75% | 0.0036 | 0.0088 |
+| max | 0.0165 | 0.0401 |
 
 ---
 
@@ -127,4 +155,4 @@ the question.
 
 - `uv run creditsurv report`
 - Distribution: weibull; likelihood: interval_censored
-- Book scored: 500 rows standing for 6,016,157 loans; horizon: 60 months
+- Book scored: 500 rows standing for 3,418,486 loans; horizon: 60 months

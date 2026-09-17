@@ -318,6 +318,44 @@ no prior and meet no rule of its, and `term_spread` and `hpi_growth`, since it h
 stability step. The reversal and stability rules are this project's additions, argued in
 the sections that follow.
 
+### The distribution family, and why the Weibull was kept against a better likelihood
+
+`report --extra-fits` compares the families on the selected specification, and on this one
+they part ([methodology, section 3](reports/methodology.md)):
+
+| | Weibull | Log-logistic |
+|---|---|---|
+| AIC, episode scale | 83,961 points behind | **ahead** |
+| Declared priors turned around | none | `nfci_lagged` |
+| Mean distance from Kaplan-Meier | 1.26 points of survival | **1.21** |
+| Largest distance | 3.26 | **2.90** |
+| At 312 months | −3.20 | **−2.74** |
+
+On the specification before the validation the ranking was the other way round, by 623,126
+AIC points, with the log-logistic turning three priors. The ranking follows the specification,
+which is the age-period-cohort point made in the methodology report: which family fits cannot
+be separated from which covariates are in the model.
+
+The Weibull is kept, for now, for three reasons, none of which is that the likelihood does
+not matter.
+
+* **Changing the family is a new selection, not a swap.** Every rule in steps 8 and 9 reads
+  coefficients, and the coefficients are the family's. Under the log-logistic `nfci_lagged`
+  points the wrong way and step 8 would remove it; what that does to the rest cannot be
+  read off this run.
+* **Against Kaplan-Meier the log-logistic is closer, but not much.** 0.05 points of survival
+  on average and 0.46 at the longest horizon, where both families overstate cumulative
+  default -- the Weibull by 3.2 points. The criterion a lifetime PD depends on does not
+  separate them the way the AIC does.
+* **Its declining hazard at long ages is an extrapolation choice.** A log-logistic hazard
+  rises and then falls, which lowers lifetime PD precisely beyond the ages the data reach.
+  That can be right, and it should be chosen for that reason rather than inherited from an
+  AIC on the observed ages.
+
+What would settle it is `creditsurv select` run with log-logistic fits, and the two selected
+models read the same three ways. That is roughly fifteen hours on this machine, and it is
+listed as open in `CLAUDE.md`.
+
 ## Results of the first run
 
 On the whole population: **15,858,492 cells covering 2,515,340,009 loan-months, with
