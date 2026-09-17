@@ -118,7 +118,7 @@ def survival_by_age(
 def actual_expected(
     episodes: pd.DataFrame,
     hazard: np.ndarray,
-    dimensions: Mapping[str, pd.Series | np.ndarray],
+    dimensions: Mapping[str, pd.Series | pd.Categorical | np.ndarray],
 ) -> pd.DataFrame:
     """Defaults against the model's expectation, for every combination of ``dimensions``.
 
@@ -132,7 +132,9 @@ def actual_expected(
     present = np.ones(len(episodes), dtype=bool)
     levels: list[list[object]] = []
     for values in dimensions.values():
-        codes, found = pd.factorize(np.asarray(values), sort=True)
+        # Factorised as given: a categorical keeps its codes, where np.asarray would turn sixty
+        # million labels into sixty million Python objects first.
+        codes, found = pd.factorize(values, sort=True)
         present &= codes >= 0
         combined = combined * len(found) + np.maximum(codes, 0)
         levels.append(list(found))

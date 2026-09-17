@@ -8,13 +8,23 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 import pytest
+from typer.testing import CliRunner
 
 from creditsurv.backtest.metrics import exposure_buckets, weighted_calibration
 from creditsurv.backtest.runner import predicted_hazard
+from creditsurv.backtest.splits import Split, cell_split
+from creditsurv.cli import app
 from creditsurv.data.panel import WEIGHT, to_interval_censored
 from creditsurv.models.aft import FitResult, fit_aft
+from creditsurv.models.lifetime_pd import origination_book
 from creditsurv.models.nonparametric import kaplan_meier, predicted_survival_curve
 from creditsurv.views.calibration import WHOLE_BOOK, actual_expected, survival_by_age
+from creditsurv.views.model import (
+    calibration_views,
+    coefficient_view,
+    covariates_over_time,
+    projection_views,
+)
 from creditsurv.views.segments import SEGMENTS, age_bands, available, calendar_years
 from creditsurv.views.tables import View, load_manifest, load_view, write_views
 from fixtures import DEFAULT_PARAMS, build_panel
@@ -185,3 +195,116 @@ def test_a_view_that_identifies_loans_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="aggregates"):
         write_views([View("bad", "Bad", "", frame, source="cells")], tmp_path)
+
+
+# ----- views that need the model ---------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def split(encoded: pd.DataFrame) -> Split:
+    last = pd.PeriodIndex(encoded["period"]).max()
+    return cell_split(encoded, last - 12)
+
+
+@pytest.fixture(scope="module")
+def split_fit(split: Split) -> FitResult:
+    return fit_aft(split.train, COVARIATES, FORMULA, weights_col=WEIGHT)
+
+
+def test_every_calibration_view_opens_by_segment_and_adds_up(
+    split: Split, split_fit: FitResult
+) -> None:
+    train_hazard = predicted_hazard(split_fit, split.train, COVARIATES).to_numpy()
+    test_hazard = predicted_hazard(split_fit, split.test, COVARIATES).to_numpy()
+
+    views = {
+        view.name: view.frame
+        for view in calibration_views(
+            split,
+            train_hazard=train_hazard,
+            test_hazard=test_hazard,
+            families={"weibull": train_hazard},
+        )
+    }
+
+    assert {"km_vs_model", "ae_by_year", "backtest_by_month", "acceptance_by_segment"} <= set(views)
+    for name in ("ae_by_year", "ae_by_vintage", "ae_by_age_band", "ae_by_decile"):
+        table = views[name]
+        assert list(table.columns[:2]) == ["segment", "group"]
+        totals = table.groupby("segment")["events"].sum()
+        assert totals.nunique() == 1, name
+        assert totals.iloc[0] == pytest.approx(split.train["event"].sum())
+    months = views["backtest_by_month"]
+    assert months.loc[months["segment"] == "all", "exposure"].sum() == pytest.approx(
+        split.test[WEIGHT].sum()
+    )
+    whole = views["acceptance_by_segment"].set_index("segment").loc["all"]
+    assert whole["actual_over_expected"] == pytest.approx(
+        split.test["event"].sum() / (test_hazard * split.test[WEIGHT]).sum()
+    )
+    assert set(views["families_vs_km"]["distribution"]) == {"weibull"}
+
+
+def test_the_coefficient_view_puts_covariates_on_one_scale(
+    split: Split, split_fit: FitResult
+) -> None:
+    table = coefficient_view(split_fit, split.train, COVARIATES).frame
+    fico = table[(table["parameter"] == "lambda_") & (table["term"] == "fico_s")].iloc[0]
+
+    assert fico["effect_1sd"] == pytest.approx(fico["coef"] * fico["one_sd"])
+    assert fico["one_sd"] > 0
+
+
+def test_covariates_over_time_are_monthly_exposure_weighted_means(split: Split) -> None:
+    table = covariates_over_time(split, ["cltv_drift"]).frame
+    frame = pd.concat([split.train, split.test])
+    first = str(pd.PeriodIndex(frame["period"]).min())
+    rows = frame[pd.PeriodIndex(frame["period"]).astype(str) == first]
+
+    value = table[(table["month"] == first) & (table["covariate"] == "cltv_drift")]["mean"]
+    assert value.iloc[0] == pytest.approx(np.average(rows["cltv_drift"], weights=rows[WEIGHT]))
+
+
+def test_projections_by_segment_weight_back_to_the_book(
+    split: Split, split_fit: FitResult, macro_module: pd.DataFrame
+) -> None:
+    book = origination_book(split.train, macro_module, 40)
+    views = {
+        view.name: view.frame
+        for view in projection_views(split_fit, book, macro_module, COVARIATES, horizon_months=24)
+    }
+
+    scenarios = views["scenarios_by_segment"]
+    whole = scenarios[scenarios["segment"] == "all"].iloc[0]
+    purpose = scenarios[scenarios["segment"] == "purpose"]
+    recombined = (purpose["pd_12m"] * purpose["book_weight"]).sum() / purpose["book_weight"].sum()
+
+    assert recombined == pytest.approx(whole["pd_12m"])
+    assert (scenarios["adverse_multiple"] > 1).all()
+    structure = views["term_structure_by_segment"]
+    curve = structure[structure["segment"] == "all"].sort_values("month")
+    assert curve["cumulative_pd"].is_monotonic_increasing
+    assert curve["month"].max() == 24
+
+
+def test_the_views_command_publishes_the_selection_record_as_long_tables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reports, tables = tmp_path / "reports", tmp_path / "tables"
+    reports.mkdir()
+    pd.DataFrame(
+        [[1.0, -0.8], [-0.8, 1.0]],
+        index=["rate_gap", "policy_rate_gap"],
+        columns=["rate_gap", "policy_rate_gap"],
+    ).to_csv(reports / "selection_correlation.csv")
+    monkeypatch.setenv("CREDITSURV_REPORTS_DIR", str(reports))
+    monkeypatch.setenv("CREDITSURV_TABLES_DIR", str(tables))
+
+    result = CliRunner().invoke(app, ["views", "--no-model", "--no-portfolio"])
+
+    assert result.exit_code == 0, result.output
+    assert set(load_manifest(tables)) == {"selection_correlation"}
+    table = load_view("selection_correlation", tables)
+    assert len(table) == 4
+    pair = table[(table["first"] == "rate_gap") & (table["second"] == "policy_rate_gap")]
+    assert pair["correlation"].iloc[0] == pytest.approx(-0.8)

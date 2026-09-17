@@ -68,11 +68,15 @@ def _banded(
 
 
 def _years(column: str, edges: tuple[int, ...]) -> Callable[..., pd.Series]:
-    labels = [f"{low} to {high - 1}" for low, high in pairwise(edges)]
+    # Open at both ends, as the numeric bands are: a vintage before the first edge or after
+    # the last belongs to the outermost era rather than to no era at all.
+    inner = [f"{low} to {high - 1}" for low, high in pairwise(edges[1:-1])]
+    labels = [f"up to {edges[1] - 1}", *inner, f"{edges[-2]} on"]
+    bins = [-np.inf, *edges[1:-1], np.inf]
 
     def label(frame: pd.DataFrame) -> pd.Series:
         years = pd.PeriodIndex(frame[column]).year.to_numpy()
-        banded = pd.cut(years, bins=list(edges), labels=labels, right=False)
+        banded = pd.cut(years, bins=bins, labels=labels, right=False)
         return pd.Series(banded, index=frame.index, name=column)
 
     return label
