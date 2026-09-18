@@ -26,8 +26,9 @@ import numpy as np
 import pandas as pd
 from lifelines import KaplanMeierFitter
 from lifelines.statistics import logrank_test
+from scipy.stats import norm
 
-from creditsurv.data.panel import EVENT, duration_view, to_loan_level
+from creditsurv.data.panel import AGE, CAUSES, EVENT, WEIGHT, duration_view, ended_in, to_loan_level
 from creditsurv.models.aft import episode_hazards
 
 if TYPE_CHECKING:
@@ -206,3 +207,110 @@ def km_band_contains(
     aligned["deviation"] = aligned["predicted"] - observed
     aligned["band_width"] = aligned["km_upper"] - aligned["km_lower"]
     return aligned
+
+
+# --------------------------------------------------------------------------------------
+# Competing risks: the cumulative incidence of default when prepayment can intervene
+# --------------------------------------------------------------------------------------
+
+
+def cumulative_incidence(
+    cells: pd.DataFrame,
+    *,
+    causes: Sequence[str] = CAUSES,
+    weights_col: str = WEIGHT,
+    age_col: str = AGE,
+    confidence: float = 0.95,
+) -> pd.DataFrame:
+    """Aalen-Johansen cumulative incidence, read straight off the aggregated cells.
+
+    **Why not one minus Kaplan-Meier.** Treating prepayment as censoring asks what the
+    default rate would be *if loans could not be repaid*, and on this book they mostly are:
+    prepayment removes loans from the population far faster than default does, and the
+    counterfactual answer is not the quantity a lifetime PD is supposed to hold. The
+    cumulative incidence asks what actually happens -- the share of loans that have
+    defaulted by age t, prepayments and all -- which is the one a provision is calculated
+    from, and 1 - KM overstates it, by more at every further horizon.
+
+    The estimator is the textbook one, with the hazards read from the cells:
+
+        S(t) = prod over a <= t of (1 - (d_default(a) + d_prepaid(a)) / n(a))
+        F_k(t) = sum over a <= t of S(a-) * d_k(a) / n(a)
+
+    where ``n(a)`` is the loan-months at risk in the episode starting at age ``a``. No
+    loan-level frame exists at any point: the three counts come out of ``bincount`` over
+    the cell table, which is the whole reason the cells carry a three-state outcome rather
+    than a flag.
+
+    The interval is Aalen's, by the delta method (Marubini and Valsecchi, as lifelines
+    computes it). Read the *width*, not whether a curve falls inside: at these counts it
+    collapses to a hundredth of a percentage point, the way every band in this project
+    does.
+    """
+    ages = cells[age_col].to_numpy(dtype=int)
+    weight = cells[weights_col].to_numpy(dtype=float)
+    length = int(ages.max()) + 1
+
+    at_risk = np.bincount(ages, weights=weight, minlength=length)
+    exits = {
+        cause: np.bincount(ages, weights=weight * ended_in(cells, cause), minlength=length)
+        for cause in causes
+    }
+    leaving = sum(exits.values())
+
+    present = np.flatnonzero(at_risk > 0)
+    at_risk = at_risk[present]
+    exits = {cause: count[present] for cause, count in exits.items()}
+    leaving = np.asarray(leaving)[present]
+
+    # S(a-), survival into the episode rather than out of it: the increment at age a is
+    # the hazard of a among the loans that reached it.
+    survival = np.cumprod(1.0 - leaving / at_risk)
+    entering = np.concatenate(([1.0], survival[:-1]))
+
+    table = pd.DataFrame({"age": present, "at_risk": at_risk, "survival": survival})
+    quantile = float(norm.ppf(0.5 + confidence / 2.0))
+    for cause, count in exits.items():
+        hazard = count / at_risk
+        incidence = np.cumsum(entering * hazard)
+        error = _incidence_error(incidence, entering, at_risk, leaving, count)
+        table[cause] = incidence
+        table[f"{cause}_lower"] = np.clip(incidence - quantile * error, 0.0, 1.0)
+        table[f"{cause}_upper"] = np.clip(incidence + quantile * error, 0.0, 1.0)
+        table[f"{cause}_se"] = error
+    return table
+
+
+def _incidence_error(
+    incidence: np.ndarray,
+    entering: np.ndarray,
+    at_risk: np.ndarray,
+    leaving: np.ndarray,
+    count: np.ndarray,
+) -> np.ndarray:
+    """Standard error of a cumulative incidence, by the delta method.
+
+    Three terms, each of which would be a double sum over ages written directly:
+
+        sum over a <= t of (F(t) - F(a))^2 * d(a) / (n(a) * (n(a) - d(a)))
+      + sum over a <= t of S(a-)^2 * (n(a) - d_k(a)) / n(a) * d_k(a) / n(a)^2
+      - 2 * sum over a <= t of (F(t) - F(a)) * S(a-) * d_k(a) / n(a)^2
+
+    ``F(t) - F(a)`` depends on both ends, so each square is expanded and accumulated as
+    running sums instead: three hundred ages here, but 312 x 312 terms a segment is a
+    different proposition when every view is computed per grade and per vintage.
+    """
+    safe = np.where(at_risk > leaving, at_risk * (at_risk - leaving), np.inf)
+    first = leaving / safe
+    second = entering**2 * (at_risk - count) * count / at_risk**3
+    third = entering * count / at_risk**2
+
+    # (F(t) - F(a))^2 = F(t)^2 - 2 F(t) F(a) + F(a)^2, and the same trick for the cross term.
+    squared = (
+        incidence**2 * np.cumsum(first)
+        - 2.0 * incidence * np.cumsum(first * incidence)
+        + np.cumsum(first * incidence**2)
+        + np.cumsum(second)
+        - 2.0 * (incidence * np.cumsum(third) - np.cumsum(third * incidence))
+    )
+    return np.sqrt(np.clip(squared, 0.0, None))

@@ -378,3 +378,116 @@ def test_the_comparison_fits_through_the_function_it_is_given(encoded: pd.DataFr
     assert calls == ["loglogistic"]
     assert set(kept) == {"weibull", "loglogistic"}
     assert kept["weibull"] is weibull
+
+
+# --------------------------------------------------------------------------------------
+# Competing risks
+# --------------------------------------------------------------------------------------
+
+
+def _competing_cells(
+    rng: np.random.Generator, loans: int = 400
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """A book where loans default, prepay or survive, as cells and as loans.
+
+    The cells are what the pipeline holds -- one row per loan-month, carrying the outcome
+    of that month -- and the loan-level frame is what lifelines needs to be asked the same
+    question.
+    """
+    from creditsurv.data.panel import AGE, OUTCOME, WEIGHT
+
+    duration = rng.integers(1, 25, size=loans)
+    cause = rng.choice(["default", "prepayment", "none"], size=loans, p=[0.2, 0.5, 0.3])
+    rows = []
+    for months, ending in zip(duration, cause, strict=True):
+        for age in range(int(months)):
+            last = age == int(months) - 1
+            rows.append({AGE: age, OUTCOME: ending if last else "none", WEIGHT: 1})
+    cells = pd.DataFrame(rows)
+    loan_level = pd.DataFrame({"duration": duration.astype(float), "cause": cause})
+    return cells, loan_level
+
+
+def test_the_cumulative_incidence_is_what_lifelines_computes_from_the_loans() -> None:
+    """Estimated from counts over the cells, with no loan-level frame at any point.
+
+    On distinct exit times, because that is the only ground lifelines can be asked to
+    stand on: ``AalenJohansenFitter`` cannot handle tied event times and **jitters the
+    data randomly** to break them. A monthly panel is nothing but ties -- every loan
+    exits on a month boundary -- so the estimator here groups them exactly instead, and
+    the agreement is checked where the two definitions coincide.
+    """
+    from lifelines import AalenJohansenFitter
+
+    from creditsurv.data.panel import AGE, OUTCOME, WEIGHT
+    from creditsurv.models.nonparametric import cumulative_incidence
+
+    rng = np.random.default_rng(11)
+    duration = np.arange(1, 41)
+    cause = rng.choice(["default", "prepayment", "none"], size=len(duration), p=[0.3, 0.4, 0.3])
+    cells = pd.DataFrame(
+        [
+            {AGE: age, OUTCOME: ending if age == months - 1 else "none", WEIGHT: 1}
+            for months, ending in zip(duration, cause, strict=True)
+            for age in range(int(months))
+        ]
+    )
+    codes = pd.Series(cause).map({"none": 0, "default": 1, "prepayment": 2})
+
+    table = cumulative_incidence(cells)
+
+    for name, code in (("default", 1), ("prepayment", 2)):
+        fitter = AalenJohansenFitter(calculate_variance=False)
+        fitter.fit(duration.astype(float), codes, event_of_interest=code)
+        theirs = fitter.cumulative_density_.iloc[:, 0]
+        ours = pd.Series(table[name].to_numpy(), index=table["age"].to_numpy() + 1.0)
+        aligned = theirs.reindex(theirs.index.union(ours.index)).ffill().reindex(ours.index)
+        np.testing.assert_allclose(ours.to_numpy(), aligned.to_numpy(), atol=1e-12)
+
+
+def test_the_two_incidences_and_survival_account_for_every_loan() -> None:
+    """The identity that makes a competing-risks model a model of one population:
+    a loan has defaulted, prepaid, or is still there.
+    """
+    from creditsurv.models.nonparametric import cumulative_incidence
+
+    cells, _ = _competing_cells(np.random.default_rng(5))
+
+    table = cumulative_incidence(cells)
+
+    total = table["survival"] + table["default"] + table["prepayment"]
+    np.testing.assert_allclose(total.to_numpy(), 1.0, atol=1e-12)
+
+
+def test_treating_prepayment_as_censoring_overstates_the_default_incidence() -> None:
+    """One minus Kaplan-Meier answers what would happen if loans could not be repaid,
+    which on this book is not a hypothetical worth provisioning against: prepayment
+    removes loans far faster than default does.
+    """
+    from lifelines import KaplanMeierFitter
+
+    from creditsurv.models.nonparametric import cumulative_incidence
+
+    cells, loans = _competing_cells(np.random.default_rng(3))
+    table = cumulative_incidence(cells)
+
+    censoring = KaplanMeierFitter()
+    censoring.fit(loans["duration"], (loans["cause"] == "default").astype(int))
+    naive = 1.0 - float(censoring.survival_function_.iloc[-1, 0])
+
+    assert naive > float(table["default"].iloc[-1])
+
+
+def test_the_incidence_band_is_reported_and_is_as_narrow_as_the_counts_make_it() -> None:
+    from creditsurv.models.nonparametric import cumulative_incidence
+
+    cells, _ = _competing_cells(np.random.default_rng(7), loans=4_000)
+
+    table = cumulative_incidence(cells)
+
+    assert (table["default_lower"] <= table["default"]).all()
+    assert (table["default"] <= table["default_upper"]).all()
+    assert (table["default_se"] >= 0).all()
+    # The band narrows as the square root of the count: four thousand loans already
+    # bring it under two percentage points, and the book is four million.
+    assert float(table["default_se"].iloc[-1]) < 0.02
