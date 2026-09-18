@@ -464,3 +464,89 @@ def test_months_the_release_barely_covers_are_set_aside_by_name() -> None:
 
     assert list(covered["group"].astype(str)) == ["2026-01", "2026-02"]
     assert list(thin["group"].astype(str)) == ["2026-03", "2026-04"]
+
+
+# --------------------------------------------------------------------------------------
+# The master scale
+# --------------------------------------------------------------------------------------
+
+
+def test_the_master_scale_doubles_and_covers_the_line() -> None:
+    """Eight grades on geometric thresholds, declared in docs/rules.md before the run: a
+    scale drawn after seeing the distribution is a scale drawn to pass.
+    """
+    from creditsurv.backtest.metrics import GRADES, grade_of, master_scale
+
+    edges = master_scale()
+
+    assert len(edges) == GRADES - 1
+    np.testing.assert_allclose(edges[1:] / edges[:-1], 2.0)
+    assert grade_of(np.array([0.0])) == 1, "the safest grade has no floor"
+    assert grade_of(np.array([1.0])) == GRADES, "the riskiest has no ceiling"
+    assert grade_of(np.array([edges[0]]))[0] == 1, "the edges are closed on the left"
+    assert grade_of(np.array([edges[0] * 1.001]))[0] == 2
+
+
+def test_the_jeffreys_interval_says_something_where_a_normal_one_would_not() -> None:
+    """The top grades hold few defaults and sometimes none, where a normal interval has
+    zero width and no grade can fail. That is the reason the validation asked for this one.
+    """
+    from creditsurv.backtest.metrics import jeffreys_interval
+
+    lower, upper = jeffreys_interval(np.array([0.0, 5.0]), np.array([10_000.0, 10_000.0]))
+
+    # Not zero, as a Clopper-Pearson lower bound would be: Beta(1/2, n + 1/2) puts a little
+    # mass below any rate, which is the prior doing what it is there for.
+    assert 0 < lower[0] < 1e-6
+    assert 0 < upper[0] < 0.001, "no defaults in ten thousand still bounds the rate"
+    assert lower[1] < 5.0 / 10_000.0 < upper[1]
+    # The interval narrows as the exposure grows.
+    wide = jeffreys_interval(5.0, 10_000.0)
+    narrow = jeffreys_interval(500.0, 1_000_000.0)
+    assert (wide[1] - wide[0]) > (narrow[1] - narrow[0])
+
+
+def test_a_grade_passes_when_its_prediction_falls_inside_the_realised_interval() -> None:
+    from creditsurv.backtest.metrics import (
+        annualised,
+        grade_backtest,
+        master_scale_passed,
+    )
+
+    hazard = np.concatenate(
+        [np.full(2_000, 0.00005), np.full(2_000, 0.0005), np.full(2_000, 0.005)]
+    )
+    exposure = pd.Series(np.full(len(hazard), 12_000.0))
+    # Realised defaults exactly at the predicted rate: every populated grade must hold.
+    events = pd.Series(annualised(hazard) * exposure.to_numpy() / 12.0)
+
+    table = grade_backtest(pd.Series(hazard), events, exposure)
+
+    assert master_scale_passed(table)
+    assert table["passed"].all()
+    assert table["grade"].is_monotonic_increasing
+    assert (table["predicted_pd"].diff().dropna() > 0).all()
+
+    # A model predicting a tenth of what happens fails, and says so grade by grade.
+    broken = grade_backtest(pd.Series(hazard), events * 10.0, exposure)
+    assert not master_scale_passed(broken)
+    assert not broken["passed"].any()
+
+
+def test_the_predicted_pd_and_the_realised_rate_are_in_the_same_unit() -> None:
+    """Obligor-years on both sides: the denominator is loan-months over twelve, which is
+    the exposure the defaults were earned on and the unit the annualised hazard is in.
+    """
+    from creditsurv.backtest.metrics import grade_backtest
+
+    hazard = pd.Series(np.full(100, 0.001))
+    exposure = pd.Series(np.full(100, 1_200.0))
+    events = pd.Series(np.full(100, 1.2))
+
+    table = grade_backtest(hazard, events, exposure)
+
+    assert len(table) == 1
+    row = table.iloc[0]
+    assert row["obligor_years"] == pytest.approx(100 * 1_200.0 / 12.0)
+    assert row["actual_pd"] == pytest.approx(120.0 / 10_000.0)
+    assert row["predicted_pd"] == pytest.approx(1.0 - 0.999**12)
