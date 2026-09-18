@@ -67,7 +67,7 @@ its reason beside it in `ingest.py`:
 | All loss columns (`actual_loss`, `net_sales_proceeds`, expenses, recoveries) | Populated only for defaulted loans, and only relevant to LGD — out of scope |
 | `postal_code`, `seller_name`, `msa` | High cardinality, no signal for a default model at this granularity |
 | `prepayment_penalty_indicator` | Near-constant `N` on conforming loans |
-| `harp_indicator`, `special_eligibility_program` | Programme flags, not states of the loan. `harp_indicator` marks exactly the loans with no debt-to-income, which the complete-case rule drops: see [What dropping removes](#what-dropping-removes) |
+| `special_eligibility_program` | A programme flag, not a state of the loan |
 | `property_valuation_method` | How a value was obtained, not what it is |
 
 Until the validation (D2) the last four were missing from this table, and so were
@@ -151,12 +151,25 @@ the 2012Q2 origination file, 181,302 of the 181,356 loans without a debt-to-inco
 `harp_indicator = Y`, and not one HARP loan has one. Nearly all are no-cash-out refinances
 (181,197), at a median LTV of 98 against 74 for the rest, a quarter of them above 124.
 
-**The model therefore does not cover HARP refinances**: 2.87 million loans and 135,408
-defaults, about three times as likely to default as the loans kept from the same vintages. An
-imputed DTI would invent the one thing the programme waived. Covering them means a level of
-their own in the key -- a HARP or missing-DTI indicator -- at the cost of a re-aggregation and
-a new selection. Until that is decided the exclusion is stated rather than repaired, and it is
-listed under Open in `CLAUDE.md`.
+**HARP refinances are now in the model, as a level of their own.** They were outside it
+until September 2026 -- 2.87 million loans and 135,408 defaults, about three times as likely
+to default as the loans kept from the same vintages -- because the complete-case rule needs a
+debt-to-income and the programme waived it. The repair is the one the exclusion always
+pointed at: `harp` is a level of the cell key, a loan without the ratio is kept when and only
+when it is a HARP refinance, and **the ratio stays missing in the cell table**. Nothing is
+imputed there, and a reader counting HARP loans sees the gap the source has.
+
+What the model does with the gap is decided on the model's side and is not an imputation
+either. The ratio is filled with a constant, and `harp` -- which within the kept loans is
+exactly the missing indicator -- absorbs the constant whole. That is the **dummy-variable
+adjustment**: the slope of the ratio is estimated on the loans that report it, the level
+takes the fill, and the fill's value is arbitrary. It is a "not reported" band written on the
+scale the covariate already uses, and `features.absorb_not_reported` refuses to fit the
+ratio without the level rather than trusting the arrangement to be remembered.
+
+Measured on 2012Q2, the vintage where the programme is largest: the HARP loans are 16.4
+million loan-months of 40.1, and they default at **5.54 basis points a month against 1.24**
+for the rest -- 4.5 times, on 40.8% of the exposure.
 
 ### Categorical codes are mapped from what is in the field, not from the layout
 
@@ -411,11 +424,12 @@ of the one it replaces and its coefficient stays comparable with an unbinned fit
 
 ```
 key    = coarse-classed continuous covariates
-       × categorical covariates: purpose, occupancy, term, has_mi, first_time_buyer
+       × categorical covariates: purpose, occupancy, term, mortgage_insurance,
+                                 buyer_type, harp, delinquency_state
        × origination month
        × loan age
-       × event
-weight = COUNT(*) AS n
+       × outcome: default, prepayment or neither
+weight = COUNT(*) AS loan_months
 ```
 
 Quarters are aggregated **one at a time**. Every loan appears in exactly one
@@ -500,6 +514,10 @@ That asymmetry decides the shape of the whole specification:
 | Adding | Cost |
 |---|---|
 | One macro series | **zero cells** |
+| The HARP level | **1.06×**, measured |
+| The payment state of the month before | **1.19×**, measured |
+| The note rate, at half-point bands | **2.13×**, measured |
+| The documented band grid, 8 / 8 / 6 instead of 5 / 4 / 4 | **2.28×**, measured |
 | *mortgage insurance* (`mortgage_insurance`, formerly `has_mi`) and *buyer type* (`buyer_type`, formerly `first_time_buyer`) | **1.19×** the table, measured |
 | The origination month in place of the quarter | **3.51×**, measured |
 | One continuous covariate at 5 bands | up to **5×** the table |
@@ -512,10 +530,25 @@ insurance* and *buyer type* together cost 1.19×, and they are in the key.
 
 That is still why the macro side carries fifteen candidate covariates and the loan side
 eight. The loan characteristics left out -- *original balance (log)*
-(`log_original_balance`, formerly `log_orig_upb`), *note rate over the market rate at
-origination* (`origination_spread`, formerly `orig_spread`), *origination channel*, *Census
-region* -- were not dropped on their merits, and `docs/variable_selection.md` records what
-each would cost against what it might be worth.
+(`log_original_balance`, formerly `log_orig_upb`), *origination channel* (`channel`),
+*Census region* (`region`) -- were not dropped on their merits, and
+`docs/variable_selection.md` records what each would cost against what it might be worth.
+
+**The ceiling decides which of them the key can hold.** `docs/rules.md` caps the table at
+150 million cells and fixes, before any of it is measured, the order the extensions are
+given up in. `creditsurv profile --extensions` then priced them on nine quarters
+(`docs/reports/key_extensions.csv`): all four together are 4.90× the base key, a projected
+312 million cells, and giving up the finer bands alone still leaves 161.9 million. So the
+second rung goes too and the key keeps the HARP level and the payment state, at 1.26× and a
+projected 80.4 million.
+
+The finer bands are individually affordable, at 144.9 million, and go first regardless --
+which is the point of fixing the order beforehand. What it costs is the loan's own note
+rate, and with it *note rate over the market rate at origination* (`origination_spread`) and
+the refinancing incentive a prepayment model turns on. The *mortgage rate fall since
+origination* (`mortgage_rate_decline`) survives, free, and is the same comparison without
+its constant: within one origination month this book's note rates span about a point, while
+the market rate has moved several points since 2021.
 
 ### The weight is a count, never an amount
 

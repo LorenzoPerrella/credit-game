@@ -40,11 +40,17 @@ if TYPE_CHECKING:
     from creditsurv.backtest.splits import Split
     from creditsurv.models.aft import FitResult, Likelihood
 
-#: The reporting date every command cuts at, unless one is given. Late on purpose: a
-#: credit model wants every loan-month it can get in training, and the test window only
-#: has to be long enough to judge it. Shared by `fit`, `backtest` and `report` so that
-#: all three mean the same model by the same name.
-DEFAULT_AS_OF = "2024-12"
+#: The reporting date every command cuts at, unless one is given: the end of the
+#: **development window** of `docs/rules.md`. Shared by `fit`, `backtest` and `report` so
+#: that all three mean the same model by the same name.
+#:
+#: It was 2024-12 until September 2026, chosen late because a credit model wants every
+#: loan-month it can get. That left no room between estimation and the test window, so the
+#: level could only be anchored on data the coefficients had already seen or on the window
+#: being judged. Three years now sit between them: estimation to 2021-12, anchoring on
+#: 2022-01 to 2024-12, and the test window from 2025-01, each seeing only what the ones
+#: before it did.
+DEFAULT_AS_OF = "2021-12"
 
 #: Where `fit --save` and `report` leave the coefficient table, and where the notebooks
 #: read it.
@@ -546,7 +552,7 @@ def compare(moratorium: MoratoriumOption = "exclude") -> None:
 
 @app.command()
 def backtest(
-    as_of: Annotated[str, typer.Option(help="Reporting date, e.g. 2024-12.")] = DEFAULT_AS_OF,
+    as_of: Annotated[str, typer.Option(help="Reporting date, e.g. 2021-12.")] = DEFAULT_AS_OF,
     moratorium: MoratoriumOption = "exclude",
 ) -> None:
     """Fit once on everything up to the reporting date, then predict against realised.
