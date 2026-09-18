@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -21,7 +22,7 @@ from creditsurv.models.aft import fit_aft
 from creditsurv.models.lifetime_pd import origination_book
 from creditsurv.site import figures, hooks
 from creditsurv.site.content import TABLES, VALUES, Sources, to_markdown
-from creditsurv.site.figures import FIGURES, group_key, render, term_label
+from creditsurv.site.figures import FIGURES, group_key, group_label, render
 from creditsurv.views.model import (
     calibration_views,
     coefficient_view,
@@ -50,11 +51,11 @@ if TYPE_CHECKING:
     from creditsurv.site.content import Table, Value
     from creditsurv.site.figures import Figure
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.9,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=0.14,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -93,7 +94,7 @@ def published(
             families={"weibull": train_hazard, "loglogistic": train_hazard * 1.1},
         ),
         coefficient_view(fitted, split.train, COVARIATES),
-        covariates_over_time(split, ["cltv_drift", "unemp_gap"]),
+        covariates_over_time(split, ["ltv_change", "unemployment_change"]),
         *projection_views(
             fitted,
             origination_book(split.train, macro_module, 40),
@@ -221,11 +222,12 @@ def test_age_bands_are_drawn_in_order_of_age(published: Sources) -> None:
             assert starts == sorted(starts)
 
 
-def test_a_categorical_term_is_named_against_its_reference() -> None:
-    term = "C(purpose, Treatment('purchase'))[T.refinance_cashout]"
-
-    assert term_label(term) == "purpose: refinance_cashout (against purchase)"
-    assert term_label("fico_s") == "fico_s"
+def test_a_group_reads_as_its_label_under_current_and_former_codes() -> None:
+    assert group_label("purpose", "cash_out_refinance") == "Cash-out refinance"
+    assert group_label("purpose", "refinance_cashout") == "Cash-out refinance"
+    assert group_label("mortgage_insurance", "uninsured") == "Not insured"
+    assert group_label("channel", "third_party") == "Broker or correspondent"
+    assert group_label("fico", "580 to 660") == "580 to 660"
 
 
 # ----- the hook ----------------------------------------------------------------------------
@@ -369,3 +371,50 @@ def test_a_number_the_views_provide_is_placed_on_a_page_never_typed() -> None:
         markdown = (project_root() / "docs" / f"{page}.md").read_text()
         typed = [name for name, text in numbers.items() if text in markdown]
         assert not typed, f"docs/{page}.md types {typed} instead of placing them"
+
+
+# ----- no name the code uses reaches a reader -----------------------------------------------
+
+
+def _code_names() -> set[str]:
+    """Every name and level code that reads differently from its label."""
+    from creditsurv import names
+
+    found = set()
+    for entry in names.VARIABLES.values():
+        for name in (entry.name, entry.former):
+            if name and "_" in name and name != entry.label:
+                found.add(name)
+        for level in entry.levels:
+            for code in (level.code, level.former):
+                if code and "_" in code:
+                    found.add(code)
+    return found
+
+
+def _texts(figure: object) -> list[str]:
+    layout = figure.layout  # type: ignore[attr-defined]
+    texts = [str(trace.name or "") for trace in figure.data]  # type: ignore[attr-defined]
+    for trace in figure.data:  # type: ignore[attr-defined]
+        for axis in (trace.x, trace.y):
+            if axis is not None and len(axis) and isinstance(axis[0], str):
+                texts.extend(str(value) for value in axis)
+    for menu in layout.updatemenus or ():
+        texts.extend(str(button.label) for button in menu.buttons)
+    return texts
+
+
+@pytest.mark.usefixtures("unfloored")
+def test_no_figure_or_table_shows_a_name_the_code_uses(published: Sources) -> None:
+    pattern = re.compile(
+        "|".join(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])" for name in _code_names())
+    )
+    shown = [text for figure in FIGURES.values() for text in _texts(figure.build(published))]
+    # The Variables page is the one place the names are the point.
+    for table in (table for name, table in TABLES.items() if not name.startswith("variables_")):
+        frame = table.build(published)
+        shown.extend(str(column) for column in frame.columns)
+        shown.extend(str(value) for value in frame.to_numpy().ravel())
+
+    leaks = sorted({match.group(0) for text in shown for match in pattern.finditer(text)})
+    assert leaks == []

@@ -44,11 +44,12 @@ import numpy as np
 import pandas as pd
 
 from creditsurv.config import (
+    DISTRIBUTION,
     ECONOMIC_DIMENSION,
     MACRO_CANDIDATES,
     MACRO_ELIMINATION_PRIORITY,
 )
-from creditsurv.data.panel import WEIGHT
+from creditsurv.data.panel import DEFAULT_CAUSE, WEIGHT
 from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
 from creditsurv.explore import collinear_pairs
 from creditsurv.models.aft import FitResult, fit_aft
@@ -69,20 +70,44 @@ log = logging.getLogger(__name__)
 #: Loan characteristics in the cell key that no earlier specification screened, with their
 #: reference levels. Admitted to the key for the validation's M3; step 7 is where they meet
 #: the same test as every other candidate, whatever it says.
-CANDIDATE_CATEGORICAL: Final[dict[str, str]] = {"has_mi": "N", "first_time_buyer": "N"}
+CANDIDATE_CATEGORICAL: Final[dict[str, str]] = {
+    "mortgage_insurance": "uninsured",
+    "buyer_type": "repeat",
+    # The payment state a month ago, which entered the key in September 2026. A candidate
+    # and not a fixture: it is the strongest thing the performance file holds, strong enough
+    # that it could crowd out the origination covariates a lifetime PD has to extrapolate
+    # on, and the selection is the place that argument gets settled rather than asserted.
+    "delinquency_state": "current",
+}
 
 #: The loan block the selection starts from and protects from variance inflation, fixed
 #: here as ``config.MACRO_CANDIDATES`` fixes the macro block. ``config.STATIC_CONTINUOUS``,
 #: ``config.ORDINAL`` and ``config.CATEGORICAL_REFERENCE`` hold what survived. Were the
 #: candidates read back from them, a covariate the selection once removed could never be
-#: considered again, and ``has_mi`` and ``first_time_buyer``, admitted by the first run under
+#: considered again, and ``mortgage_insurance`` and ``buyer_type``, admitted by the first run under
 #: this rule, would enter the next one twice.
-LOAN_CONTINUOUS: Final[tuple[str, ...]] = ("fico_s", "orig_ltv", "dti")
+LOAN_CONTINUOUS: Final[tuple[str, ...]] = ("credit_score", "original_ltv", "debt_to_income")
 LOAN_ORDINAL: Final[tuple[str, ...]] = ("term_years",)
-BASE_CATEGORICAL: Final[dict[str, str]] = {"purpose": "purchase", "occupancy": "owner_occupied"}
+#: ``harp`` is in the protected block rather than among the candidates, and that is not a
+#: judgement about its coefficient. A HARP refinance reports no debt-to-income, so the fill
+#: that lets it into the model at all is absorbed by this level: a selection free to drop it
+#: would be free to turn the fill into an imputed ratio for 18% of a decade of vintages. See
+#: ``features.NOT_REPORTED``.
+BASE_CATEGORICAL: Final[dict[str, str]] = {
+    "purpose": "purchase",
+    "occupancy": "owner_occupied",
+    "harp": "standard",
+}
 
 #: Correlation above which a pair is reported at step 5.
 CORRELATION_THRESHOLD: Final = 0.8
+
+#: Effect of one standard deviation on log survival time below which a macro covariate is
+#: removed at step 10. Fixed in `docs/rules.md` before any fit of this branch: 0.02 of log
+#: survival time is about a 2% change in expected time to default per standard deviation,
+#: the smallest effect this data can tell from a difference in specification. Identification,
+#: not significance, is the reason -- at 60 million episodes every p-value is zero.
+MATERIALITY_THRESHOLD: Final = 0.02
 
 
 @dataclass(frozen=True)
@@ -127,6 +152,13 @@ class Fits:
     identity: str
     as_of: str
     moratorium: str
+    #: The distribution family every fit of this run uses. An input, not a constant: rule 2
+    #: of docs/rules.md takes both families through the whole selection and compares the two
+    #: *selected* models, which cannot be done while the family is written into the procedure.
+    distribution: str = DISTRIBUTION
+    #: Which exit these fits are of. It is in every fingerprint, because the prepayment
+    #: model reads the same cells, the same formulas and the same window as the default one.
+    cause: str = DEFAULT_CAUSE
     block_rows: int = DEFAULT_BLOCK_ROWS
     record: list[dict[str, object]] = field(default_factory=list)
 
@@ -144,6 +176,8 @@ class Fits:
             moratorium=self.moratorium,
             formula=spec.formula,
             sample=sample,
+            distribution=self.distribution,
+            cause=self.cause,
         )
         fingerprint = fit_fingerprint(**described)
         cached = load_fit(fingerprint)
@@ -160,6 +194,7 @@ class Fits:
             self.train,
             spec.covariates,
             spec.formula,
+            distribution=self.distribution,
             weights_col=WEIGHT,
             block_rows=self.block_rows,
             initial_point=None if start is None else start.fitter.params_,
@@ -175,22 +210,43 @@ class Fits:
 
 
 def selection_description(
-    *, identity: str, as_of: str, moratorium: str, formula: str, sample: str = "training half"
+    *,
+    identity: str,
+    as_of: str,
+    moratorium: str,
+    formula: str,
+    sample: str = "training half",
+    distribution: str = DISTRIBUTION,
+    cause: str = DEFAULT_CAUSE,
 ) -> dict[str, object]:
-    """What a selection fit is saved under, and so how it is found again."""
-    return {
+    """What a selection fit is saved under, and so how it is found again.
+
+    The cause enters only when it is not ``default``, so every fit made before the
+    prepayment model existed keeps the name it has.
+    """
+    described: dict[str, object] = {
         "purpose": "selection",
         "cells": identity,
         "as_of": as_of,
         "moratorium": moratorium,
         "sample": sample,
         "formula": formula,
-        "distribution": "weibull",
+        "distribution": distribution,
         "likelihood": "interval_censored",
     }
+    if cause != DEFAULT_CAUSE:
+        described["cause"] = cause
+    return described
 
 
-def selected_fit(*, identity: str, as_of: str, moratorium: str, formula: str) -> FitResult | None:
+def selected_fit(
+    *,
+    identity: str,
+    as_of: str,
+    moratorium: str,
+    formula: str,
+    distribution: str = DISTRIBUTION,
+) -> FitResult | None:
     """The selection's own fit of ``formula`` on the training half, if it made one.
 
     The model ``creditsurv report`` fits is the specification the selection ended on, on
@@ -200,7 +256,11 @@ def selected_fit(*, identity: str, as_of: str, moratorium: str, formula: str) ->
     cached = load_fit(
         fit_fingerprint(
             **selection_description(
-                identity=identity, as_of=as_of, moratorium=moratorium, formula=formula
+                identity=identity,
+                as_of=as_of,
+                moratorium=moratorium,
+                formula=formula,
+                distribution=distribution,
             )
         )
     )
@@ -213,6 +273,8 @@ class SelectionRecord:
 
     as_of: str
     moratorium: str
+    distribution: str
+    cause: str
     rows: int
     loan_months: float
     correlation: pd.DataFrame
@@ -221,6 +283,7 @@ class SelectionRecord:
     screening: pd.DataFrame
     elimination: pd.DataFrame
     stability: pd.DataFrame
+    materiality: pd.DataFrame
     selected: Specification
     eliminated: dict[str, str]
     fits: list[dict[str, object]]
@@ -231,6 +294,8 @@ class SelectionRecord:
         return {
             "as_of": self.as_of,
             "moratorium": self.moratorium,
+            "distribution": self.distribution,
+            "cause": self.cause,
             "static_continuous": [name for name in continuous if name in LOAN_CONTINUOUS],
             "ordinal": [name for name in continuous if name in LOAN_ORDINAL],
             "time_varying_continuous": [name for name in continuous if name in MACRO_CANDIDATES],
@@ -250,11 +315,18 @@ def run_selection(
     base_categorical: Mapping[str, str] = BASE_CATEGORICAL,
     candidate_categorical: Mapping[str, str] = CANDIDATE_CATEGORICAL,
     halves: np.ndarray | None = None,
+    signs: Mapping[str, int] = EXPECTED_SIGNS,
 ) -> SelectionRecord:
-    """Run steps 5 to 9 and return what each found. ``halves`` marks one half for step 9.
+    """Run steps 5 to 10 and return what each found. ``halves`` marks one half for step 9.
 
     The candidate lists default to the configuration and are parameters so a test can run
     the whole sequence on a handful of covariates.
+
+    ``signs`` is the map of declared priors steps 7 and 8 read. It is an argument because
+    the prepayment model is a model of a different exit and has different priors -- a credit
+    score that lengthens survival shortens the time to repayment -- and a procedure that
+    read one map for both would eliminate every covariate of the second model for
+    disagreeing with the first model's economics.
     """
     loan = [*static, *ordinal]
     continuous = [*loan, *macro]
@@ -305,7 +377,7 @@ def run_selection(
     alone: dict[str, float] = {}
     for name, reference in candidates:
         result = fits.fit(base.plus(name, reference=reference), start=base_fit)
-        rows = _screen(name, reference, result, base_fit, deviations)
+        rows = _screen(name, reference, result, base_fit, deviations, signs=signs)
         screened.extend(rows)
         if reference is None:
             alone[name] = float(str(rows[0]["coef"]))
@@ -325,7 +397,7 @@ def run_selection(
     steps: list[dict[str, object]] = []
     while True:
         result = fits.fit(current, start=previous)
-        worst = _worst(current, result, alone=alone)
+        worst = _worst(current, result, alone=alone, signs=signs)
         if worst is None:
             break
         name, reason, coefficient, p_value = worst
@@ -369,9 +441,44 @@ def run_selection(
             previous = whole
     stability = pd.concat(rounds, ignore_index=True) if rounds else pd.DataFrame()
 
+    # 10. Materiality. A macro covariate whose effect of one standard deviation on log
+    # survival time is under the threshold contributes its sign and little else, and the
+    # validation's objection was that covariates this small change sign when the sample
+    # does. The threshold is declared in docs/rules.md, before any of these fits.
+    #
+    # One at a time, refitting between, for the reason step 8 gives: removing a covariate
+    # moves every other coefficient, so a list of what was immaterial beside the whole model
+    # is not a list of what is immaterial beside what remains.
+    log.info("step 10: materiality")
+    material: list[dict[str, object]] = []
+    while True:
+        result = fits.fit(current, start=previous)
+        smallest = _immaterial(current, result, deviations, macro=macro)
+        if smallest is None:
+            break
+        name, effect = smallest
+        material.append(
+            {
+                "step": len(material) + 1,
+                "removed": name,
+                "effect_1sd": effect,
+                "threshold": MATERIALITY_THRESHOLD,
+                "remaining": len(current.covariates) - 1,
+            }
+        )
+        eliminated[name] = (
+            f"step 10: 1 sd effect {effect:+.4f} on log survival time, under "
+            f"{MATERIALITY_THRESHOLD:g}"
+        )
+        current = current.minus(name)
+        previous = result
+    materiality = pd.DataFrame(material, columns=_MATERIALITY_COLUMNS)
+
     return SelectionRecord(
         as_of=fits.as_of,
         moratorium=fits.moratorium,
+        distribution=fits.distribution,
+        cause=fits.cause,
         rows=len(train),
         loan_months=float(train[WEIGHT].sum()),
         correlation=correlation,
@@ -380,6 +487,7 @@ def run_selection(
         screening=screening,
         elimination=elimination,
         stability=stability,
+        materiality=materiality,
         selected=current,
         eliminated=eliminated,
         fits=fits.record,
@@ -401,6 +509,36 @@ _SCREENING_COLUMNS: Final = [
 
 _ELIMINATION_COLUMNS: Final = ["step", "removed", "coef", "p", "reason", "remaining"]
 
+_MATERIALITY_COLUMNS: Final = ["step", "removed", "effect_1sd", "threshold", "remaining"]
+
+
+def _immaterial(
+    spec: Specification,
+    result: FitResult,
+    deviations: pd.Series,
+    *,
+    macro: Sequence[str],
+) -> tuple[str, float] | None:
+    """The macro covariate step 10 removes next: the smallest effect under the threshold.
+
+    The loan block is not eligible. A small coefficient on the credit score is a statement
+    about this book; a small coefficient on a macro series is usually a statement about
+    which of five correlated series happened to be left, and it is that instability the
+    threshold is aimed at.
+    """
+    effects = {
+        name: _number(_terms(result), name, "coef") * float(deviations[name])
+        for name in spec.continuous
+        if name in macro and name in deviations.index
+    }
+    below = {
+        name: effect for name, effect in effects.items() if abs(effect) < MATERIALITY_THRESHOLD
+    }
+    if not below:
+        return None
+    name = min(below, key=lambda key: abs(below[key]))
+    return name, below[name]
+
 
 def _number(frame: pd.DataFrame, row: str, column: str) -> float:
     """One cell of a table as a float; the stubs type ``.loc`` as any scalar at all."""
@@ -419,6 +557,8 @@ def _screen(
     result: FitResult,
     base: FitResult,
     deviations: pd.Series,
+    *,
+    signs: Mapping[str, int] = EXPECTED_SIGNS,
 ) -> list[dict[str, object]]:
     """One row per coefficient a candidate adds, and the likelihood ratio it earns."""
     summary = _terms(result)
@@ -428,7 +568,7 @@ def _screen(
         else [str(key) for key in summary.index if str(key).startswith(f"C({name},")]
     )
     statistic = 2.0 * (result.log_likelihood - base.log_likelihood)
-    expected = EXPECTED_SIGNS.get(name, 0)
+    expected = signs.get(name, 0)
     rows = []
     for key in keys:
         coefficient = _number(summary, key, "coef")
@@ -452,7 +592,11 @@ def _screen(
 
 
 def _worst(
-    spec: Specification, result: FitResult, *, alone: Mapping[str, float] | None = None
+    spec: Specification,
+    result: FitResult,
+    *,
+    alone: Mapping[str, float] | None = None,
+    signs: Mapping[str, int] = EXPECTED_SIGNS,
 ) -> tuple[str, str, float, float] | None:
     """The covariate step 8 removes next, and why -- or ``None`` when every one stays.
 
@@ -463,13 +607,13 @@ def _worst(
     * **A backwards sign** against a declared prior. It outranks everything else: it says
       the specification is wrong, not that the evidence is thin.
     * **A reversed sign** on a covariate with no declared prior: its coefficient in the
-      full model points the other way from its coefficient ``alone`` beside the loan block
-      at step 7. This is the first run's marginal/conditional reversal rule, which removed
-      ``credit_spread`` and ``term_spread`` and which ``docs/variable_selection.md`` states
-      "so it can be applied consistently rather than invoked when convenient". A covariate
-      whose conditional effect contradicts its own is carrying something other than what
-      its name says. The first version of this procedure did not run it; its first
-      complete run kept three such covariates.
+      full model points the other way from its coefficient ``alone`` beside the loan block at step
+      7. This is the first run's marginal/conditional reversal rule, which removed
+      ``corporate_bond_spread`` and ``yield_curve_slope`` and which ``docs/variable_selection.md``
+      states "so it can be applied consistently rather than invoked when convenient". A covariate
+      whose conditional effect contradicts its own is carrying something other than what its name
+      says. The first version of this procedure did not run it; its first complete run kept three
+      such covariates.
     * **A p-value above 0.05**, which at this sample size almost nothing reaches.
 
     Categorical terms carry no expected sign, are not screened alone, and at this sample
@@ -483,7 +627,7 @@ def _worst(
         coefficient = _number(summary, name, "coef")
         z = coefficient / _number(summary, name, "se(coef)")
         p_value = _number(summary, name, "p")
-        expected = EXPECTED_SIGNS.get(name)
+        expected = signs.get(name)
         own = None if alone is None else alone.get(name)
         if expected is not None and coefficient * expected < 0:
             backwards.append((abs(z), name, coefficient, p_value))
@@ -493,7 +637,7 @@ def _worst(
             thin.append((p_value, name, coefficient, p_value))
     if backwards:
         _, name, coefficient, p_value = min(backwards)
-        direction = "+" if EXPECTED_SIGNS[name] > 0 else "-"
+        direction = "+" if signs[name] > 0 else "-"
         return (
             name,
             f"wrong sign: {coefficient:+.4g} where {direction} is expected",

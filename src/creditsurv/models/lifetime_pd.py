@@ -20,7 +20,7 @@ It is *not* enough when they are not.
 
 With time-varying covariates a lifetime PD cannot be read off a single predicted
 curve, because the curve depends on covariate values that do not exist yet. Two of
-them -- ``cltv_drift`` and ``unemp_gap`` -- are zero at origination *by
+them -- ``ltv_change`` and ``unemployment_change`` -- are zero at origination *by
 construction*, so holding covariates at their current values quietly assumes house
 prices never move again and unemployment never changes.
 
@@ -125,6 +125,132 @@ def conditional_pd(
     return (1.0 - survival_at_end / survival_at_start).rename("pd")
 
 
+@dataclass(frozen=True)
+class CompetingPaths:
+    """Where a book ends up, month by month, when two exits compete for it.
+
+    Three tables on the same index and columns -- loans by months from the start of the
+    projection -- and every row of them adds to one at every month: a loan has defaulted,
+    has been repaid, or is still there.
+    """
+
+    #: Still performing at the end of month k.
+    survival: pd.DataFrame
+    #: Cumulative incidence by cause: the share that has left that way by the end of month k.
+    incidence: dict[str, pd.DataFrame]
+
+    def account(self) -> pd.DataFrame:
+        """Survival plus every incidence, which is one wherever the arithmetic is right."""
+        total = self.survival.copy()
+        for table in self.incidence.values():
+            total += table
+        return total
+
+
+def competing_paths(
+    hazards: Mapping[str, pd.DataFrame],
+) -> CompetingPaths:
+    """Chain cause-specific hazards into survival and a cumulative incidence per cause.
+
+    The lifetime PD of a mortgage is **not** one minus survival. A loan that is repaid
+    cannot afterwards default, and on this book repayment is the commoner exit by an order
+    of magnitude, so a model that treats it as censoring answers what the default rate
+    would be if borrowers could not repay -- a quantity no provision is calculated from. It
+    is not a small correction either: the naive figure is the one the old model published.
+
+    In discrete monthly time, with at most one exit a month:
+
+        S(t)   = prod over a <= t of (1 - sum of the cause hazards at a)
+        F_k(t) = sum over a <= t of S(a-) * h_k(a)
+
+    ``hazards`` maps a cause to a loan-by-step table of its cause-specific hazard, which is
+    what ``hazard_paths`` returns for a fit made under that cause.
+    """
+    tables = {cause: table for cause, table in hazards.items()}
+    first = next(iter(tables.values()))
+    leaving = sum(table.to_numpy(dtype=float) for table in tables.values())
+
+    survival = np.cumprod(1.0 - np.asarray(leaving), axis=1)
+    # S(a-), survival into the month rather than out of it: the loans the month's hazard
+    # is applied to are the ones that reached it.
+    entering = np.concatenate([np.ones((len(survival), 1)), survival[:, :-1]], axis=1)
+
+    months = pd.Index([int(step) + 1 for step in first.columns], name="month")
+    incidence = {
+        cause: pd.DataFrame(
+            np.cumsum(entering * table.to_numpy(dtype=float), axis=1),
+            index=first.index,
+            columns=months,
+        )
+        for cause, table in tables.items()
+    }
+    return CompetingPaths(
+        survival=pd.DataFrame(survival, index=first.index, columns=months), incidence=incidence
+    )
+
+
+def lifetime_incidence(
+    paths: CompetingPaths,
+    cause: str = "default",
+    *,
+    as_of_month: int = 0,
+    horizon_months: int | None = None,
+) -> pd.Series:
+    """Probability of leaving through ``cause`` over a horizon, given performing today.
+
+        [F_k(as_of + horizon) - F_k(as_of)] / S(as_of)
+
+    The denominator is survival, not one: the loans conditioned on are those still
+    performing, and dividing by anything else mixes in the ones already gone. With one
+    cause and no competition this is exactly :func:`conditional_pd`, which is the check
+    the tests make.
+    """
+    table = paths.incidence[cause]
+    columns = list(table.columns)
+    if as_of_month not in {0, *columns}:
+        message = f"as_of_month {as_of_month} is outside the projected horizon."
+        raise ValueError(message)
+
+    end_month = columns[-1] if horizon_months is None else as_of_month + horizon_months
+    if end_month not in columns:
+        message = f"Horizon reaches month {end_month}, beyond the projected {columns[-1]}."
+        raise ValueError(message)
+
+    at_start = 0.0 if as_of_month == 0 else table[as_of_month]
+    surviving = 1.0 if as_of_month == 0 else paths.survival[as_of_month]
+    return ((table[end_month] - at_start) / surviving).rename("pd")
+
+
+def incidence_term_structure(paths: CompetingPaths, cause: str = "default") -> pd.DataFrame:
+    """Marginal and cumulative incidence by month, averaged over the book.
+
+    The competing-risks counterpart of :func:`pd_term_structure`, and balanced for the
+    same reason: a ragged table averages different loans at different ages, and the
+    composition change reads as a falling hazard near the horizon.
+    """
+    table = paths.incidence[cause]
+    missing = int(table.isna().to_numpy().sum())
+    if missing:
+        message = (
+            f"Incidence table has {missing} missing cells, so loans enter and leave "
+            "between ages and the term structure would mix different populations. "
+            "Build a balanced path with project_panel first."
+        )
+        raise ValueError(message)
+
+    cumulative = table.mean(axis=0)
+    marginal = cumulative.diff().fillna(cumulative.iloc[0])
+    mean_survival = paths.survival.mean(axis=0)
+    return pd.DataFrame(
+        {
+            "survival": mean_survival,
+            "cumulative_incidence": cumulative,
+            "marginal_incidence": marginal,
+            "hazard": marginal / mean_survival.shift(1).fillna(1.0),
+        }
+    )
+
+
 def origination_book(encoded: pd.DataFrame, macro: pd.DataFrame, size: int) -> pd.DataFrame:
     """The commonest origination profiles, as a book to be scored from today.
 
@@ -197,14 +323,14 @@ class Scenario:
     projected month onwards. Shorter sequences hold their final value, so a
     permanent shock needs only its ramp.
 
-    ``hpi`` shocks are proportional -- a house price index is a level, and a
+    ``house_price_index`` shocks are proportional -- a house price index is a level, and a
     fifteen percent fall means the same thing at any index value. Everything else
     is additive, since rates and indices are already in comparable units.
     """
 
     name: str
     shocks: dict[str, Sequence[float]] = field(default_factory=dict)
-    proportional: frozenset[str] = frozenset({"hpi"})
+    proportional: frozenset[str] = frozenset({"house_price_index"})
 
 
 #: Nothing happens: every series holds its last observed value. A random walk is
@@ -215,42 +341,54 @@ BASELINE = Scenario(name="baseline")
 #: A recession resembling 2008 in shape rather than magnitude, shocked on the series
 #: the fitted model actually reads.
 #:
-#: The first version shocked unemployment, house prices, financial conditions and the
-#: thirty-year mortgage rate. By the time the specification settled on ``cltv_drift``,
-#: ``unemp_gap``, ``vix`` and ``inflation``, two of those four legs fed no covariate at
-#: all and two of the model's covariates had no path -- ``vix``, the largest
-#: standardised effect, among them. The published "adverse lifetime PD 1.46x baseline"
-#: therefore understated the model's own sensitivity, which moves 6.6x in-sample between
-#: 2005 and 2009. It was drift rather than a decision: the scenario predated the
-#: specification by three days. ``tests/test_scenarios.py`` now fails if the two part.
+#: The first version shocked unemployment, house prices, financial conditions and the thirty-year
+#: mortgage rate. By the time the specification settled on ``ltv_change``, ``unemployment_change``,
+#: ``equity_volatility`` and ``inflation_rate``, two of those four legs fed no covariate at all and
+#: two of the model's covariates had no path -- ``equity_volatility``, the largest standardised
+#: effect, among them. The published "adverse lifetime PD 1.46x baseline" therefore understated the
+#: model's own sensitivity, which moves 6.6x in-sample between 2005 and 2009. It was drift rather
+#: than a decision: the scenario predated the specification by three days.
+#: ``tests/test_scenarios.py`` now fails if the two part.
 #:
-#: The selection on the whole training half then replaced the specification, and the same
-#: test caught the scenario out again: ``vix`` was gone from the model, and ``nfci_lagged``,
-#: ``policy_rate_gap``, ``sentiment`` and ``starts_growth`` had arrived with no path. The
-#: volatility leg is removed and four legs are added, each the move its series made from
-#: July 2007 to its extreme.
+#: The selection on the whole training half then replaced the specification, and the same test
+#: caught the scenario out again: ``equity_volatility`` was gone from the model, and
+#: ``financial_conditions``, ``policy_rate_change``, ``consumer_sentiment`` and
+#: ``housing_starts_growth`` had arrived with no path. The volatility leg is removed and four legs
+#: are added, each the move its series made from July 2007 to its extreme.
 #:
 #: Unemployment climbs four points over a year and holds; house prices fall a fifth over
 #: two years; consumer prices fall two percent over a year, the deflation of 2009, which
-#: ``inflation_gap`` reads as stress. Financial conditions tighten by 3.4 over sixteen
+#: ``inflation_change`` reads as stress. Financial conditions tighten by 3.4 over sixteen
 #: months, as the NFCI did to November 2008, and ease back over the next year. The policy
 #: rate is cut by 95% over thirty months, as 5.26% became 0.11% by 2010 -- proportional,
 #: so it meets the zero bound instead of crossing it. Consumer sentiment falls 39% over
 #: sixteen months, as 90.4 became 55.3, and housing starts 65% over twenty-one, as 1.35
 #: million became 478 thousand; both are levels, and proportional for the same reason
-#: ``hpi`` and ``cpi`` are.
+#: ``house_price_index`` and ``consumer_price_index`` are.
 ADVERSE = Scenario(
     name="adverse",
     shocks={
         "unemployment_rate": [*np.linspace(0.0, 4.0, 12), *([4.0] * 24)],
-        "hpi": [*np.linspace(0.0, -0.20, 24), *([-0.20] * 12)],
-        "cpi": [*np.linspace(0.0, -0.02, 12), *([-0.02] * 24)],
-        "nfci": [*np.linspace(0.0, 3.4, 16), *np.linspace(3.4, 0.0, 12), *([0.0] * 8)],
-        "policy_rate": [*np.linspace(0.0, -0.95, 30), *([-0.95] * 6)],
-        "sentiment": [*np.linspace(0.0, -0.39, 16), *([-0.39] * 20)],
+        "house_price_index": [*np.linspace(0.0, -0.20, 24), *([-0.20] * 12)],
+        "consumer_price_index": [*np.linspace(0.0, -0.02, 12), *([-0.02] * 24)],
+        "financial_conditions_index": [
+            *np.linspace(0.0, 3.4, 16),
+            *np.linspace(3.4, 0.0, 12),
+            *([0.0] * 8),
+        ],
+        "fed_funds_rate": [*np.linspace(0.0, -0.95, 30), *([-0.95] * 6)],
+        "consumer_sentiment_index": [*np.linspace(0.0, -0.39, 16), *([-0.39] * 20)],
         "housing_starts": [*np.linspace(0.0, -0.65, 21), *([-0.65] * 15)],
     },
-    proportional=frozenset({"hpi", "cpi", "policy_rate", "sentiment", "housing_starts"}),
+    proportional=frozenset(
+        {
+            "house_price_index",
+            "consumer_price_index",
+            "fed_funds_rate",
+            "consumer_sentiment_index",
+            "housing_starts",
+        }
+    ),
 )
 
 

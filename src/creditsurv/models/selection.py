@@ -46,7 +46,7 @@ from creditsurv.data.panel import EVENT, duration_view
 from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS, FitResult, Likelihood, fit_aft
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from lifelines.fitters import ParametricUnivariateFitter
 
@@ -146,7 +146,7 @@ def distribution_comparison(
     Each family is also held to the expected signs. A family that fits worse *and* points a
     declared prior the wrong way is rejected twice, for independent reasons: the
     validation's log-logistic fit on the specification before it was 623,126 AIC points
-    behind the Weibull and turned ``orig_ltv`` around.
+    behind the Weibull and turned ``original_ltv`` around.
     """
     rows = []
     for distribution in distributions:
@@ -192,6 +192,79 @@ def signs_against_prior(result: FitResult) -> list[str]:
         for name, coefficient in summary["coef"].items()
         if EXPECTED_SIGNS.get(str(name), 0) * float(coefficient) < 0
     ]
+
+
+#: How close two families have to be for the rule to fall back on the Weibull, in
+#: percentage points of cumulative incidence. From `docs/rules.md`, written before the fits.
+FAMILY_TIE: Final = 0.1
+
+#: The family kept when the two are within FAMILY_TIE of each other. Its hazard does not
+#: fall at long ages, and the families differ most exactly where the data ends and the
+#: extrapolation a lifetime PD lives on begins.
+FAMILY_ON_A_TIE: Final = "weibull"
+
+
+def family_comparison(
+    gaps: Mapping[str, pd.DataFrame], signs: Mapping[str, Sequence[str]]
+) -> pd.DataFrame:
+    """One row per family: its distance from the non-parametric curve, and its signs.
+
+    ``gaps`` maps a family to the table :func:`creditsurv.models.nonparametric.incidence_gap`
+    produced for its *selected* model, and ``signs`` to the covariates that model turns
+    against a declared prior.
+    """
+    rows = [
+        {
+            "distribution": family,
+            "mean_abs_gap_pp": float(table["gap_pp"].abs().mean()),
+            "max_abs_gap_pp": float(table["gap_pp"].abs().max()),
+            "ages_compared": len(table),
+            "signs_against_prior": ", ".join(signs.get(family, ())),
+            "excluded": bool(signs.get(family)),
+        }
+        for family, table in gaps.items()
+    ]
+    return pd.DataFrame(rows).sort_values("mean_abs_gap_pp").reset_index(drop=True)
+
+
+def family_by_the_rule(comparison: pd.DataFrame) -> tuple[str, str]:
+    """Apply rule 2 of `docs/rules.md` to the comparison, and say why it chose.
+
+    Three clauses, in order, and each of them fixed before either family was fitted:
+
+    * a family whose selected model turns a **declared sign** is excluded whatever its
+      fit -- a model that says tighter financial conditions lengthen survival is not a
+      better model, it is a broken one;
+    * otherwise the **smaller mean absolute gap** from the Aalen-Johansen cumulative
+      incidence of default, over the ages above the exposure floor;
+    * unless the two are within **0.1 percentage points**, where the Weibull is kept.
+
+    Returns the family and the sentence that decided it, which goes in the report: a rule
+    applied without saying which clause fired is indistinguishable from a preference.
+    """
+    eligible = comparison[~comparison["excluded"]]
+    if eligible.empty:
+        message = "Every family turns a declared sign; none can be published."
+        raise ValueError(message)
+    ranked = eligible.sort_values("mean_abs_gap_pp")
+    best = str(ranked.iloc[0]["distribution"])
+    excluded = ", ".join(comparison.loc[comparison["excluded"], "distribution"].astype(str))
+    note = f"{excluded} excluded on a declared sign; " if excluded else ""
+
+    if len(ranked) == 1:
+        return best, f"{note}{best} is the only family left"
+
+    gap = float(ranked.iloc[1]["mean_abs_gap_pp"]) - float(ranked.iloc[0]["mean_abs_gap_pp"])
+    if gap < FAMILY_TIE and FAMILY_ON_A_TIE in set(ranked["distribution"].astype(str)):
+        return (
+            FAMILY_ON_A_TIE,
+            f"{note}the families are {gap:.3f} pp apart, inside the {FAMILY_TIE:g} pp tie, "
+            f"so the {FAMILY_ON_A_TIE} is kept",
+        )
+    return (
+        best,
+        f"{note}{best} is {gap:.3f} pp closer to the observed cumulative incidence",
+    )
 
 
 def exponential_is_rejected(result: FitResult) -> dict[str, float]:
@@ -248,7 +321,7 @@ def likelihood_ratio_test(
 #: late, 0.9522 against 0.9533 surviving at 60 months and 0.9258 against 0.9246 at 91 --
 #: and no scale factor maps one such curve onto the other, so it is where a shape that
 #: varies has something to find. The report used to relax the first covariate of the
-#: specification, ``fico_s``, and so answered a question nobody had asked.
+#: specification, ``credit_score``, and so answered a question nobody had asked.
 SHAPE_COVARIATE: Final = "occupancy"
 
 
@@ -394,42 +467,63 @@ PVALUE_THRESHOLD: Final = 0.05
 #: eliminated on the sign alone. A model that says higher credit scores default sooner
 #: fits its sample and will not survive the next one.
 EXPECTED_SIGNS: Final[dict[str, int]] = {
-    "fico_s": +1,  # better credit survives longer
-    "orig_ltv": -1,  # more leverage fails sooner
-    "orig_cltv": -1,
-    "dti": -1,  # more debt burden fails sooner
-    "cltv_drift": -1,  # leverage rising after origination fails sooner
-    "unemp_gap": -1,  # unemployment above origination fails sooner
-    "nfci_lagged": -1,  # tighter financial conditions fail sooner
-    "mi_percent": +1,  # insured loans are underwritten against a stricter standard
+    "credit_score": +1,  # better credit survives longer
+    "original_ltv": -1,  # more leverage fails sooner
+    "original_cltv": -1,
+    "debt_to_income": -1,  # more debt burden fails sooner
+    "ltv_change": -1,  # leverage rising after origination fails sooner
+    "unemployment_change": -1,  # unemployment above origination fails sooner
+    "financial_conditions": -1,  # tighter financial conditions fail sooner
+    "insurance_coverage": +1,  # insured loans are underwritten against a stricter standard
     # Macro candidates. Only where theory actually commits to a direction: a
     # covariate listed here with no clear prior would be eliminated for disagreeing
     # with a guess, which is worse than not testing it.
-    "vix": -1,  # high implied volatility is a stressed economy
-    "vix_gap": -1,  # volatility risen since origination is stress the loan was not written in
-    "hpi_growth": +1,  # rising house prices build equity
+    "equity_volatility": -1,  # high implied volatility is a stressed economy
+    # Volatility risen since origination is stress the loan was not written in.
+    "volatility_change": -1,
+    "house_price_growth": +1,  # rising house prices build equity
     #
-    # ``rate_gap`` and ``policy_rate_gap`` were briefly given revised signs here, on
+    # ``mortgage_rate_decline`` and ``policy_rate_change`` were briefly given revised signs here, on
     # the strength of their marginal orderings and a mechanism about fixed-rate books.
     # That revision is **retracted**: conditional on the rest of the specification both
     # effects are inside the noise, and the marginal ordering that justified it was the
     # macro cycle. They are eliminated rather than re-signed -- see ``config.ELIMINATED``.
 }
 
+#: The signs the **prepayment** model's coefficients must take, on the same scale: positive
+#: lengthens the time to prepayment.
+#:
+#: A different model of a different exit, so a different prior on every covariate, and the
+#: two must not be confused -- a credit score that lengthens survival *shortens* the time to
+#: repayment, because the borrowers who can refinance are the ones who qualify. These are
+#: the priors declared in rule 6 of `docs/rules.md`, before the fit.
+#:
+#: The refinancing incidence itself is absent because the key cannot carry the note rate at
+#: this cell count (`docs/reports/key_extensions.csv`); ``mortgage_rate_decline``, the fall in
+#: the market rate since origination, is the same comparison without its constant and takes
+#: the sign the incentive would have.
+PREPAYMENT_SIGNS: Final[dict[str, int]] = {
+    "mortgage_rate_decline": -1,  # rates below the note rate: refinance, and sooner
+    "credit_score": -1,  # better credit can refinance, and does
+    "ltv_change": +1,  # leverage that has risen blocks a refinance
+    "house_price_growth": -1,  # rising prices free equity and enable cash-out
+    "unemployment_change": +1,  # a weaker labour market prepays less
+}
+
 #: Covariates deliberately left out of ``EXPECTED_SIGNS``, with the reason. Listed so
 #: the omission reads as a decision rather than an oversight.
 #:
-#: ``rate_gap`` is the near miss. The sign above is the dominant channel -- rates
+#: ``mortgage_rate_decline`` is the near miss. The sign above is the dominant channel -- rates
 #: below the note rate mean refinancing is available and the payment burden is
 #: easier -- but the opposite channel is real: the borrowers who *cannot* refinance
 #: when everyone else can are adversely selected, and they are the ones left in the
 #: book. The constraint is kept because the first channel dominates in the
 #: literature, and this note is here because it is a prior, not a finding.
 AMBIGUOUS_SIGNS: Final[dict[str, str]] = {
-    "term_spread": "a steep curve is both cheap short funding and an expected slowdown",
-    "inflation": "erodes the real debt, squeezes the real income",
-    "inflation_gap": "the same two channels, measured against the loan's own start",
-    "dti": "kept as negative, but it is measured at origination and never updated",
+    "yield_curve_slope": "a steep curve is both cheap short funding and an expected slowdown",
+    "inflation_rate": "erodes the real debt, squeezes the real income",
+    "inflation_change": "the same two channels, measured against the loan's own start",
+    "debt_to_income": "kept as negative, but it is measured at origination and never updated",
 }
 
 

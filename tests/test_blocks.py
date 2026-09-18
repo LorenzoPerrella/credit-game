@@ -37,13 +37,13 @@ if TYPE_CHECKING:
 
     from lifelines.fitters import ParametericAFTRegressionFitter
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap", "purpose"]
-FORMULA = "fico_s + cltv_drift + unemp_gap + C(purpose)"
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change", "purpose"]
+FORMULA = "credit_score + ltv_change + unemployment_change + C(purpose)"
 
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.7,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=-0.06,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -58,8 +58,13 @@ def weighted(book_dir: Path, macro_module: pd.DataFrame) -> pd.DataFrame:
     """
     panel, _ = build_panel(book_dir, macro_module, n_loans=900, seed=23, params=PARAMS)
     encoded = to_interval_censored(panel)
-    encoded["n"] = np.random.default_rng(5).integers(1, 6, len(encoded))
+    encoded["loan_months"] = np.random.default_rng(5).integers(1, 6, len(encoded))
     encoded["purpose"] = encoded["purpose"].astype("category")
+    # Centred and scaled, because what is measured here is the blocks, not the optimiser. On
+    # the score in points SLSQP stops 2.3e-8 apart from lifelines' own run -- the same
+    # objective, a flatter valley along the intercept -- which would hide a block error of
+    # that size; the polish closes it in a real fit.
+    encoded["credit_score"] = (encoded["credit_score"] - 700.0) / 50.0
     return encoded.sort_values(["purpose", "age"], kind="stable").reset_index(drop=True)
 
 
@@ -74,12 +79,12 @@ def stock_fit(
     fitter: ParametericAFTRegressionFitter, frame: pd.DataFrame
 ) -> ParametericAFTRegressionFitter:
     fitter.fit_interval_censoring(
-        model_frame(frame, COVARIATES).assign(n=frame["n"].to_numpy()),
+        model_frame(frame, COVARIATES).assign(loan_months=frame["loan_months"].to_numpy()),
         lower_bound_col=LOWER_BOUND,
         upper_bound_col=UPPER_BOUND,
         event_col=EXACT_OBSERVATION,
         entry_col=AGE_START,
-        weights_col="n",
+        weights_col="loan_months",
         formula=FORMULA,
     )
     return fitter
@@ -95,13 +100,13 @@ def block_fit(
     """The block engine, by default stopping where lifelines stops, to be compared with it."""
     fit_interval_censoring_in_blocks(
         fitter,
-        model_blocks(frame, COVARIATES, rows=rows, weights_col="n"),
+        model_blocks(frame, COVARIATES, rows=rows, weights_col="loan_months"),
         formula=FORMULA,
         lower_bound_col=LOWER_BOUND,
         upper_bound_col=UPPER_BOUND,
         event_col=EXACT_OBSERVATION,
         entry_col=AGE_START,
-        weights_col="n",
+        weights_col="loan_months",
         polish=polish,
     )
     return fitter
@@ -152,18 +157,20 @@ def test_the_answer_does_not_depend_on_the_block_size(weighted: pd.DataFrame) ->
 def test_a_block_fit_reports_what_it_saw(weighted: pd.DataFrame) -> None:
     record = fit_interval_censoring_in_blocks(
         FITTERS["weibull"](),
-        model_blocks(weighted, COVARIATES, rows=single_level_rows(weighted), weights_col="n"),
+        model_blocks(
+            weighted, COVARIATES, rows=single_level_rows(weighted), weights_col="loan_months"
+        ),
         formula=FORMULA,
         lower_bound_col=LOWER_BOUND,
         upper_bound_col=UPPER_BOUND,
         event_col=EXACT_OBSERVATION,
         entry_col=AGE_START,
-        weights_col="n",
+        weights_col="loan_months",
     )
 
     assert record.rows == len(weighted)
-    assert record.loan_months == weighted["n"].sum()
-    assert record.events == weighted.loc[weighted["event"].astype(bool), "n"].sum()
+    assert record.loan_months == weighted["loan_months"].sum()
+    assert record.events == weighted.loc[weighted["event"].astype(bool), "loan_months"].sum()
     assert record.blocks > 3
     # The point of storing compactly: well under the 8 bytes a float64 cell would take.
     assert record.stored_bytes < 8 * record.rows * 4
@@ -179,8 +186,8 @@ def test_a_text_covariate_is_refused(weighted: pd.DataFrame) -> None:
 
 def test_blocks_declaring_different_levels_are_refused(weighted: pd.DataFrame) -> None:
     rows = single_level_rows(weighted)
-    first = model_frame(weighted.iloc[:rows], COVARIATES).assign(n=1)
-    second = model_frame(weighted.iloc[rows:], COVARIATES).assign(n=1)
+    first = model_frame(weighted.iloc[:rows], COVARIATES).assign(loan_months=1)
+    second = model_frame(weighted.iloc[rows:], COVARIATES).assign(loan_months=1)
     first["purpose"] = first["purpose"].cat.remove_unused_categories()
 
     with pytest.raises(ValueError, match="levels"):
@@ -192,7 +199,7 @@ def test_blocks_declaring_different_levels_are_refused(weighted: pd.DataFrame) -
             upper_bound_col=UPPER_BOUND,
             event_col=EXACT_OBSERVATION,
             entry_col=AGE_START,
-            weights_col="n",
+            weights_col="loan_months",
         )
 
 
@@ -230,13 +237,13 @@ def test_a_warm_start_ends_where_a_cold_one_does_in_fewer_steps(weighted: pd.Dat
         fitter = FITTERS["weibull"]()
         record = fit_interval_censoring_in_blocks(
             fitter,
-            model_blocks(weighted, COVARIATES, rows=rows, weights_col="n"),
-            formula="fico_s + cltv_drift + unemp_gap",
+            model_blocks(weighted, COVARIATES, rows=rows, weights_col="loan_months"),
+            formula="credit_score + ltv_change + unemployment_change",
             lower_bound_col=LOWER_BOUND,
             upper_bound_col=UPPER_BOUND,
             event_col=EXACT_OBSERVATION,
             entry_col=AGE_START,
-            weights_col="n",
+            weights_col="loan_months",
             initial_point=initial_point,
             polish=True,
         )
@@ -264,13 +271,15 @@ def test_the_polish_reaches_the_optimum_the_optimiser_stops_short_of(
     fitter = FITTERS["weibull"]()
     record = fit_interval_censoring_in_blocks(
         fitter,
-        model_blocks(weighted, COVARIATES, rows=single_level_rows(weighted), weights_col="n"),
+        model_blocks(
+            weighted, COVARIATES, rows=single_level_rows(weighted), weights_col="loan_months"
+        ),
         formula=FORMULA,
         lower_bound_col=LOWER_BOUND,
         upper_bound_col=UPPER_BOUND,
         event_col=EXACT_OBSERVATION,
         entry_col=AGE_START,
-        weights_col="n",
+        weights_col="loan_months",
         polish=True,
     )
 

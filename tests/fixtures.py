@@ -43,17 +43,18 @@ if TYPE_CHECKING:
 MAX_AGE_MONTHS = 60
 
 #: Our canonical levels mapped back to the codes the dataset actually stores.
-_PURPOSE_CODE = {"purchase": "P", "refinance_rate_term": "N", "refinance_cashout": "C"}
-_OCCUPANCY_CODE = {"owner_occupied": "P", "second_home": "S", "investor": "I"}
-_CHANNEL_CODE = {"retail": "R", "broker": "B", "correspondent": "C"}
+_PURPOSE_CODE = {"purchase": "P", "rate_term_refinance": "N", "cash_out_refinance": "C"}
+_OCCUPANCY_CODE = {"owner_occupied": "P", "second_home": "S", "investment_property": "I"}
+_CHANNEL_CODE = {"retail": "R", "broker_or_correspondent": "B"}
+_BUYER_CODE = {"repeat": "N", "first_time": "Y"}
 _REGION_STATE = {"Northeast": "NY", "Midwest": "IL", "South": "TX", "West": "CA"}
 
 _CATEGORICAL_MIX: dict[str, dict[str, float]] = {
-    "purpose": {"purchase": 0.52, "refinance_rate_term": 0.30, "refinance_cashout": 0.18},
-    "occupancy": {"owner_occupied": 0.87, "second_home": 0.05, "investor": 0.08},
-    "channel": {"retail": 0.55, "broker": 0.18, "correspondent": 0.27},
+    "purpose": {"purchase": 0.52, "rate_term_refinance": 0.30, "cash_out_refinance": 0.18},
+    "occupancy": {"owner_occupied": 0.87, "second_home": 0.05, "investment_property": 0.08},
+    "channel": {"retail": 0.55, "broker_or_correspondent": 0.45},
     "region": {"South": 0.38, "West": 0.24, "Midwest": 0.21, "Northeast": 0.17},
-    "first_time_buyer": {"N": 0.76, "Y": 0.24},
+    "buyer_type": {"repeat": 0.76, "first_time": 0.24},
     # Roughly the real mix. A constant term would leave the covariate degenerate,
     # and its coefficient then arrives with an infinite standard error that also
     # swallows the intercept's -- which looks like a fitting failure and is not.
@@ -80,9 +81,9 @@ class TrueParams:
 
 
 DEFAULT_PARAMS = TrueParams(
-    intercept=5.4,
+    intercept=0.64,
     log_rho=0.26,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
 )
 
@@ -96,7 +97,7 @@ def origination_row(
     loan_id: str,
     *,
     fico: str = "740",
-    dti: str = "32",
+    debt_to_income: str = "32",
     ltv: str = "78",
     upb: str = "210000",
     rate: str = "4.25",
@@ -108,14 +109,15 @@ def origination_row(
     first_payment: str = "201503",
     term: str = "360",
     mi: str = "0",
-    super_conforming: str = "N",
+    loan_size: str = "N",
+    harp: str = "N",
 ) -> str:
     """One line of ``orig_YYYYQn.txt``. Unset fields stay empty, as they do upstream.
 
     Mortgage insurance is the exception, deliberately. The real file never leaves it
     empty -- an uninsured loan is written ``0``, which is 80.7% of the book, and not one
     of 49.2 million loans has a blank -- so a fixture that left it empty described a file
-    that does not exist. That went unnoticed until ``has_mi`` stopped folding a missing
+    that does not exist. That went unnoticed until ``mortgage_insurance`` stopped folding a missing
     value into "not insured": every fixture loan was then dropped, and thirteen
     aggregation tests reported zero cells. The super-conforming flag is the other field the
     real file always fills, ``N`` or ``Y``.
@@ -123,12 +125,13 @@ def origination_row(
     values = dict.fromkeys(ORIGINATION_COLUMNS, "")
     values.update(
         mortgage_insurance_percentage=mi,
-        super_conforming_flag=super_conforming,
+        super_conforming_flag=loan_size,
+        harp_indicator=harp,
         classic_fico=fico,
         first_payment_date=first_payment,
         first_time_homebuyer_indicator=first_time,
         occupancy_status=occupancy,
-        original_dti=dti,
+        original_dti=debt_to_income,
         original_upb=upb,
         original_ltv=ltv,
         original_cltv=ltv,
@@ -220,23 +223,24 @@ def _originations(
     # rest of them, which is left truncation the likelihood is never told about.
     opening = MACRO_LAG_MONTHS + 12 + 3
     usable = macro.index[opening:] if window_months is None else macro.index[-window_months:]
-    orig_period = pd.PeriodIndex(rng.choice(usable, size=n_loans), freq="M")
+    origination_period = pd.PeriodIndex(rng.choice(usable, size=n_loans), freq="M")
 
     correlation = np.array([[1.00, -0.45, -0.35], [-0.45, 1.00, 0.30], [-0.35, 0.30, 1.00]])
     factors = rng.multivariate_normal(np.zeros(3), correlation, size=n_loans)
 
     credit_score = np.clip(700 + 50 * factors[:, 0], 580, 820)
-    market_rate = pd.Series(orig_period).map(macro["mortgage_rate_30y"]).to_numpy(dtype=float)
+    market_rate = (
+        pd.Series(origination_period).map(macro["mortgage_rate_30y"]).to_numpy(dtype=float)
+    )
 
     loans = pd.DataFrame(
         {
             "loan_id": [f"F{index:011d}" for index in range(n_loans)],
-            "orig_period": orig_period,
+            "origination_period": origination_period,
             "credit_score": credit_score,
-            "fico_s": (credit_score - 700.0) / 50.0,
-            "orig_ltv": np.clip(75 + 12 * factors[:, 1], 30, 100),
-            "dti": np.clip(36 + 8 * factors[:, 2], 10, 55),
-            "orig_upb": np.exp(12.2 + 0.42 * rng.normal(size=n_loans)),
+            "original_ltv": np.clip(75 + 12 * factors[:, 1], 30, 100),
+            "debt_to_income": np.clip(36 + 8 * factors[:, 2], 10, 55),
+            "original_balance": np.exp(12.2 + 0.42 * rng.normal(size=n_loans)),
             "note_rate": market_rate + 0.35 - 0.22 * factors[:, 0],
         }
     )
@@ -306,7 +310,7 @@ def _simulate_from(
     ages = np.arange(max_age_months, dtype=np.int64)
     panel = loans.loc[loans.index.repeat(max_age_months)].reset_index(drop=True)
     panel["age"] = np.tile(ages, len(loans))
-    panel["period"] = panel["orig_period"] + panel["age"]
+    panel["period"] = panel["origination_period"] + panel["age"]
     panel = panel[panel["period"] <= macro.index.max()].reset_index(drop=True)
     panel = add_macro_covariates(panel, macro)
 
@@ -341,16 +345,16 @@ def _render(loans: pd.DataFrame, panel: pd.DataFrame) -> tuple[list[str], list[s
         origination_row(
             str(row.loan_id),
             fico=f"{row.credit_score:.0f}",
-            dti=f"{row.dti:.0f}",
-            ltv=f"{row.orig_ltv:.0f}",
-            upb=f"{row.orig_upb:.0f}",
+            debt_to_income=f"{row.debt_to_income:.0f}",
+            ltv=f"{row.original_ltv:.0f}",
+            upb=f"{row.original_balance:.0f}",
             rate=f"{row.note_rate:.3f}",
             purpose=_PURPOSE_CODE[str(row.purpose)],
             occupancy=_OCCUPANCY_CODE[str(row.occupancy)],
             channel=_CHANNEL_CODE[str(row.channel)],
             state=_REGION_STATE[str(row.region)],
-            first_time=str(row.first_time_buyer),
-            first_payment=str(row.orig_period).replace("-", ""),
+            first_time=_BUYER_CODE[str(row.buyer_type)],
+            first_payment=str(row.origination_period).replace("-", ""),
             term=str(row.term),
         )
         for row in loans.itertuples(index=False)
@@ -440,7 +444,7 @@ def write_book_archives(
     loans = _originations(n_loans, macro, rng, window_months=window_months)
     _, panel, _ = _simulate_from(loans, macro, rng, **kwargs)  # type: ignore[arg-type]
 
-    quarters = pd.PeriodIndex(loans["orig_period"]).asfreq("Q")
+    quarters = pd.PeriodIndex(loans["origination_period"]).asfreq("Q")
     written: list[Path] = []
     for year in sorted({period.year for period in quarters}):
         by_quarter: dict[int, tuple[list[str], list[str]]] = {}

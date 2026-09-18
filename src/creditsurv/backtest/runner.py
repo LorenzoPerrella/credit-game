@@ -25,7 +25,7 @@ overstate what the system can do.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
@@ -36,7 +36,7 @@ from creditsurv.backtest.metrics import (
     weighted_gini,
 )
 from creditsurv.backtest.splits import PERIOD, Split, assert_no_lookahead, cell_split
-from creditsurv.config import TIME_VARYING_CONTINUOUS
+from creditsurv.config import DISTRIBUTION, TIME_VARYING_CONTINUOUS
 from creditsurv.data.panel import AGE, EVENT, WEIGHT
 from creditsurv.models.aft import episode_hazards, fit_aft
 
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
     from creditsurv.models.aft import FitResult
 
-ORIGINATION = "orig_period"
+ORIGINATION = "origination_period"
 
 
 @dataclass(frozen=True)
@@ -141,6 +141,26 @@ class Acceptance:
 #: The criteria every backtest in this project is judged against.
 ACCEPTANCE = Acceptance()
 
+#: The reporting dates the model is cut at, and how long each is judged on. From
+#: `docs/rules.md`, fixed before the runs.
+#:
+#: The previous model cut once, at 2024-12, and was judged on fifteen quiet months. These
+#: three put the same model in front of a tightening cycle, a pandemic with a moratorium
+#: regime, and a rate shock. Each window's model is estimated on everything up to its own
+#: cut, so a window is never scored by a model that saw it -- and each is **closed**, or the
+#: 2018 cut would be judged on the pandemic too and the three would not be three regimes.
+BACKTEST_CUTS: Final[tuple[str, ...]] = ("2018-12", "2020-12", "2022-12")
+
+#: Months each cut is judged on.
+BACKTEST_WINDOW_MONTHS: Final = 24
+
+
+def backtest_windows(
+    cuts: Sequence[str] = BACKTEST_CUTS, *, months: int = BACKTEST_WINDOW_MONTHS
+) -> list[tuple[pd.Period, pd.Period]]:
+    """Each cut with the last month it is judged on."""
+    return [(pd.Period(cut, freq="M"), pd.Period(cut, freq="M") + months) for cut in cuts]
+
 
 def predicted_hazard(
     fitted: FitResult, cells: pd.DataFrame, covariates: Sequence[str]
@@ -222,11 +242,16 @@ def run_backtest(
     covariates: Sequence[str],
     formula: str,
     *,
-    distribution: str = "weibull",
+    distribution: str = DISTRIBUTION,
     fitted: FitResult | None = None,
+    until: pd.Period | None = None,
 ) -> tuple[Split, FitResult, BacktestResult]:
-    """Split, fit once on the training half, and score the rest."""
-    split = cell_split(episodes, as_of)
+    """Split, fit once on the training half, and score the window after it.
+
+    ``until`` closes the test window, which is what a cut in the middle of the history
+    needs: judged on everything after it, the 2018 model would be judged on the pandemic.
+    """
+    split = cell_split(episodes, as_of, until=until)
     fitted, result = backtest_split(
         split, covariates, formula, distribution=distribution, fitted=fitted
     )
@@ -238,7 +263,7 @@ def backtest_split(
     covariates: Sequence[str],
     formula: str,
     *,
-    distribution: str = "weibull",
+    distribution: str = DISTRIBUTION,
     fitted: FitResult | None = None,
 ) -> tuple[FitResult, BacktestResult]:
     """Fit once on the training half of a split already taken, and score the rest.

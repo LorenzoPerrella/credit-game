@@ -99,7 +99,7 @@ def test_default_rate_is_events_over_exposure(book: tuple[list[str], list[str]])
 def test_a_quarter_with_no_valid_quantiles_is_skipped(tmp_path: Path) -> None:
     """A quarter where every value is a sentinel returns no quantiles at all, and
     those rows must be dropped rather than propagate a null through the average."""
-    origination = [origination_row("F000000001", fico="9999", dti="999", ltv="999")]
+    origination = [origination_row("F000000001", fico="9999", debt_to_income="999", ltv="999")]
     performance = [performance_row("F000000001", "201503", "0")]
     write_archives(tmp_path / "FREDDIE MAC", 2015, {1: (origination, performance)})
     ingest_quarter(2015, 1)

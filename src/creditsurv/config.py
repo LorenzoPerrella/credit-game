@@ -120,7 +120,7 @@ MACRO_SERIES: Final[tuple[SeriesSpec, ...]] = (
     ),
     SeriesSpec(
         series_id="CSUSHPINSA",
-        column="hpi",
+        column="house_price_index",
         frequency=Frequency.MONTHLY,
         description="S&P CoreLogic Case-Shiller U.S. National Home Price Index.",
     ),
@@ -132,7 +132,7 @@ MACRO_SERIES: Final[tuple[SeriesSpec, ...]] = (
     ),
     SeriesSpec(
         series_id="NFCI",
-        column="nfci",
+        column="financial_conditions_index",
         frequency=Frequency.WEEKLY,
         description="Chicago Fed National Financial Conditions Index.",
     ),
@@ -154,7 +154,7 @@ MACRO_SERIES: Final[tuple[SeriesSpec, ...]] = (
     ),
     SeriesSpec(
         series_id="FEDFUNDS",
-        column="policy_rate",
+        column="fed_funds_rate",
         frequency=Frequency.MONTHLY,
         description="Effective federal funds rate, percent.",
     ),
@@ -166,37 +166,37 @@ MACRO_SERIES: Final[tuple[SeriesSpec, ...]] = (
     ),
     SeriesSpec(
         series_id="T10Y2Y",
-        column="term_spread",
+        column="treasury_10y_2y_spread",
         frequency=Frequency.DAILY,
         description="10-year minus 2-year Treasury spread, percentage points.",
     ),
     SeriesSpec(
         series_id="BAA10Y",
-        column="credit_spread",
+        column="baa_treasury_spread",
         frequency=Frequency.DAILY,
         description="Moody's Baa corporate yield over the 10-year Treasury.",
     ),
     SeriesSpec(
         series_id="CPIAUCSL",
-        column="cpi",
+        column="consumer_price_index",
         frequency=Frequency.MONTHLY,
         description="Consumer price index, all urban consumers, seasonally adjusted.",
     ),
     SeriesSpec(
         series_id="NASDAQCOM",
-        column="equity_index",
+        column="nasdaq_composite",
         frequency=Frequency.DAILY,
         description="Nasdaq Composite index.",
     ),
     SeriesSpec(
         series_id="VIXCLS",
-        column="vix",
+        column="vix_index",
         frequency=Frequency.DAILY,
         description="CBOE volatility index.",
     ),
     SeriesSpec(
         series_id="UMCSENT",
-        column="sentiment",
+        column="consumer_sentiment_index",
         frequency=Frequency.MONTHLY,
         description="University of Michigan consumer sentiment index.",
     ),
@@ -260,14 +260,14 @@ MACRO_LAG_MONTHS: Final = 3
 #: carry is not recoverable from a cell, so a formula naming one cannot be fitted at
 #: all. ``tests/test_aggregate.py`` holds the two in step.
 #:
-#: ``log_orig_upb`` and ``orig_spread`` are absent for that reason rather than on
+#: ``log_original_balance`` and ``origination_spread`` are absent for that reason rather than on
 #: their merits -- the cell count is the product of the band counts, so every
 #: covariate added to the key multiplies it. What each would cost is measured in
 #: docs/variable_selection.md.
 STATIC_CONTINUOUS: Final[tuple[str, ...]] = (
-    "fico_s",
-    "orig_ltv",
-    "dti",
+    "credit_score",
+    "original_ltv",
+    "debt_to_income",
 )
 
 #: Takes two values, 15 and 30, so a linear term and a dummy are the same model.
@@ -277,31 +277,28 @@ ORDINAL: Final[tuple[str, ...]] = ("term_years",)
 
 #: Recomputed every loan-month. Loan age is the time scale, not a covariate.
 #:
-#: ``cltv_drift`` rather than ``indexed_cltv``: the indexed ratio equals
-#: ``orig_ltv`` at origination and stays strongly correlated with it, so fitting
-#: both gives unstable coefficients. The pair is decomposed into a level
-#: (``orig_ltv``, underwriting at origination) and a movement (``cltv_drift``,
-#: how far house prices have carried the position since, zero at origination).
-#: ``refi_incentive`` is absent: it needs the note rate, which the key does not
-#: carry. It is recoverable the same way ``cltv_drift`` is -- from a banded
-#: ``orig_spread`` plus the mortgage-rate path, both functions of the key -- which is
-#: the cheapest of the candidate additions and the one to weigh first.
-#: **The output of ``creditsurv select``, not a choice made here.** Steps 5 to 9 on the
-#: training half kept seven of the fifteen macro candidates, and
-#: ``tests/test_procedure.py`` fails if this tuple and ``docs/reports/selection.json``
-#: part. One per economic dimension except housing, where ``starts_growth``, the
-#: construction cycle, held its sign beside ``cltv_drift`` on both halves of the book (1 sd
-#: effect +0.068 and +0.088 against -0.168 and -0.186). The first run, done by hand before
-#: the validation, kept ``vix`` and ``inflation``; the selection removed both. See
-#: ``ELIMINATED``.
+#: ``ltv_change`` rather than ``indexed_cltv``: the indexed ratio equals ``original_ltv`` at
+#: origination and stays strongly correlated with it, so fitting both gives unstable coefficients.
+#: The pair is decomposed into a level (``original_ltv``, underwriting at origination) and a
+#: movement (``ltv_change``, how far house prices have carried the position since, zero at
+#: origination). ``refinance_incentive`` is absent: it needs the note rate, which the key does not
+#: carry. It is recoverable the same way ``ltv_change`` is -- from a banded ``origination_spread``
+#: plus the mortgage-rate path, both functions of the key -- which is the cheapest of the candidate
+#: additions and the one to weigh first. **The output of ``creditsurv select``, not a choice made
+#: here.** Steps 5 to 9 on the training half kept seven of the fifteen macro candidates, and
+#: ``tests/test_procedure.py`` fails if this tuple and ``docs/reports/selection.json`` part. One per
+#: economic dimension except housing, where ``housing_starts_growth``, the construction cycle, held
+#: its sign beside ``ltv_change`` on both halves of the book (1 sd effect +0.068 and +0.088 against
+#: -0.168 and -0.186). The first run, done by hand before the validation, kept ``equity_volatility``
+#: and ``inflation_rate``; the selection removed both. See ``ELIMINATED``.
 TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
-    "cltv_drift",
-    "unemp_gap",
-    "nfci_lagged",
-    "policy_rate_gap",
-    "sentiment",
-    "starts_growth",
-    "inflation_gap",
+    "ltv_change",
+    "unemployment_change",
+    "financial_conditions",
+    "policy_rate_change",
+    "consumer_sentiment",
+    "housing_starts_growth",
+    "inflation_change",
 )
 
 #: Every macro-derived covariate available, including the ones the default model does
@@ -315,25 +312,25 @@ TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
 #: none of them adds a single cell. The elimination priority below decides who goes
 #: first, and it is fixed here, before any result is looked at.
 MACRO_CANDIDATES: Final[tuple[str, ...]] = (
-    "cltv_drift",
-    "unemp_gap",
-    "nfci_lagged",
-    "rate_gap",
-    "hpi_growth",
-    "policy_rate_gap",
-    "term_spread",
-    "credit_spread",
-    "inflation",
+    "ltv_change",
+    "unemployment_change",
+    "financial_conditions",
+    "mortgage_rate_decline",
+    "house_price_growth",
+    "policy_rate_change",
+    "yield_curve_slope",
+    "corporate_bond_spread",
+    "inflation_rate",
     "equity_return",
-    "vix",
-    "sentiment",
-    "starts_growth",
-    # Added for the validation's S5: ``vix`` and ``inflation`` enter as levels at the
-    # observation date, identical for every loan in a month, so their coefficients are
-    # calendar effects by construction. Their moves since origination vary across loans
-    # in the same month. Both forms are candidates and the selection decides.
-    "vix_gap",
-    "inflation_gap",
+    "equity_volatility",
+    "consumer_sentiment",
+    "housing_starts_growth",
+    # Added for the validation's S5: ``equity_volatility`` and ``inflation_rate`` enter as levels at
+    # the observation date, identical for every loan in a month, so their coefficients are calendar
+    # effects by construction. Their moves since origination vary across loans in the same month.
+    # Both forms are candidates and the selection decides.
+    "volatility_change",
+    "inflation_change",
 )
 
 #: The economic dimension each candidate measures, fixed before any selection result.
@@ -343,25 +340,25 @@ MACRO_CANDIDATES: Final[tuple[str, ...]] = (
 #: covariates share a dimension therefore has to be decided in advance: decided after the
 #: fits, the rule would be a way of dropping whatever came out inconvenient.
 ECONOMIC_DIMENSION: Final[dict[str, str]] = {
-    "fico_s": "credit quality",
-    "orig_ltv": "leverage at origination",
-    "dti": "debt burden",
+    "credit_score": "credit quality",
+    "original_ltv": "leverage at origination",
+    "debt_to_income": "debt burden",
     "term_years": "term",
-    "cltv_drift": "housing",
-    "hpi_growth": "housing",
-    "starts_growth": "housing",
-    "unemp_gap": "labour",
-    "vix": "financial stress",
-    "vix_gap": "financial stress",
-    "nfci_lagged": "financial stress",
-    "credit_spread": "financial stress",
-    "rate_gap": "interest rates",
-    "policy_rate_gap": "interest rates",
-    "term_spread": "interest rates",
-    "inflation": "prices",
-    "inflation_gap": "prices",
+    "ltv_change": "housing",
+    "house_price_growth": "housing",
+    "housing_starts_growth": "housing",
+    "unemployment_change": "labour",
+    "equity_volatility": "financial stress",
+    "volatility_change": "financial stress",
+    "financial_conditions": "financial stress",
+    "corporate_bond_spread": "financial stress",
+    "mortgage_rate_decline": "interest rates",
+    "policy_rate_change": "interest rates",
+    "yield_curve_slope": "interest rates",
+    "inflation_rate": "prices",
+    "inflation_change": "prices",
     "equity_return": "asset prices",
-    "sentiment": "confidence",
+    "consumer_sentiment": "confidence",
 }
 
 #: Order in which collinear macro covariates are given up, most expendable first.
@@ -382,64 +379,79 @@ ELIMINATED: Final[dict[str, str]] = {
     # docs/variable_selection.md, kept as history.
     #
     # --- step 6: collinearity, in the priority fixed before any fit ---
-    "credit_spread": (
+    "corporate_bond_spread": (
         "variance inflation 11.9, above 10 -- the first candidate over the threshold. The "
         "first run had it at 8.41 and removed it by hand for a sign reversal"
     ),
     # --- step 8: backwards against a declared prior ---
-    "vix_gap": "wrong sign: +0.00254 in the full model, where stress should shorten survival",
-    "vix": (
-        "wrong sign: +0.00935 in the full model once vix_gap is gone, against -0.0198 beside "
-        "the loan block alone. The first run's largest effect: part of it was the 2020 "
-        "moratoria, as the validation suspected (S5), and the rest is shared with nfci_lagged"
+    "volatility_change": (
+        "wrong sign: +0.00254 in the full model, where stress should shorten survival"
+    ),
+    "equity_volatility": (
+        "wrong sign: +0.00935 in the full model once volatility_change is gone, against "
+        "-0.0198 beside the loan block alone. The first run's largest effect: part of it was "
+        "the 2020 moratoria, as the validation suspected (S5), and the rest is shared with "
+        "financial_conditions"
     ),
     # --- step 8: its sign reversed against its own ---
-    "rate_gap": "reversed: -0.190 beside the loan block alone, +0.018 in the full model",
+    "mortgage_rate_decline": (
+        "reversed: -0.190 beside the loan block alone, +0.018 in the full model"
+    ),
     "equity_return": "reversed: +0.431 beside the loan block alone, -0.086 in the full model",
-    "inflation": (
+    "inflation_rate": (
         "reversed: +10.04 beside the loan block alone, -8.33 in the full model, against "
-        "inflation_gap's +6.9 there -- together the pair was reading inflation at origination"
+        "inflation_change's +6.9 there -- together the pair was reading inflation at origination"
     ),
     # --- step 9: not identified beside a larger covariate of the same dimension ---
-    "term_spread": (
+    "yield_curve_slope": (
         "1 sd effect -0.058 on even and +0.013 on odd origination years, beside "
-        "policy_rate_gap at +0.119"
+        "policy_rate_change at +0.119"
     ),
-    "hpi_growth": (
-        "1 sd effect -0.004 on even and +0.015 on odd origination years, beside cltv_drift "
+    "house_price_growth": (
+        "1 sd effect -0.004 on even and +0.015 on odd origination years, beside ltv_change "
         "at -0.179, which is built from the same house price index"
     ),
 }
 
 MACRO_ELIMINATION_PRIORITY: Final[tuple[str, ...]] = (
     "equity_return",
-    "vix",
+    "equity_volatility",
     # A level gives way before its own gap form, for the reason at MACRO_CANDIDATES.
-    "vix_gap",
-    "sentiment",
-    "term_spread",
-    "inflation",
-    "inflation_gap",
-    "starts_growth",
-    "policy_rate_gap",
-    "credit_spread",
-    "hpi_growth",
-    "rate_gap",
-    "nfci_lagged",
-    "unemp_gap",
-    "cltv_drift",
+    "volatility_change",
+    "consumer_sentiment",
+    "yield_curve_slope",
+    "inflation_rate",
+    "inflation_change",
+    "housing_starts_growth",
+    "policy_rate_change",
+    "corporate_bond_spread",
+    "house_price_growth",
+    "mortgage_rate_decline",
+    "financial_conditions",
+    "unemployment_change",
+    "ltv_change",
 )
 
+#: The distribution family the published model uses.
+#:
+#: **An output, like the specification.** Rule 2 of `docs/rules.md` takes both families
+#: through the whole selection and keeps the selected model closest to the Aalen-Johansen
+#: cumulative incidence of default, excluding any family that turns a declared sign and
+#: falling back on the Weibull inside a tenth of a percentage point.
+#: ``tests/test_procedure.py`` fails when this and the selection record part, so the family
+#: cannot be changed here without the run that justifies it.
+DISTRIBUTION: Final = "weibull"
+
 #: Categorical covariates mapped to their treatment-coding reference level.
-#: ``has_mi`` and ``first_time_buyer`` entered the key with the validation (M3), at 1.19x
+#: ``mortgage_insurance`` and ``buyer_type`` entered the key with the validation (M3), at 1.19x
 #: the cells where an unmeasured sixteenfold had kept them out, and the model with the
 #: selection, whose screen beside the loan block put them at z = -46 and +26. ``channel``
 #: and ``region`` are mapped but not in the key.
 CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
     "purpose": "purchase",
     "occupancy": "owner_occupied",
-    "has_mi": "N",
-    "first_time_buyer": "N",
+    "mortgage_insurance": "uninsured",
+    "buyer_type": "repeat",
 }
 
 

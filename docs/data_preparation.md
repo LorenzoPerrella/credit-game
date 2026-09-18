@@ -67,7 +67,7 @@ its reason beside it in `ingest.py`:
 | All loss columns (`actual_loss`, `net_sales_proceeds`, expenses, recoveries) | Populated only for defaulted loans, and only relevant to LGD — out of scope |
 | `postal_code`, `seller_name`, `msa` | High cardinality, no signal for a default model at this granularity |
 | `prepayment_penalty_indicator` | Near-constant `N` on conforming loans |
-| `harp_indicator`, `special_eligibility_program` | Programme flags, not states of the loan. `harp_indicator` marks exactly the loans with no debt-to-income, which the complete-case rule drops: see [What dropping removes](#what-dropping-removes) |
+| `special_eligibility_program` | A programme flag, not a state of the loan |
 | `property_valuation_method` | How a value was obtained, not what it is |
 
 Until the validation (D2) the last four were missing from this table, and so were
@@ -116,12 +116,13 @@ thousand.
 | `estimated_loan_to_value` | 999 |
 
 The last one was missed on the first pass, and the consequence is worth recording.
-`estimated_loan_to_value` is in the *performance* file, and only the origination
-file's sentinels had been handled. The median ELTV of the 2006 vintage is literally
-999, so mark-to-market leverage came out as `999 − 75 = 924` for most of the panel;
-sixty percent of exposure landed in one band and the coefficient came out with the
-wrong sign. The exploratory default-rate-by-band table is what exposed it: `fico_s`
-and `orig_ltv` were cleanly monotonic and this one was not.
+`estimated_loan_to_value` is in the *performance* file, and only the origination file's
+sentinels had been handled. The median ELTV of the 2006 vintage is literally 999, so
+mark-to-market leverage came out as `999 − 75 = 924` for most of the panel; sixty percent of
+exposure landed in one band and the coefficient came out with the wrong sign. The
+exploratory default-rate-by-band table is what exposed it: *credit score* (`credit_score`,
+formerly `fico_s`) and *loan-to-value at origination* were cleanly monotonic and this one
+was not.
 
 A loan missing a covariate is **dropped, not imputed**: imputing an underwriting
 characteristic invents the very thing being measured.
@@ -150,12 +151,25 @@ the 2012Q2 origination file, 181,302 of the 181,356 loans without a debt-to-inco
 `harp_indicator = Y`, and not one HARP loan has one. Nearly all are no-cash-out refinances
 (181,197), at a median LTV of 98 against 74 for the rest, a quarter of them above 124.
 
-**The model therefore does not cover HARP refinances**: 2.87 million loans and 135,408
-defaults, about three times as likely to default as the loans kept from the same vintages. An
-imputed DTI would invent the one thing the programme waived. Covering them means a level of
-their own in the key -- a HARP or missing-DTI indicator -- at the cost of a re-aggregation and
-a new selection. Until that is decided the exclusion is stated rather than repaired, and it is
-listed under Open in `CLAUDE.md`.
+**HARP refinances are now in the model, as a level of their own.** They were outside it
+until September 2026 -- 2.87 million loans and 135,408 defaults, about three times as likely
+to default as the loans kept from the same vintages -- because the complete-case rule needs a
+debt-to-income and the programme waived it. The repair is the one the exclusion always
+pointed at: `harp` is a level of the cell key, a loan without the ratio is kept when and only
+when it is a HARP refinance, and **the ratio stays missing in the cell table**. Nothing is
+imputed there, and a reader counting HARP loans sees the gap the source has.
+
+What the model does with the gap is decided on the model's side and is not an imputation
+either. The ratio is filled with a constant, and `harp` -- which within the kept loans is
+exactly the missing indicator -- absorbs the constant whole. That is the **dummy-variable
+adjustment**: the slope of the ratio is estimated on the loans that report it, the level
+takes the fill, and the fill's value is arbitrary. It is a "not reported" band written on the
+scale the covariate already uses, and `features.absorb_not_reported` refuses to fit the
+ratio without the level rather than trusting the arrangement to be remembered.
+
+Measured on 2012Q2, the vintage where the programme is largest: the HARP loans are 16.4
+million loan-months of 40.1, and they default at **5.54 basis points a month against 1.24**
+for the rest -- 4.5 times, on 40.8% of the exposure.
 
 ### Categorical codes are mapped from what is in the field, not from the layout
 
@@ -255,10 +269,10 @@ comparison the rule reads is unchanged. The ranges themselves have not been reco
 Two measurements say the prior deserved to be the prior. Censoring lost **26% of the test
 window's defaults**, 56,413 against 76,380, for 3% less exposure: loans that took a
 moratorium and genuinely defaulted afterwards, exactly the ones censoring was feared to
-remove for their risk. And `inflation` changes sign between the two fits, from −0.42 to
-+1.71. A covariate whose direction depends on how one year's forbearance is treated is
-behaving as a calendar effect rather than an elasticity, which is what the validation said
-of it (S5); the selection weighs it against its gap form.
+remove for their risk. And *inflation* (`inflation_rate`, formerly `inflation`) changes sign
+between the two fits, from −0.42 to +1.71. A covariate whose direction depends on how one
+year's forbearance is treated is behaving as a calendar effect rather than an elasticity,
+which is what the validation said of it (S5); the selection weighs it against its gap form.
 
 **The spike is gone.** The validation's evidence was the monthly default rate: 90.4 bp in
 May 2020 against 3.07 bp through 2019, a factor of 29 that no credit recession produces;
@@ -357,19 +371,20 @@ too much to count.
 | Default rate per level and per band | read for **monotonicity** |
 | Quantiles of a continuous covariate | candidate cut points |
 
-**Monotonicity is the check that earns its place.** A covariate whose default rate
-rises and falls across its own bands is either mis-binned or is measuring something
-other than what its name says. On this data `fico_s` runs cleanly from 469 to 16
-basis points across its bands, a factor of 29, and `orig_ltv` likewise — and
-`cltv_drift` did not, which is what exposed the untreated sentinel.
+**Monotonicity is the check that earns its place.** A covariate whose default rate rises and
+falls across its own bands is either mis-binned or is measuring something other than what
+its name says. On this data *credit score* runs cleanly from 469 to 16 basis points across
+its bands, a factor of 29, and *loan-to-value at origination* likewise — and *loan-to-value
+change since origination* (`ltv_change`, formerly `cltv_drift`) did not, which is what
+exposed the untreated sentinel.
 
-**Quantiles are a starting point, not an answer.** Data-driven cuts fit the sample
-they were taken from, so the ones actually used come from credit conventions. What
-the quantiles are for is showing where the mass sits: on `orig_ltv` the 60th and 80th
-percentiles both come back as **80**, because that is the threshold above which
-mortgage insurance is required and originations pile up against it. A band boundary
-placed there would split an enormous mass at exactly the wrong point, and it is worth
-knowing that before choosing rather than after.
+**Quantiles are a starting point, not an answer.** Data-driven cuts fit the sample they were
+taken from, so the ones actually used come from credit conventions. What the quantiles are
+for is showing where the mass sits: on *loan-to-value at origination* the 60th and 80th
+percentiles both come back as **80**, because that is the threshold above which mortgage
+insurance is required and originations pile up against it. A band boundary placed there
+would split an enormous mass at exactly the wrong point, and it is worth knowing that before
+choosing rather than after.
 
 ## Stage 3 — Coarse classing and aggregation
 
@@ -393,9 +408,9 @@ to a **subset** of the first -- coarser, because every band multiplies the table
 
 | Covariate | Production breaks |
 |---|---|
-| `fico_s`, (score − 700) / 50 | −2.4, −0.8, 0, 0.8, 1.2, 2.4 |
-| `orig_ltv` | 30, 70, 80, 90, 100 |
-| `dti` | 10, 28, 36, 43, 55 |
+| *credit score*, in points | 580, 660, 700, 740, 760, 820 |
+| *loan-to-value at origination* | 30, 70, 80, 90, 100 |
+| *debt-to-income at origination* (`debt_to_income`, formerly `dti`) | 10, 28, 36, 43, 55 |
 
 This document once justified a DTI break at 43 while the model cut at 45, and described
 LTV breaks at 85 and 95 that no cell had. The 80 break is the one the economics turns on,
@@ -409,11 +424,12 @@ of the one it replaces and its coefficient stays comparable with an unbinned fit
 
 ```
 key    = coarse-classed continuous covariates
-       × categorical covariates: purpose, occupancy, term, has_mi, first_time_buyer
+       × categorical covariates: purpose, occupancy, term, mortgage_insurance,
+                                 buyer_type, harp, delinquency_state
        × origination month
        × loan age
-       × event
-weight = COUNT(*) AS n
+       × outcome: default, prepayment or neither
+weight = COUNT(*) AS loan_months
 ```
 
 Quarters are aggregated **one at a time**. Every loan appears in exactly one
@@ -469,14 +485,14 @@ under the grouping key.
 The one cost is fit time, and it is real: see [the methodology
 report](reports/methodology.md) for what a fit on this table takes.
 
-Wider bands were tried, and the measurement that ruled them out is worth recording
-because it was nearly misread. On 1999Q1, monthly and quarterly episodes produced
-**identical** cell counts — 12,752,331 each — which looks like proof that collapsing
-on age buys nothing. It was an artefact: `cltv_drift` was still in the grouping key at
-the time, and nothing can collapse on age while a covariate moves underneath it. With
-the derived covariates taken out of the key the same quarter gives 226,000 cells
-monthly against 80,000 quarterly — a real 2.8× — bought by holding a monthly covariate
-constant for three months, which is not a trade worth making.
+Wider bands were tried, and the measurement that ruled them out is worth recording because
+it was nearly misread. On 1999Q1, monthly and quarterly episodes produced **identical** cell
+counts — 12,752,331 each — which looks like proof that collapsing on age buys nothing. It
+was an artefact: *loan-to-value change since origination* was still in the grouping key at
+the time, and nothing can collapse on age while a covariate moves underneath it. With the
+derived covariates taken out of the key the same quarter gives 226,000 cells monthly against
+80,000 quarterly — a real 2.8× — bought by holding a monthly covariate constant for three
+months, which is not a trade worth making.
 
 **The specification *is* the cardinality.** Cell count is the product of every
 covariate's band count, so the choice of covariates decides whether the result fits at
@@ -488,7 +504,7 @@ selection rather than precede it.
 ### Why the macro side is free and the loan side is not
 
 **No macro series is in the key, and none can be.** Since
-`period = orig_period + age`, every macro-derived covariate is a deterministic
+`period = origination_period + age`, every macro-derived covariate is a deterministic
 function of two columns the key already holds, so all thirteen of them are recomputed
 on the aggregate **at no cost in cardinality whatsoever**. Putting one in the key
 would multiply it by the number of distinct months and destroy the collapse.
@@ -498,20 +514,41 @@ That asymmetry decides the shape of the whole specification:
 | Adding | Cost |
 |---|---|
 | One macro series | **zero cells** |
-| `has_mi` and `first_time_buyer` | **1.19×** the table, measured |
+| The HARP level | **1.06×**, measured |
+| The payment state of the month before | **1.19×**, measured |
+| The note rate, at half-point bands | **2.13×**, measured |
+| The documented band grid, 8 / 8 / 6 instead of 5 / 4 / 4 | **2.28×**, measured |
+| *mortgage insurance* (`mortgage_insurance`, formerly `has_mi`) and *buyer type* (`buyer_type`, formerly `first_time_buyer`) | **1.19×** the table, measured |
 | The origination month in place of the quarter | **3.51×**, measured |
 | One continuous covariate at 5 bands | up to **5×** the table |
 
-The middle rows replace a figure nobody had measured. `channel`, `region` and
-`first_time_buyer` were once kept out of the key as "up to sixteen times the table", the
-product of their level counts, which is a ceiling and not a cost, since most combinations
-of levels never occur together. Measured on nine quarters, `has_mi` and
-`first_time_buyer` together cost 1.19×, and they are in the key.
+The middle rows replace a figure nobody had measured. *Origination channel* (`channel`),
+*Census region* (`region`) and *buyer type* were once kept out of the key as "up to sixteen
+times the table", the product of their level counts, which is a ceiling and not a cost,
+since most combinations of levels never occur together. Measured on nine quarters, *mortgage
+insurance* and *buyer type* together cost 1.19×, and they are in the key.
 
 That is still why the macro side carries fifteen candidate covariates and the loan side
-eight. The loan characteristics left out -- `log_orig_upb`, `orig_spread`, `channel`,
-`region` -- were not dropped on their merits, and `docs/variable_selection.md` records
-what each would cost against what it might be worth.
+eight. The loan characteristics left out -- *original balance (log)*
+(`log_original_balance`, formerly `log_orig_upb`), *origination channel* (`channel`),
+*Census region* (`region`) -- were not dropped on their merits, and
+`docs/variable_selection.md` records what each would cost against what it might be worth.
+
+**The ceiling decides which of them the key can hold.** `docs/rules.md` caps the table at
+150 million cells and fixes, before any of it is measured, the order the extensions are
+given up in. `creditsurv profile --extensions` then priced them on nine quarters
+(`docs/reports/key_extensions.csv`): all four together are 4.90× the base key, a projected
+312 million cells, and giving up the finer bands alone still leaves 161.9 million. So the
+second rung goes too and the key keeps the HARP level and the payment state, at 1.26× and a
+projected 80.4 million.
+
+The finer bands are individually affordable, at 144.9 million, and go first regardless --
+which is the point of fixing the order beforehand. What it costs is the loan's own note
+rate, and with it *note rate over the market rate at origination* (`origination_spread`) and
+the refinancing incentive a prepayment model turns on. The *mortgage rate fall since
+origination* (`mortgage_rate_decline`) survives, free, and is the same comparison without
+its constant: within one origination month this book's note rates span about a point, while
+the market rate has moved several points since 2021.
 
 ### The weight is a count, never an amount
 
@@ -521,7 +558,7 @@ obligor. It also breaks inference: lifelines derives standard errors by treating
 weights as replication counts, and warns that non-integer weights bias them.
 
 `fit_aft` rejects non-integer weights for this reason. If exposure should influence
-the model, that is what a covariate is for — `log_orig_upb` is binned and ready in
+the model, that is what a covariate is for — *original balance (log)* is binned and ready in
 `BIN_EDGES`, and waiting only on the cardinality budget to admit it to the key.
 
 ### A note on when this technique pays
@@ -537,11 +574,12 @@ measurement taken once.
 
 ### What the exact key costs downstream
 
-Four times the cells is not four times the work; it is another machine's worth of memory.
-A stock lifelines fit holds about 680 bytes a training row, 45-50 GB for this table, so
-fits run through `creditsurv.models.blocks` a block at a time, and the panel is never
-held beside its training and test halves. [CLAUDE.md](https://github.com/LorenzoPerrella/credit-game/blob/main/CLAUDE.md) keeps the rules that
-follow from it.
+Four times the cells is not four times the work; it is another machine's worth of memory. A
+stock lifelines fit holds about 680 bytes a training row, 45-50 GB for this table, so fits
+run through `creditsurv.models.blocks` a block at a time, and the panel is never held beside
+its training and test halves.
+[CLAUDE.md](https://github.com/LorenzoPerrella/credit-game/blob/main/CLAUDE.md) keeps the
+rules that follow from it.
 
 ## Reproducing
 

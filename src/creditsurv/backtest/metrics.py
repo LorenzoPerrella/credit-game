@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import pandas as pd
+from scipy.stats import beta
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -116,11 +117,11 @@ def stability_report(
     the mix of business being written. Those should look much the same this quarter
     as last, and a jump means something has changed about who is applying.
 
-    It does not transfer to macro-driven covariates. ``cltv_drift`` and
-    ``unemp_gap`` are *designed* to move with the economy, and train and test come
+    It does not transfer to macro-driven covariates. ``ltv_change`` and
+    ``unemployment_change`` are *designed* to move with the economy, and train and test come
     from different calendar periods by construction, so their index is large
-    whenever anything happened. This backtest returns 9.23 for ``cltv_drift``
-    against 0.03 for ``fico_s``: the first number says the economy changed, which
+    whenever anything happened. This backtest returns 9.23 for ``ltv_change``
+    against 0.03 for ``credit_score``: the first number says the economy changed, which
     is not news and is not a defect, while the second says the book being written
     did not, which is the thing PSI was built to detect.
 
@@ -325,3 +326,186 @@ def covered_months(
     floor = share * float(over_time["exposure"].median())
     thin = over_time["exposure"] < floor
     return over_time.loc[~thin].reset_index(drop=True), over_time.loc[thin].reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------------------
+# The master scale: twelve-month PD by grade
+# --------------------------------------------------------------------------------------
+
+#: Floor of the second grade. Each grade's floor is twice the previous one's, so eight
+#: grades reach from under 5 basis points to over 3.2%, which is the span a prime agency
+#: book actually occupies: the published model's twelve-month PD runs from a handful of
+#: basis points on the best vintages to a few percent on 2007.
+#:
+#: Declared in `docs/rules.md` before the run that scores it, with the count of grades and
+#: the rule for passing. A scale drawn after seeing the distribution is a scale drawn to
+#: pass.
+GRADE_FLOOR: Final = 0.0005
+
+#: Grades on the master scale.
+GRADES: Final = 8
+
+#: How many of them must pass for the scale to pass.
+GRADES_TO_PASS: Final = 7
+
+
+def master_scale(*, floor: float = GRADE_FLOOR, grades: int = GRADES) -> np.ndarray:
+    """The lower edge of every grade: geometric, each twice the one before.
+
+    The first grade has no floor and the last no ceiling, so the scale covers the line and
+    a loan can always be graded -- the returned array is the ``grades - 1`` internal
+    boundaries.
+    """
+    return floor * 2.0 ** np.arange(grades - 1, dtype=float)
+
+
+def grade_of(twelve_month_pd: np.ndarray, *, scale: np.ndarray | None = None) -> np.ndarray:
+    """Which grade each predicted twelve-month PD falls in, 1 the safest.
+
+    Bands closed on the right, as every band in this project is: a PD exactly on an edge
+    belongs to the grade below it.
+    """
+    edges = master_scale() if scale is None else scale
+    return np.searchsorted(edges, np.asarray(twelve_month_pd, dtype=float), side="left") + 1
+
+
+def annualised(hazard: np.ndarray | pd.Series) -> np.ndarray:
+    """A monthly hazard as the probability of defaulting within twelve months.
+
+    ``1 - (1 - h)^12``: the loan's risk over the coming year at today's hazard, which is
+    what the realised measure it is compared against also is -- defaults per obligor-year.
+    Projecting each loan-month's covariate path forward twelve months would be the fuller
+    answer and is out of reach at sixty million rows; the approximation is stated rather
+    than hidden, and it is the same on both sides of the comparison.
+    """
+    monthly = np.asarray(hazard, dtype=float)
+    return 1.0 - (1.0 - monthly) ** 12
+
+
+def jeffreys_interval(
+    defaults: np.ndarray | float, exposure: np.ndarray | float, *, confidence: float = 0.95
+) -> tuple[np.ndarray, np.ndarray]:
+    """The Jeffreys interval for a default rate: Beta(d + 1/2, n - d + 1/2).
+
+    Jeffreys rather than a normal approximation because the top grades hold few defaults
+    and sometimes none, where a normal interval is either meaningless or of zero width --
+    and a criterion that no grade can fail is not a criterion. It is the interval the
+    validation asked for by name.
+    """
+    d = np.asarray(defaults, dtype=float)
+    n = np.asarray(exposure, dtype=float)
+    tail = (1.0 - confidence) / 2.0
+    lower = beta.ppf(tail, d + 0.5, np.maximum(n - d, 0.0) + 0.5)
+    upper = beta.isf(tail, d + 0.5, np.maximum(n - d, 0.0) + 0.5)
+    return np.nan_to_num(lower, nan=0.0), np.nan_to_num(upper, nan=1.0)
+
+
+def grade_backtest(
+    predicted_hazard: pd.Series,
+    observed: pd.Series,
+    exposure: pd.Series,
+    *,
+    confidence: float = 0.95,
+) -> pd.DataFrame:
+    """Twelve-month PD by grade, against what the grade's loans actually did.
+
+    One row per populated grade: its exposure in obligor-years, the predicted PD it was
+    graded on, the realised rate, the Jeffreys interval around the realised rate, and
+    whether the prediction falls inside it.
+
+    **Obligor-years, not obligors at a date.** The cells carry no loan identity, so a
+    cohort taken at a reporting date cannot be followed through them; the denominator is
+    loan-months over twelve, which is the exposure the defaults were earned on and the
+    unit the predicted rate is already in. The two coincide when the hazard is flat over
+    the year and differ by the loans that leave, which is the same approximation the
+    annualisation makes.
+    """
+    frame = pd.DataFrame(
+        {
+            "hazard": predicted_hazard.to_numpy(dtype=float),
+            "events": observed.to_numpy(dtype=float),
+            "exposure": exposure.to_numpy(dtype=float),
+        }
+    )
+    frame["predicted"] = annualised(frame["hazard"].to_numpy())
+    frame["grade"] = grade_of(frame["predicted"].to_numpy())
+    frame["predicted_defaults"] = frame["predicted"] * frame["exposure"] / 12.0
+
+    grouped = frame.groupby("grade", observed=True).agg(
+        loan_months=("exposure", "sum"),
+        defaults=("events", "sum"),
+        predicted_defaults=("predicted_defaults", "sum"),
+    )
+    grouped["obligor_years"] = grouped["loan_months"] / 12.0
+    grouped["predicted_pd"] = grouped.pop("predicted_defaults") / grouped["obligor_years"]
+    grouped["actual_pd"] = grouped["defaults"] / grouped["obligor_years"]
+    lower, upper = jeffreys_interval(
+        grouped["defaults"].to_numpy(), grouped["obligor_years"].to_numpy(), confidence=confidence
+    )
+    grouped["lower"] = lower
+    grouped["upper"] = upper
+    grouped["passed"] = (grouped["predicted_pd"] >= lower) & (grouped["predicted_pd"] <= upper)
+    return grouped.reset_index()
+
+
+def master_scale_passed(table: pd.DataFrame, *, required: int = GRADES_TO_PASS) -> bool:
+    """Whether enough grades hold, by the rule declared before the run.
+
+    "Seven of the eight" counted as **at most one failing grade**, over the grades that
+    hold any exposure. A grade nobody is in can neither pass nor fail, and counting it as a
+    failure would make the rule turn on how much of the scale a window happens to populate
+    rather than on the model.
+    """
+    return bool(int((~table["passed"]).sum()) <= GRADES - required)
+
+
+# --------------------------------------------------------------------------------------
+# Prepayment
+# --------------------------------------------------------------------------------------
+
+
+def conditional_prepayment_rate(monthly: np.ndarray | pd.Series) -> np.ndarray:
+    """A monthly prepayment rate as the annual one the market quotes.
+
+    ``CPR = 1 - (1 - SMM)^12``, where the single monthly mortality is prepayments over the
+    loans at risk that month. The model's hazard *is* an SMM -- the probability of the loan
+    repaying in the month, conditional on reaching it -- so the two sides of the comparison
+    need no further translation, and quoting a CPR rather than a monthly rate is what makes
+    the number readable beside anything else written about mortgage prepayment.
+    """
+    rate: np.ndarray = 1.0 - (1.0 - np.asarray(monthly, dtype=float)) ** 12
+    return rate
+
+
+def prepayment_by_month(
+    predicted: pd.Series,
+    observed: pd.Series,
+    exposure: pd.Series,
+    periods: pd.Series,
+) -> pd.DataFrame:
+    """Predicted against realised prepayment, month by month, as CPR.
+
+    Prepayment moves with the refinancing window and the calendar, far more sharply than
+    default does: a rate cut can double it in a quarter. A single ratio over a window
+    therefore says much less here than it does for default, and the monthly path is the
+    thing to look at -- a model can hit the average of a period it gets exactly backwards
+    within it.
+    """
+    frame = pd.DataFrame(
+        {
+            "period": pd.PeriodIndex(periods),
+            "expected_prepayments": predicted.to_numpy(dtype=float)
+            * exposure.to_numpy(dtype=float),
+            "prepayments": observed.to_numpy(dtype=float) * exposure.to_numpy(dtype=float),
+            "loan_months": exposure.to_numpy(dtype=float),
+        }
+    )
+    grouped = frame.groupby("period", observed=True).sum()
+    grouped["predicted_smm"] = grouped["expected_prepayments"] / grouped["loan_months"]
+    grouped["actual_smm"] = grouped["prepayments"] / grouped["loan_months"]
+    grouped["predicted_cpr"] = conditional_prepayment_rate(grouped["predicted_smm"].to_numpy())
+    grouped["actual_cpr"] = conditional_prepayment_rate(grouped["actual_smm"].to_numpy())
+    grouped["ratio"] = np.where(
+        grouped["predicted_smm"] > 0, grouped["actual_smm"] / grouped["predicted_smm"], np.nan
+    )
+    return grouped.reset_index()

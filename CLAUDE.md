@@ -7,7 +7,8 @@ obvious from the code and that a mistake in would cost hours or go unnoticed.
 ## The constraints that shape everything
 
 **Memory decides what can be fitted; time decides what is worth fitting.** The cell key
-carries the exact origination month, `has_mi` and `first_time_buyer`: 63.6 million cells
+carries the exact origination month, *mortgage insurance* (`mortgage_insurance`, formerly
+`has_mi`) and *buyer type* (`buyer_type`, formerly `first_time_buyer`): 63.6 million cells
 over 2.54 billion loan-months under the `exclude` policy.
 
 - **Every interval-censored fit goes through `creditsurv.models.blocks`.** A stock
@@ -18,9 +19,16 @@ over 2.54 billion loan-months under the `exclude` policy.
   errors and log-likelihood. Re-run it before trusting a new lifelines.
 - **Measure memory as phys_footprint** ("peak memory footprint" in `/usr/bin/time -l`),
   never `maxrss`: it misses compressed pages and understated the fit about 2.5x.
-- **The training half is 59.7 million rows**, and a cold fit on it took 91 minutes under
-  `exclude` and 79 under `censor`. `creditsurv moratorium`, two fits and two backtests,
-  took 4.8 hours.
+- **The training half is 59.7 million rows.** Held in memory it fitted in 91 minutes under
+  `exclude` and 79 under `censor`, at a 15 GB footprint. **Streamed from the cell file in
+  worker processes it fitted in 68.1 minutes at 4.7 GB** -- four processes, 250,000 cells a
+  batch, 315 blocks, 1.79 GB of them stored -- and reproduced the in-memory fit to **9.4e-07
+  standard errors**, the same log-likelihood, the same 59,663,961 cells and 1,460,306
+  defaults. A warm start from it converges in one Newton step, 4.7 minutes.
+- **Memory is the batch, not the blocks.** A reader peaks at what one batch costs to expand:
+  1.53 GB at a million cells, 0.97 GB at 250,000. Six processes at a million reached 11.8 GB;
+  four at 250,000 reach 4.7. The stored blocks are 30 bytes a row wherever they are.
+- `creditsurv moratorium`, two fits and two backtests, took 4.8 hours.
 - **`report` starts its fit where the selection ended.** Same specification, same rows, so
   the selection's cached fit is already the optimum, and Newton goes from there instead of
   SLSQP from lifelines' seed. A cell table rebuilt since has another identity, and the fit
@@ -57,15 +65,17 @@ evaluations as from a cold start, 27 against 27. The engine runs Newton directly
 
 **And Newton needs damping.** lifelines clips the interval probability at 1e-25 and adds the
 truncation term unclipped, so far from the data the objective -- a mean negative
-log-likelihood, which cannot be negative -- goes negative and flat. Adding `cltv_drift` to
-the loan block, a warm start's full Newton step went 8.31e5 standard errors, to -4604, and
-was taken because it was lower; the fit fell back on SLSQP for 76 minutes, and a flatter
-cliff would have been reported as the optimum. The polish now takes a step only to a value a
-likelihood can have, damped (Levenberg-Marquardt) until it lowers the objective, and a fit
-that ends anywhere else raises. The next warm start, adding `unemp_gap`, took six damped
-steps from 735 standard errors out to 4e-6: **30 minutes against 76**. On three million rows
-the same start took 14 evaluations and 7 Hessians where SLSQP needed 91 evaluations, and
-ended 3e-5 standard errors from the cold optimum.
+log-likelihood, which cannot be negative -- goes negative and flat. Adding *loan-to-value
+change since origination* (`ltv_change`, formerly `cltv_drift`) to the loan block, a warm
+start's full Newton step went 8.31e5 standard errors, to -4604, and was taken because it was
+lower; the fit fell back on SLSQP for 76 minutes, and a flatter cliff would have been
+reported as the optimum. The polish now takes a step only to a value a likelihood can have,
+damped (Levenberg-Marquardt) until it lowers the objective, and a fit that ends anywhere
+else raises. The next warm start, adding *unemployment change since origination*
+(`unemployment_change`, formerly `unemp_gap`), took six damped steps from 735 standard
+errors out to 4e-6: **30 minutes against 76**. On three million rows the same start took 14
+evaluations and 7 Hessians where SLSQP needed 91 evaluations, and ended 3e-5 standard errors
+from the cold optimum.
 
 ## Rules that are silent when broken
 
@@ -105,7 +115,7 @@ vintage is literally 999.
 **Macro covariates are free; loan covariates cost cells -- so measure the cost.** A macro
 series is a function of the origination month and the loan age, both in the key, so it
 costs **zero cells**. A loan covariate multiplies the table by what it actually costs:
-`has_mi` and `first_time_buyer` together cost 1.19x, measured on nine quarters, where an
+*Mortgage insurance* and *buyer type* together cost 1.19x, measured on nine quarters, where an
 unmeasured sixteenfold figure had kept them out of every screen.
 
 ## Checks that go mute at this scale
@@ -196,13 +206,13 @@ so the complete-case rule drops them: 18% of the 2009Q2-2019Q1 vintages, about t
 likely to default as the loans kept (`docs/data_preparation.md`). Covering them takes a level
 of their own in the key -- a re-aggregation and a new selection -- never an imputed DTI.
 
-**The Weibull against the log-logistic.** On the selected specification the log-logistic
-has the better likelihood by 83,961 AIC points and sits slightly closer to Kaplan-Meier
-(1.21 points of survival on average against 1.26, -2.74 at 312 months against -3.20), but
-turns `nfci_lagged` against its prior; on the specification before the validation the
-Weibull led by 623,126. Switching family means `creditsurv select` with log-logistic fits,
-~15 hours, since every rule of steps 8 and 9 reads the family's coefficients. See
-`docs/variable_selection.md`.
+**The Weibull against the log-logistic.** On the selected specification the log-logistic has
+the better likelihood by 83,961 AIC points and sits slightly closer to Kaplan-Meier (1.21
+points of survival on average against 1.26, -2.74 at 312 months against -3.20), but turns
+*financial conditions* (`financial_conditions`, formerly `nfci_lagged`) against its prior;
+on the specification before the validation the Weibull led by 623,126. Switching family
+means `creditsurv select` with log-logistic fits, ~15 hours, since every rule of steps 8 and
+9 reads the family's coefficients. See `docs/variable_selection.md`.
 
 **The backtest fails its decile criterion.** Overall actual over expected 0.920 and Gini
 0.561 pass; the deciles run 0.598 to 1.064: over-prediction in the safer deciles, down to
@@ -211,8 +221,8 @@ Weibull led by 623,126. Switching family means `creditsurv select` with log-logi
 of cell hazards rather than weighted by loan-months. The criteria were fixed before the run,
 so the model is not to be tuned to them on the test window.
 
-**`occupancy` changes the hazard's shape, a little.** Its curves cross at 90 months, which
-no scale factor reconciles, and letting occupancy into the shape parameter is significant --
-likelihood ratio 220.6 on two parameters, p = 1e-48 -- and small: a third of what
-`first_time_buyer` earns at the screen (696) and under a thousandth of `cltv_drift`
-(542,917). The model stays scale-only in occupancy.
+***Occupancy* (`occupancy`) changes the hazard's shape, a little.** Its curves cross at 90
+months, which no scale factor reconciles, and letting occupancy into the shape parameter is
+significant -- likelihood ratio 220.6 on two parameters, p = 1e-48 -- and small: a third of
+what *buyer type* earns at the screen (696) and under a thousandth of *loan-to-value change
+since origination* (542,917). The model stays scale-only in occupancy.

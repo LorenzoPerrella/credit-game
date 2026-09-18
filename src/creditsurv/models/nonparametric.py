@@ -20,18 +20,28 @@ sampled mid-life.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import pandas as pd
 from lifelines import KaplanMeierFitter
 from lifelines.statistics import logrank_test
+from scipy.stats import norm
 
-from creditsurv.data.panel import EVENT, duration_view, to_loan_level
+from creditsurv.data.panel import (
+    AGE,
+    CAUSES,
+    DEFAULT_CAUSE,
+    EVENT,
+    WEIGHT,
+    duration_view,
+    ended_in,
+    to_loan_level,
+)
 from creditsurv.models.aft import episode_hazards
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from lifelines.statistics import StatisticalResult
 
@@ -39,6 +49,12 @@ if TYPE_CHECKING:
 
 #: Default label for the pooled curve.
 OVERALL: str = "overall"
+
+#: Loan-months an age must carry before its non-parametric curve is worth comparing
+#: anything with. Fixed in `docs/rules.md` with the family rule it serves: at 312 months the
+#: book holds a handful of loans, and a crossing test that ignored exposure has already
+#: fired twice in this project on tails of two loan-months.
+EXPOSURE_FLOOR: Final = 100_000.0
 
 
 def kaplan_meier(
@@ -137,8 +153,8 @@ def predicted_survival_curve(
 
     The obvious approach -- predict each loan's survival curve from its
     origination covariates and average -- is wrong here, and quietly so. Half the
-    covariates vary over the life of the loan, and two of them (``cltv_drift`` and
-    ``unemp_gap``) are zero at origination by construction. Freezing them there
+    covariates vary over the life of the loan, and two of them (``ltv_change`` and
+    ``unemployment_change``) are zero at origination by construction. Freezing them there
     assumes house prices never move and unemployment never changes, which
     understates risk and overstates survival by more at every further horizon.
 
@@ -206,3 +222,176 @@ def km_band_contains(
     aligned["deviation"] = aligned["predicted"] - observed
     aligned["band_width"] = aligned["km_upper"] - aligned["km_lower"]
     return aligned
+
+
+# --------------------------------------------------------------------------------------
+# Competing risks: the cumulative incidence of default when prepayment can intervene
+# --------------------------------------------------------------------------------------
+
+
+def cumulative_incidence(
+    cells: pd.DataFrame,
+    *,
+    causes: Sequence[str] = CAUSES,
+    weights_col: str = WEIGHT,
+    age_col: str = AGE,
+    confidence: float = 0.95,
+) -> pd.DataFrame:
+    """Aalen-Johansen cumulative incidence, read straight off the aggregated cells.
+
+    **Why not one minus Kaplan-Meier.** Treating prepayment as censoring asks what the
+    default rate would be *if loans could not be repaid*, and on this book they mostly are:
+    prepayment removes loans from the population far faster than default does, and the
+    counterfactual answer is not the quantity a lifetime PD is supposed to hold. The
+    cumulative incidence asks what actually happens -- the share of loans that have
+    defaulted by age t, prepayments and all -- which is the one a provision is calculated
+    from, and 1 - KM overstates it, by more at every further horizon.
+
+    The estimator is the textbook one, with the hazards read from the cells:
+
+        S(t) = prod over a <= t of (1 - (d_default(a) + d_prepaid(a)) / n(a))
+        F_k(t) = sum over a <= t of S(a-) * d_k(a) / n(a)
+
+    where ``n(a)`` is the loan-months at risk in the episode starting at age ``a``. No
+    loan-level frame exists at any point: the three counts come out of ``bincount`` over
+    the cell table, which is the whole reason the cells carry a three-state outcome rather
+    than a flag.
+
+    The interval is Aalen's, by the delta method (Marubini and Valsecchi, as lifelines
+    computes it). Read the *width*, not whether a curve falls inside: at these counts it
+    collapses to a hundredth of a percentage point, the way every band in this project
+    does.
+    """
+    ages = cells[age_col].to_numpy(dtype=int)
+    weight = cells[weights_col].to_numpy(dtype=float)
+    length = int(ages.max()) + 1
+
+    at_risk = np.bincount(ages, weights=weight, minlength=length)
+    exits = {
+        cause: np.bincount(ages, weights=weight * ended_in(cells, cause), minlength=length)
+        for cause in causes
+    }
+    leaving = sum(exits.values())
+
+    present = np.flatnonzero(at_risk > 0)
+    at_risk = at_risk[present]
+    exits = {cause: count[present] for cause, count in exits.items()}
+    leaving = np.asarray(leaving)[present]
+
+    # S(a-), survival into the episode rather than out of it: the increment at age a is
+    # the hazard of a among the loans that reached it.
+    survival = np.cumprod(1.0 - leaving / at_risk)
+    entering = np.concatenate(([1.0], survival[:-1]))
+
+    table = pd.DataFrame({"age": present, "at_risk": at_risk, "survival": survival})
+    quantile = float(norm.ppf(0.5 + confidence / 2.0))
+    for cause, count in exits.items():
+        hazard = count / at_risk
+        incidence = np.cumsum(entering * hazard)
+        error = _incidence_error(incidence, entering, at_risk, leaving, count)
+        table[cause] = incidence
+        table[f"{cause}_lower"] = np.clip(incidence - quantile * error, 0.0, 1.0)
+        table[f"{cause}_upper"] = np.clip(incidence + quantile * error, 0.0, 1.0)
+        table[f"{cause}_se"] = error
+    return table
+
+
+def predicted_incidence_curve(
+    hazards: Mapping[str, np.ndarray],
+    ages: np.ndarray,
+    *,
+    weight: np.ndarray | None = None,
+) -> pd.DataFrame:
+    """The model's own cumulative incidence, chained from its cause-specific hazards.
+
+    The counterpart of :func:`predicted_survival_curve` for two competing exits, and built
+    the same way -- the monthly hazard evaluated at each loan-month's *actual* covariates,
+    averaged over the loans at risk at that age, and chained -- so it is directly
+    comparable with :func:`cumulative_incidence` computed on the same rows. That
+    comparability is the point: rule 2 of `docs/rules.md` chooses the distribution family
+    by the gap between these two curves.
+
+    ``hazards`` maps a cause to that cause's predicted monthly hazard, one value per row of
+    the same frame the ages and weights come from.
+    """
+    length = int(ages.max()) + 1
+    weights = np.ones(len(ages)) if weight is None else np.asarray(weight, dtype=float)
+    at_risk = np.bincount(ages, weights=weights, minlength=length)
+    present = np.flatnonzero(at_risk > 0)
+
+    mean = {
+        cause: np.bincount(ages, weights=weights * np.asarray(hazard), minlength=length)[present]
+        / at_risk[present]
+        for cause, hazard in hazards.items()
+    }
+    leaving = sum(mean.values())
+    survival = np.cumprod(1.0 - np.asarray(leaving))
+    entering = np.concatenate(([1.0], survival[:-1]))
+
+    table = pd.DataFrame({"age": present, "at_risk": at_risk[present], "survival": survival})
+    for cause, hazard in mean.items():
+        table[cause] = np.cumsum(entering * hazard)
+    return table
+
+
+def incidence_gap(
+    predicted: pd.DataFrame,
+    observed: pd.DataFrame,
+    *,
+    cause: str = DEFAULT_CAUSE,
+    exposure_floor: float = EXPOSURE_FLOOR,
+) -> pd.DataFrame:
+    """Where the model's cumulative incidence sits against the Aalen-Johansen one.
+
+    One row per age carrying at least ``exposure_floor`` loan-months, with both curves and
+    the gap in **percentage points**. The floor is why the comparison says anything: the
+    tail ages hold a handful of loans, where the non-parametric curve is noise and a
+    parametric one is doing the only sensible thing by ignoring it. Every crossing test in
+    this project has had to learn that, the last one by firing on tails of two loan-months.
+    """
+    merged = predicted.merge(observed, on="age", how="inner", suffixes=("_model", "_observed"))
+    merged = merged[merged["at_risk_observed"] >= exposure_floor]
+    return pd.DataFrame(
+        {
+            "age": merged["age"],
+            "at_risk": merged["at_risk_observed"],
+            "model": merged[f"{cause}_model"],
+            "observed": merged[f"{cause}_observed"],
+            "gap_pp": 100.0 * (merged[f"{cause}_model"] - merged[f"{cause}_observed"]),
+        }
+    )
+
+
+def _incidence_error(
+    incidence: np.ndarray,
+    entering: np.ndarray,
+    at_risk: np.ndarray,
+    leaving: np.ndarray,
+    count: np.ndarray,
+) -> np.ndarray:
+    """Standard error of a cumulative incidence, by the delta method.
+
+    Three terms, each of which would be a double sum over ages written directly:
+
+        sum over a <= t of (F(t) - F(a))^2 * d(a) / (n(a) * (n(a) - d(a)))
+      + sum over a <= t of S(a-)^2 * (n(a) - d_k(a)) / n(a) * d_k(a) / n(a)^2
+      - 2 * sum over a <= t of (F(t) - F(a)) * S(a-) * d_k(a) / n(a)^2
+
+    ``F(t) - F(a)`` depends on both ends, so each square is expanded and accumulated as
+    running sums instead: three hundred ages here, but 312 x 312 terms a segment is a
+    different proposition when every view is computed per grade and per vintage.
+    """
+    safe = np.where(at_risk > leaving, at_risk * (at_risk - leaving), np.inf)
+    first = leaving / safe
+    second = entering**2 * (at_risk - count) * count / at_risk**3
+    third = entering * count / at_risk**2
+
+    # (F(t) - F(a))^2 = F(t)^2 - 2 F(t) F(a) + F(a)^2, and the same trick for the cross term.
+    squared = (
+        incidence**2 * np.cumsum(first)
+        - 2.0 * incidence * np.cumsum(first * incidence)
+        + np.cumsum(first * incidence**2)
+        + np.cumsum(second)
+        - 2.0 * (incidence * np.cumsum(third) - np.cumsum(third * incidence))
+    )
+    return np.sqrt(np.clip(squared, 0.0, None))

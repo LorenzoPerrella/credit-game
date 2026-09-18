@@ -14,7 +14,6 @@ when the number of series changes.
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
 import matplotlib
@@ -23,6 +22,8 @@ matplotlib.use("Agg")  # No display in CI, and none needed to write a file.
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+from creditsurv import names
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -167,20 +168,14 @@ def calibration(table: pd.DataFrame, path: Path) -> Path:
     return _save(figure, path)
 
 
-_TREATMENT = re.compile(r"C\((\w+),\s*Treatment\('[^']*'\)\)\[T\.([^\]]+)\]")
-
-
 def _label(parameter: str, covariate: str) -> str:
-    """Turn a formulaic term into something readable on an axis.
+    """A formula term as a reader says it, from the registry of names.
 
-    ``C(purpose, Treatment('purchase'))[T.refinance_cashout]`` carries the encoding
-    scheme, the reference level and the level itself. Only the last two are news
-    once the reference is stated in the caption.
+    Two parameter blocks each own an intercept, so an intercept names its block.
     """
-    match = _TREATMENT.match(covariate)
-    readable = f"{match.group(1)}: {match.group(2)}" if match else covariate
-    # Two parameter blocks each own an intercept, so the block has to be named.
-    return f"{parameter.rstrip('_')}: {readable}" if readable == "Intercept" else readable
+    if covariate == "Intercept":
+        return f"{names.PARAMETERS.get(parameter, parameter)}: Intercept"
+    return names.term_label(covariate)
 
 
 def coefficients(table: pd.DataFrame, path: Path) -> Path:
@@ -377,7 +372,9 @@ def underwriting_over_time(table: pd.DataFrame, path: Path) -> Path:
     return _save(figure, path)
 
 
-def origination_mix_over_time(table: pd.DataFrame, path: Path, *, title: str) -> Path:
+def origination_mix_over_time(
+    table: pd.DataFrame, path: Path, *, title: str, variable: str | None = None
+) -> Path:
     """Share of new lending by category and year, stacked.
 
     A mix that moves is the reason a model fitted on one decade can mislead about
@@ -391,7 +388,10 @@ def origination_mix_over_time(table: pd.DataFrame, path: Path, *, title: str) ->
     axis.stackplot(
         wide.index.astype(int),
         *[wide[column].to_numpy() for column in wide.columns],
-        labels=[str(column) for column in wide.columns],
+        labels=[
+            names.level_label(variable, column) if variable else str(column)
+            for column in wide.columns
+        ],
         colors=colours,
         edgecolor=SURFACE,
         linewidth=0.6,
@@ -429,7 +429,16 @@ def default_rate_and_unemployment(defaults: pd.DataFrame, macro: pd.DataFrame, p
 
 def macro_panel(macro: pd.DataFrame, path: Path) -> Path:
     """The macroeconomic series the model reads, one panel each."""
-    columns = [c for c in ("unemployment_rate", "hpi", "mortgage_rate_30y", "nfci") if c in macro]
+    columns = [
+        c
+        for c in (
+            "unemployment_rate",
+            "house_price_index",
+            "mortgage_rate_30y",
+            "financial_conditions_index",
+        )
+        if c in macro
+    ]
     figure, axes = plt.subplots(
         len(columns), 1, figsize=(8.0, 1.7 * len(columns) + 1.0), sharex=True, facecolor=SURFACE
     )
@@ -437,14 +446,19 @@ def macro_panel(macro: pd.DataFrame, path: Path) -> Path:
 
     labels = {
         "unemployment_rate": "Unemployment rate (%)",
-        "hpi": "House price index (Jan 2000 = 100)",
+        "house_price_index": "House price index (Jan 2000 = 100)",
         "mortgage_rate_30y": "30-year mortgage rate (%)",
-        "nfci": "Financial conditions (0 = average)",
+        "financial_conditions_index": "Financial conditions (0 = average)",
     }
     for axis, name in zip(np.atleast_1d(axes), columns, strict=True):
         axis.set_facecolor(SURFACE)
         axis.plot(time, macro[name].to_numpy(), color=SERIES[0], linewidth=_LINE_WIDTH)
-        _style(axis, title=labels.get(name, name), xlabel="", ylabel="")
+        _style(
+            axis,
+            title=labels.get(name, names.label(name, kind=names.Kind.SERIES)),
+            xlabel="",
+            ylabel="",
+        )
 
     np.atleast_1d(axes)[-1].set_xlabel("Year", color=INK_MUTED, fontsize=9)
     figure.tight_layout()

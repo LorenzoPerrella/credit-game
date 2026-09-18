@@ -79,6 +79,11 @@ ORIGINATION_KEEP: Final[tuple[str, ...]] = (
     "super_conforming_flag",
     "interest_only_indicator",
     "amortization_type",
+    # Kept from September 2026: HARP refinances carry no debt-to-income, so the
+    # complete-case rule dropped them -- 18% of the 2009Q2 to 2019Q1 vintages, at about
+    # three times the default rate of the loans kept. With the flag in the cells they
+    # become a level of their own instead of a silent omission.
+    "harp_indicator",
 )
 
 #: Origination fields read from the layout and deliberately not kept, with the reason.
@@ -90,11 +95,6 @@ ORIGINATION_DROPPED: Final[dict[str, str]] = {
     "postal_code": "same, and higher cardinality still",
     "seller_name": "high cardinality; who sold the loan is not a borrower attribute",
     "prepayment_penalty_indicator": "near-constant N on conforming loans",
-    "harp_indicator": (
-        "a refinance programme flag, not a state of the loan -- and the reason for most "
-        "incomplete cases: HARP loans carry no debt-to-income (181,302 of the 181,356 "
-        "without one in 2012Q2), so the model drops them; docs/data_preparation.md"
-    ),
     "pre_harp_loan_sequence_number": "empty in every vintage checked",
     "special_eligibility_program": "affordable-lending programme, out of scope",
     "property_valuation_method": "how the value was obtained, not what it is",
