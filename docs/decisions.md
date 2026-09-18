@@ -84,6 +84,20 @@ them:
     641 real defaults on 2006Q1. Both were found by tables that did not order risk the way
     the other covariates did.
 
+!!! note "Point-in-time macro series were looked for, and are not available"
+    The validation's observation that every macro series is the *revised* one, and the
+    attempt to answer it. FRED's public graph endpoint accepts a vintage date and **ignores
+    it**: `?id=UNRATE&vintage_date=2019-06-01` and `?id=UNRATE_20190601` both return 200 and
+    both return the current series, running to the latest observation, with April 2019
+    unemployment at today's 3.7. ALFRED's own endpoints answer 404 without a key and the
+    API answers 400. So every backtest here reads revised data.
+
+    What that costs is a backtest fair about the *model* and optimistic about the *data*:
+    the unemployment rate a 2018 model would have been handed differs from the one it is
+    scored with by a revision nobody could have known at the time. The finding is held to
+    the network by a test, so the day the endpoint honours the parameter the suite says so
+    rather than the limitation quietly outliving its reason.
+
 ## Where this goes next
 
 The findings still open -- decile calibration, the family, prepayment, HARP, point-in-time
