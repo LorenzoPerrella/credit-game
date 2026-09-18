@@ -905,7 +905,13 @@ def test_the_note_rate_enters_the_key_as_a_band(tmp_path: Path) -> None:
     """It is there for the spread and the refinancing incentive, both of which are the
     rate against a market rate of a month the key already carries. A band of the rate is
     a band of both.
+
+    Not in the production key: measured at 2.13x on its own, it was the second rung the
+    give-up order of docs/rules.md reached. The extension still has to work -- the ceiling
+    is a function of the book, and a coarser grid or a bigger machine puts it back.
     """
+    from creditsurv.data.aggregate import BASE_SPEC, Extension, extended
+
     origination = [
         origination_row("F000000001", rate="3.10"),
         origination_row("F000000002", rate="3.40"),
@@ -914,7 +920,7 @@ def test_the_note_rate_enters_the_key_as_a_band(tmp_path: Path) -> None:
     performance = [performance_row(f"F00000000{i}", "201503", "0") for i in (1, 2, 3)]
     _ingested(tmp_path, origination, performance)
 
-    cells = build_cells(*_sources(tmp_path))
+    cells = build_cells(*_sources(tmp_path), spec=extended(BASE_SPEC, Extension.ORIGINATION_SPREAD))
 
     # 3.10 and 3.40 share the band (3.0, 3.5] and collapse into one cell, which is the
     # whole reason the rate is banded rather than carried; 6.90 sits in (6.5, 7.0].

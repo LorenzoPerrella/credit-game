@@ -704,9 +704,37 @@ BASE_SPEC: Final = CellSpec(
     ),
 )
 
-#: What the cells are built with. Every extension on, subject to the measurement in
-#: `creditsurv profile` and the give-up order above.
-DEFAULT_SPEC: Final = extended(BASE_SPEC, *Extension)
+#: What the cells are built with: the base key, the HARP level and the payment state.
+#:
+#: **Chosen by the give-up order, not by preference.** `creditsurv profile --extensions`
+#: priced every extension on nine quarters against the 150 million cell ceiling
+#: (`docs/reports/key_extensions.csv`), projecting each multiple onto the 63.6 million cells
+#: the base key produced:
+#:
+#: ===========================================  ==========  ==================
+#: Specification                                Multiple    Projected cells
+#: ===========================================  ==========  ==================
+#: harp                                             1.063          67,650,751
+#: delinquency_state                                1.185          75,403,551
+#: origination_spread                               2.128         135,439,974
+#: fine_bands                                       2.276         144,854,977
+#: all four                                         4.903         312,015,537
+#: less the finer bands                             2.544         161,891,606
+#: less the finer bands and the spread              1.264          80,416,459
+#: ===========================================  ==========  ==================
+#:
+#: All four is twice the ceiling, and giving up the finer bands alone still leaves it over,
+#: so the second rung goes too and the key stops here. The order was fixed in
+#: `docs/rules.md` before any of this was measured, which is the only reason the answer is
+#: not the one that happened to be convenient: the finer bands are individually affordable
+#: at 144.9 million and go first anyway, because a band grid is a refinement and the HARP
+#: level and the payment state are corrections of what the model covers.
+#:
+#: What it costs is the loan's own note rate, and with it the spread at origination and the
+#: refinancing incentive. The market rate's fall since origination survives, free, and
+#: carries the first-order part of both: within a month the note rates of this book span a
+#: point, where the rate itself has moved several since 2021.
+DEFAULT_SPEC: Final = extended(BASE_SPEC, Extension.HARP, Extension.DELINQUENCY_STATE)
 
 
 def _age_expression(step: int) -> str:

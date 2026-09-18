@@ -157,3 +157,62 @@ def test_cut_points_come_back_ordered(tmp_path: Path) -> None:
 
     assert edges == sorted(edges)
     assert len(edges) > 2
+
+
+def test_every_extension_of_the_key_is_priced_against_the_same_base() -> None:
+    """A cost attributed to an extension is only a cost if one thing changed.
+
+    And the ladder has to walk the give-up order of docs/rules.md, so the first
+    specification under the ceiling can be read off the table rather than argued for
+    afterwards.
+    """
+    from creditsurv.data.aggregate import BASE_SPEC, Extension
+    from creditsurv.profiling import _priced_specifications
+
+    priced = _priced_specifications()
+
+    assert priced["base"] == BASE_SPEC
+    for extension in Extension:
+        alone = priced[extension.value]
+        changed = set(alone.categorical) - set(BASE_SPEC.categorical)
+        widened = {
+            name
+            for name, edges in alone.continuous.items()
+            if edges != BASE_SPEC.continuous.get(name)
+        }
+        assert len(changed) + len(widened) >= 1
+        assert len(changed) <= 1, f"{extension} changes more than its own level"
+    assert list(priced)[-3:] == [
+        "all less fine_bands",
+        "all less fine_bands, origination_spread",
+        "all less fine_bands, origination_spread, delinquency_state",
+    ]
+
+
+def test_the_cost_of_the_extensions_is_measured_quarter_by_quarter(tmp_path: Path) -> None:
+    """On fixtures, where the answer is small enough to check by hand."""
+    from creditsurv.profiling import extension_cost
+
+    origination = [
+        origination_row(
+            f"F{i:09d}",
+            fico=str(600 + i * 10),
+            harp="Y" if i % 3 == 0 else "N",
+            debt_to_income="" if i % 3 == 0 else "32",
+        )
+        for i in range(12)
+    ]
+    performance = [
+        performance_row(f"F{i:09d}", f"2015{month:02d}", str(month - 3))
+        for i in range(12)
+        for month in (3, 4)
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    table = extension_cost(["2015Q1"], published_cells=63_639_116)
+
+    assert list(table["specification"])[:2] == ["base", "harp"]
+    assert float(table.loc[table["specification"] == "base", "multiple_of_base"].iloc[0]) == 1.0
+    priced = table.set_index("specification")["multiple_of_base"]
+    assert priced["all"] >= priced["all less fine_bands"] >= 1.0
+    assert (table["projected_cells"] >= 63_639_116).all()

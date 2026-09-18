@@ -125,6 +125,29 @@ If the measured cost of the extensions exceeds it, they are given up in this ord
 HARP and the three-state outcome are not on the list: they are corrections of what the model
 covers and of what it calls an event, not refinements of it.
 
+### What the measurement did to this rule
+
+Added on 18 September 2026, after `creditsurv profile --extensions` and before any fit of
+the new key, because a rule that fires has to say what it did.
+
+All four extensions cost **4.90×** the base key on the nine sampled quarters, a projected
+312 million cells. Giving up the finer bands leaves 161.9 million, still over, so the
+second rung goes too and the key keeps **HARP and the lagged delinquency state**: 1.26×, a
+projected 80.4 million cells (`docs/reports/key_extensions.csv`).
+
+The finer bands are individually affordable, at 144.9 million, and go first regardless,
+because the order was fixed by what each extension is *for* rather than by what it turned
+out to cost.
+
+This takes the loan's own note rate out of the key, and with it the origination spread and
+the refinancing incentive. Rule 9 therefore has nothing left to divide: the default model
+carries the fall in the market rate since origination, and so does the prepayment model, in
+place of the incentive rule 6 names. It is the same comparison missing its constant term --
+within one origination month this book's note rates span about a point, while the market
+rate has moved several points since 2021 -- so the sign expected of the incentive is
+expected of the fall, and the covariate that would have distinguished two loans written in
+the same month at different prices is not available at this cell count.
+
 ## 8. What the HARP level obliges
 
 HARP refinances enter the model with the key of September 2026, and Freddie Mac reports no
