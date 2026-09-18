@@ -707,3 +707,58 @@ def test_a_level_too_far_out_to_be_a_level_is_refused() -> None:
         anchor_on_window(hazard, events * 6.0, weight, months)
     with pytest.raises(ValueError, match="No exposure in the anchoring window"):
         anchor_on_window(hazard[:6], events[:6], weight[:6], months[:6])
+
+
+# --------------------------------------------------------------------------------------
+# The prepayment backtest
+# --------------------------------------------------------------------------------------
+
+
+def test_a_monthly_prepayment_rate_is_quoted_as_the_market_quotes_it() -> None:
+    from creditsurv.backtest.metrics import conditional_prepayment_rate
+
+    # 0.5% a month is the 5.84% CPR every prepayment table in the world would print.
+    assert conditional_prepayment_rate(np.array([0.005]))[0] == pytest.approx(
+        1.0 - 0.995**12, rel=1e-12
+    )
+    assert conditional_prepayment_rate(np.array([0.0]))[0] == 0.0
+    assert conditional_prepayment_rate(np.array([0.02]))[0] == pytest.approx(0.2153, abs=1e-4)
+
+
+def test_prepayment_is_scored_month_by_month_rather_than_over_a_window() -> None:
+    """A rate cut can double prepayment in a quarter, so a model can hit the average of a
+    period it has exactly backwards within it. The monthly path is what says which.
+    """
+    from creditsurv.backtest.metrics import prepayment_by_month
+
+    months = pd.period_range("2022-01", "2022-06", freq="M")
+    predicted = pd.Series(np.full(6, 0.01))
+    # Realised: half the predicted rate for three months, then double it.
+    observed = pd.Series([0.005, 0.005, 0.005, 0.02, 0.02, 0.02])
+    exposure = pd.Series(np.full(6, 50_000.0))
+
+    table = prepayment_by_month(predicted, observed, exposure, pd.Series(months))
+
+    assert len(table) == 6
+    assert table["predicted_cpr"].iloc[0] == pytest.approx(1.0 - 0.99**12)
+    assert list(table["ratio"].round(3)) == [0.5, 0.5, 0.5, 2.0, 2.0, 2.0]
+    # Over the window as a whole the model looks unbiased, which is the point.
+    overall = table["prepayments"].sum() / table["expected_prepayments"].sum()
+    assert overall == pytest.approx(1.25)
+
+
+def test_prepayment_calibration_by_decile_reads_the_same_table_as_default_does() -> None:
+    """The decile machinery is the same, and deliberately: two versions of one bucketing
+    would put the same loan-month in different deciles.
+    """
+    from creditsurv.backtest.metrics import weighted_calibration
+
+    rng = np.random.default_rng(44)
+    predicted = pd.Series(rng.uniform(0.001, 0.03, size=2_000))
+    exposure = pd.Series(rng.integers(50, 5_000, size=2_000).astype(float))
+    observed = pd.Series(predicted.to_numpy() * 1.1)
+
+    table = weighted_calibration(predicted, observed * exposure, exposure)
+
+    assert len(table) == 10
+    np.testing.assert_allclose(table["ratio"].to_numpy(), 1.1, rtol=1e-9)

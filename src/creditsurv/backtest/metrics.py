@@ -457,3 +457,55 @@ def master_scale_passed(table: pd.DataFrame, *, required: int = GRADES_TO_PASS) 
     rather than on the model.
     """
     return bool(int((~table["passed"]).sum()) <= GRADES - required)
+
+
+# --------------------------------------------------------------------------------------
+# Prepayment
+# --------------------------------------------------------------------------------------
+
+
+def conditional_prepayment_rate(monthly: np.ndarray | pd.Series) -> np.ndarray:
+    """A monthly prepayment rate as the annual one the market quotes.
+
+    ``CPR = 1 - (1 - SMM)^12``, where the single monthly mortality is prepayments over the
+    loans at risk that month. The model's hazard *is* an SMM -- the probability of the loan
+    repaying in the month, conditional on reaching it -- so the two sides of the comparison
+    need no further translation, and quoting a CPR rather than a monthly rate is what makes
+    the number readable beside anything else written about mortgage prepayment.
+    """
+    rate: np.ndarray = 1.0 - (1.0 - np.asarray(monthly, dtype=float)) ** 12
+    return rate
+
+
+def prepayment_by_month(
+    predicted: pd.Series,
+    observed: pd.Series,
+    exposure: pd.Series,
+    periods: pd.Series,
+) -> pd.DataFrame:
+    """Predicted against realised prepayment, month by month, as CPR.
+
+    Prepayment moves with the refinancing window and the calendar, far more sharply than
+    default does: a rate cut can double it in a quarter. A single ratio over a window
+    therefore says much less here than it does for default, and the monthly path is the
+    thing to look at -- a model can hit the average of a period it gets exactly backwards
+    within it.
+    """
+    frame = pd.DataFrame(
+        {
+            "period": pd.PeriodIndex(periods),
+            "expected_prepayments": predicted.to_numpy(dtype=float)
+            * exposure.to_numpy(dtype=float),
+            "prepayments": observed.to_numpy(dtype=float) * exposure.to_numpy(dtype=float),
+            "loan_months": exposure.to_numpy(dtype=float),
+        }
+    )
+    grouped = frame.groupby("period", observed=True).sum()
+    grouped["predicted_smm"] = grouped["expected_prepayments"] / grouped["loan_months"]
+    grouped["actual_smm"] = grouped["prepayments"] / grouped["loan_months"]
+    grouped["predicted_cpr"] = conditional_prepayment_rate(grouped["predicted_smm"].to_numpy())
+    grouped["actual_cpr"] = conditional_prepayment_rate(grouped["actual_smm"].to_numpy())
+    grouped["ratio"] = np.where(
+        grouped["predicted_smm"] > 0, grouped["actual_smm"] / grouped["predicted_smm"], np.nan
+    )
+    return grouped.reset_index()
