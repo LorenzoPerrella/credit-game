@@ -817,3 +817,137 @@ def test_a_cell_table_written_under_the_former_names_reads_under_the_current_one
     assert cells["loan_months"].tolist() == [10, 3]
     assert "origination_month" in cells.columns
     assert list(narrow.columns) == ["credit_score", "loan_months"]
+
+
+# --------------------------------------------------------------------------------------
+# The key extended: HARP, the payment state, the note rate and the finer bands
+# --------------------------------------------------------------------------------------
+
+
+def test_a_harp_refinance_is_kept_with_its_ratio_missing_and_its_level_set(
+    tmp_path: Path,
+) -> None:
+    """The open question closed. HARP loans report no debt-to-income, and the
+    complete-case rule dropped every one of them: 18% of the 2009Q2 to 2019Q1 vintages, at
+    three times the default rate of the loans kept.
+
+    They come in with a level of their own and the ratio still missing. Missing, not
+    filled: what the model does with it is decided on the model's side, where a level
+    absorbs it -- see ``features.NOT_REPORTED``.
+    """
+    origination = [
+        origination_row("F000000001", harp="Y", debt_to_income=""),
+        origination_row("F000000002", harp="N", debt_to_income="32"),
+        # No ratio and no HARP: still dropped, since nothing explains the gap.
+        origination_row("F000000003", harp="N", debt_to_income=""),
+    ]
+    performance = [
+        performance_row(loan, f"2015{month:02d}", str(month - 3))
+        for loan in ("F000000001", "F000000002", "F000000003")
+        for month in (3, 4)
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path))
+
+    by_level = cells.groupby("harp", observed=True)["loan_months"].sum()
+    assert by_level.to_dict() == {"harp": 2, "standard": 2}
+    refinanced = cells[cells["harp"] == "harp"]
+    assert refinanced["debt_to_income"].isna().all(), "nothing is imputed in the cells"
+    assert cells[cells["harp"] == "standard"]["debt_to_income"].notna().all()
+
+
+def test_the_payment_state_is_the_month_before_not_the_month_itself(tmp_path: Path) -> None:
+    """A loan 90 days late has already defaulted, so the state during the month is the
+    event. The month before is what a servicer knows when the month opens.
+    """
+    origination = [origination_row("F000000001")]
+    performance = [
+        performance_row("F000000001", "201503", "0", delinquency="0"),
+        performance_row("F000000001", "201504", "1", delinquency="1"),
+        performance_row("F000000001", "201505", "2", delinquency="2"),
+        performance_row("F000000001", "201506", "3", delinquency="3"),
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path))
+
+    state = dict(zip(cells["age"], cells["delinquency_state"].astype(str), strict=True))
+    # Age 0 has no earlier month: the loan opens current, which is not a missing value.
+    assert state == {0: "current", 1: "current", 2: "one_month", 3: "two_months"}
+    defaulted = cells[cells["outcome"] == "default"]
+    assert list(defaulted["age"]) == [3]
+    assert list(defaulted["delinquency_state"].astype(str)) == ["two_months"]
+
+
+def test_an_unreadable_payment_state_drops_the_month_rather_than_reading_as_current(
+    tmp_path: Path,
+) -> None:
+    """``RA`` is a real value of the field -- an REO acquisition -- and casting it to a
+    number first would turn it into the same NULL as "this is the loan's first month",
+    which reads as up to date. Every other mapping here drops a code nobody has looked at,
+    and so does this one.
+    """
+    origination = [origination_row("F000000001")]
+    performance = [
+        performance_row("F000000001", "201503", "0", delinquency="0"),
+        performance_row("F000000001", "201504", "1", delinquency="RA"),
+        performance_row("F000000001", "201505", "2", delinquency="0"),
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path))
+
+    assert sorted(cells["age"]) == [0, 1], "the month after RA has no readable state"
+
+
+def test_the_note_rate_enters_the_key_as_a_band(tmp_path: Path) -> None:
+    """It is there for the spread and the refinancing incentive, both of which are the
+    rate against a market rate of a month the key already carries. A band of the rate is
+    a band of both.
+    """
+    origination = [
+        origination_row("F000000001", rate="3.10"),
+        origination_row("F000000002", rate="3.40"),
+        origination_row("F000000003", rate="6.90"),
+    ]
+    performance = [performance_row(f"F00000000{i}", "201503", "0") for i in (1, 2, 3)]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path))
+
+    # 3.10 and 3.40 share the band (3.0, 3.5] and collapse into one cell, which is the
+    # whole reason the rate is banded rather than carried; 6.90 sits in (6.5, 7.0].
+    assert sorted(cells["note_rate"]) == [3.25, 6.75]
+    assert int(cells.loc[cells["note_rate"] == 3.25, "loan_months"].sum()) == 2
+
+
+def test_each_extension_of_the_key_switches_on_alone(tmp_path: Path) -> None:
+    """The cell count is the product of the band counts, so an extension has to be priced
+    before it is adopted -- which is only possible one at a time. The order they are given
+    up in is fixed in docs/rules.md, before the measurement.
+    """
+    from creditsurv.data.aggregate import BASE_SPEC, DEFAULT_SPEC, Extension, extended
+
+    assert Extension.HARP not in _GIVE_UP_ORDER(), "HARP is a correction, not a refinement"
+    assert set(DEFAULT_SPEC.categorical) >= set(BASE_SPEC.categorical)
+
+    harp_only = extended(BASE_SPEC, Extension.HARP)
+    assert "harp" in harp_only.categorical
+    assert "delinquency_state" not in harp_only.categorical
+    assert harp_only.continuous == BASE_SPEC.continuous
+
+    finer = extended(BASE_SPEC, Extension.FINE_BANDS)
+    assert finer.categorical == BASE_SPEC.categorical
+    assert len(finer.continuous["credit_score"]) > len(BASE_SPEC.continuous["credit_score"])
+
+    spread = extended(BASE_SPEC, Extension.ORIGINATION_SPREAD)
+    assert "note_rate" in spread.continuous
+
+    assert extended(BASE_SPEC, *Extension) == extended(BASE_SPEC, *reversed(list(Extension)))
+
+
+def _GIVE_UP_ORDER() -> tuple[object, ...]:
+    from creditsurv.data.aggregate import GIVE_UP_ORDER
+
+    return GIVE_UP_ORDER

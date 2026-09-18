@@ -125,9 +125,48 @@ If the measured cost of the extensions exceeds it, they are given up in this ord
 HARP and the three-state outcome are not on the list: they are corrections of what the model
 covers and of what it calls an event, not refinements of it.
 
+## 8. What the HARP level obliges
+
+HARP refinances enter the model with the key of September 2026, and Freddie Mac reports no
+debt-to-income for them. The rule is fixed here, before the selection that would otherwise
+decide it:
+
+- the ratio stays **missing in the cell table**. Nothing is imputed there, and a reader
+  counting HARP loans sees the gap the source has;
+- the model fills it with a **constant** and carries the **HARP level**, which absorbs the
+  constant whole. That is the dummy-variable adjustment, and it is exactly a "not reported"
+  band written on the scale the covariate already uses: the slope is estimated on the loans
+  that report the ratio, and the fill's value is arbitrary;
+- therefore **no specification may contain the debt-to-income without the HARP level**. The
+  selection cannot drop it: it is in the protected block, not among the candidates, and the
+  code refuses the fit rather than trusting the rule to be remembered.
+
+A HARP loan is about three times as likely to default as the loans kept, so the level is
+also the one covariate here whose coefficient is predicted before it is estimated: a
+**negative** coefficient on log survival time, and a positive one would say the program's
+underwater borrowers were the safer ones.
+
+## 9. Two of the three rate covariates, never all three
+
+The note rate enters the key, and with it three ways of comparing it to the market:
+
+    refinance incentive = origination spread + fall in the market rate since origination
+
+an identity, not a correlation. A design holding all three is singular by construction, and
+the correlation and variance-inflation passes would not catch it, since two of the three are
+already in the model before the third arrives. Declared now:
+
+- the **default** model carries the **origination spread** and the **fall in the market
+  rate**: how the loan was priced at underwriting, and what the market has done since;
+- the **prepayment** model carries the **refinancing incentive**, which is the quantity the
+  decision to refinance actually turns on, and not the other two.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.
 - Anchoring on anything but the anchoring window.
 - Choosing the family on the likelihood alone, or keeping one that turns a declared sign.
 - Adding a covariate to the key without measuring what it costs first.
+- Fitting the debt-to-income without the HARP level, or imputing the ratio it stands for.
+- Putting the refinancing incentive, the origination spread and the fall in the market rate
+  in one model.

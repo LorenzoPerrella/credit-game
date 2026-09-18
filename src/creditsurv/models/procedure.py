@@ -72,6 +72,11 @@ log = logging.getLogger(__name__)
 CANDIDATE_CATEGORICAL: Final[dict[str, str]] = {
     "mortgage_insurance": "uninsured",
     "buyer_type": "repeat",
+    # The payment state a month ago, which entered the key in September 2026. A candidate
+    # and not a fixture: it is the strongest thing the performance file holds, strong enough
+    # that it could crowd out the origination covariates a lifetime PD has to extrapolate
+    # on, and the selection is the place that argument gets settled rather than asserted.
+    "delinquency_state": "current",
 }
 
 #: The loan block the selection starts from and protects from variance inflation, fixed
@@ -82,7 +87,16 @@ CANDIDATE_CATEGORICAL: Final[dict[str, str]] = {
 #: this rule, would enter the next one twice.
 LOAN_CONTINUOUS: Final[tuple[str, ...]] = ("credit_score", "original_ltv", "debt_to_income")
 LOAN_ORDINAL: Final[tuple[str, ...]] = ("term_years",)
-BASE_CATEGORICAL: Final[dict[str, str]] = {"purpose": "purchase", "occupancy": "owner_occupied"}
+#: ``harp`` is in the protected block rather than among the candidates, and that is not a
+#: judgement about its coefficient. A HARP refinance reports no debt-to-income, so the fill
+#: that lets it into the model at all is absorbed by this level: a selection free to drop it
+#: would be free to turn the fill into an imputed ratio for 18% of a decade of vintages. See
+#: ``features.NOT_REPORTED``.
+BASE_CATEGORICAL: Final[dict[str, str]] = {
+    "purpose": "purchase",
+    "occupancy": "owner_occupied",
+    "harp": "standard",
+}
 
 #: Correlation above which a pair is reported at step 5.
 CORRELATION_THRESHOLD: Final = 0.8

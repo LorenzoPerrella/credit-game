@@ -52,7 +52,15 @@ def _build(macro: pd.DataFrame) -> set[str]:
     """Which derived covariates the builder produces from this macro panel."""
     ages = pd.Series(range(12, 24))
     origination = pd.Series([2005 * 12] * len(ages))
-    episodes = pd.DataFrame({"original_ltv": [80.0] * len(ages), "term_years": [30] * len(ages)})
+    # The note rate too: the origination spread and the refinancing incentive are the loan's
+    # own rate against a market one, so a panel without it is not a full panel for them.
+    episodes = pd.DataFrame(
+        {
+            "original_ltv": [80.0] * len(ages),
+            "term_years": [30] * len(ages),
+            "note_rate": [6.0] * len(ages),
+        }
+    )
     add_macro_family(episodes, macro, origination, origination + ages, lag_months=3)
     return set(episodes.columns) & set(MACRO_DERIVED)
 

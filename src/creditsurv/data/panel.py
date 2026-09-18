@@ -40,7 +40,7 @@ import pyarrow as pa
 
 from creditsurv import names
 from creditsurv.config import MACRO_LAG_MONTHS
-from creditsurv.features import MACRO_DERIVED, add_macro_family
+from creditsurv.features import MACRO_DERIVED, absorb_not_reported, add_macro_family
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -629,6 +629,11 @@ def cells_to_episodes(
     for column in episodes.columns:
         if episodes[column].dtype == object:
             episodes[column] = episodes[column].astype("category")
+
+    # Before anything reads the covariates: a HARP refinance reports no debt-to-income, and
+    # the cells keep that missing. See features.NOT_REPORTED for why a constant is not an
+    # imputation here.
+    absorb_not_reported(episodes, covariates)
 
     start_ages = episodes[AGE].to_numpy(dtype=np.float32)
     episodes[AGE_START] = start_ages

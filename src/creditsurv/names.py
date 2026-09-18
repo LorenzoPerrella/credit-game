@@ -312,6 +312,34 @@ _VARIABLES: Final[tuple[Variable, ...]] = (
         ),
     ),
     _loan(
+        "harp",
+        "HARP refinance",
+        "Whether the loan was refinanced under the Home Affordable Refinance Program, which "
+        "let underwater borrowers refinance and reports no debt-to-income. A level of its own "
+        "is what lets those loans into the model at all: 18% of the 2009Q2-2019Q1 vintages, "
+        "about three times as likely to default as the loans kept.",
+        source="harp_indicator, origination file",
+        levels=(
+            ("standard", "Standard refinance or purchase", None),
+            ("harp", "HARP refinance", None),
+        ),
+    ),
+    _loan(
+        "delinquency_state",
+        "Payment state a month ago",
+        "How far behind the borrower was when the month opened: the state during the month is "
+        "not usable, since three missed payments is the default event itself. Three or more "
+        "occurs only where an accommodated delinquency was excluded from the event and the "
+        "loan stayed under observation.",
+        source="current_loan_delinquency_status of the previous month, performance file",
+        levels=(
+            ("current", "Up to date", None),
+            ("one_month", "One payment behind", None),
+            ("two_months", "Two payments behind", None),
+            ("three_or_more", "Three or more, accommodated", None),
+        ),
+    ),
+    _loan(
         "borrower_count",
         "Borrowers",
         "The number of borrowers on the loan.",

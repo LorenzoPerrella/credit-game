@@ -100,7 +100,22 @@ MACRO_SOURCES: Final[dict[str, tuple[str, ...]]] = {
     "inflation_change": ("consumer_price_index",),
     "equity_return": ("nasdaq_composite",),
     "housing_starts_growth": ("housing_starts",),
+    "origination_spread": ("mortgage_rate_30y", "mortgage_rate_15y"),
+    "refinance_incentive": ("mortgage_rate_30y", "mortgage_rate_15y"),
 }
+
+#: Exact linear identities among the derived covariates. A design holding every member of
+#: one of these is singular by construction, not nearly so, and the fit either fails or
+#: returns whatever the pseudo-inverse chose.
+#:
+#: The note rate against the market rate is the only one: the incentive to refinance now is
+#: the spread the loan was written at plus the fall in the market rate since. Which two of the
+#: three a specification carries is a modelling decision, declared in docs/rules.md; the
+#: correlation pass would not catch it, since two of the three are already in the model
+#: before the third arrives.
+MACRO_IDENTITIES: Final[tuple[tuple[str, ...], ...]] = (
+    ("refinance_incentive", "origination_spread", "mortgage_rate_decline"),
+)
 
 
 def lag_macro(macro: pd.DataFrame, *, lag_months: int = MACRO_LAG_MONTHS) -> pd.DataFrame:
@@ -228,6 +243,12 @@ BIN_EDGES: dict[str, tuple[float, ...]] = {
     "debt_to_income": (10.0, 20.0, 28.0, 36.0, 43.0, 50.0, 55.0),
     "log_original_balance": (10.0, 11.3, 11.8, 12.1, 12.4, 12.7, 13.2, 14.5),
     "origination_spread": (-2.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 4.0),
+    # The note rate itself is banded only because it is in the cell key, where it buys the
+    # spread and the refinancing incentive, and a band of the rate is a band of both. Half a
+    # point, which is roughly the width of the pricing grid the loans were written on and is
+    # coarse enough that the origination month -- already in the key -- carries most of the
+    # variation. The outer bands hold the 1999 and 2000 book above 8% and the 2021 book below 3.
+    "note_rate": (2.0, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 8.0, 12.0),
     # Percentage points of loan-to-value gained or lost since origination.
     "ltv_change": (-60.0, -20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0, 80.0),
     "unemployment_change": (-10.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 12.0),
@@ -252,6 +273,65 @@ BIN_EDGES: dict[str, tuple[float, ...]] = {
     "consumer_sentiment": (50.0, 65.0, 75.0, 85.0, 95.0, 115.0),
     "housing_starts_growth": (-0.7, -0.3, -0.1, 0.0, 0.1, 0.3, 1.5),
 }
+
+#: Covariates a loan may legitimately not report: the value standing in for the missing
+#: one, and the level that has to be in the model for it to stand in harmlessly.
+#:
+#: A HARP refinance reports no debt-to-income, and it is the *only* reason one is missing
+#: in the cells: every other loan without the ratio is dropped by the complete-case rule.
+#: So the missing indicator and the HARP level are the same column, and filling those rows
+#: with a constant while the model holds that level is the **dummy-variable adjustment**: the
+#: slope is estimated on the loans that report the ratio, and the constant is absorbed whole
+#: by the level. It is exactly a "not reported" band of its own, written on the scale the
+#: covariate is already on, and the constant is arbitrary for the same reason -- any value
+#: gives the same likelihood and the same slope, moving only the level's own coefficient.
+#:
+#: Nothing is imputed. No HARP loan is given a debt-to-income anyone could read as its own:
+#: the cell table keeps the missing value missing, and this is the model's side of it.
+NOT_REPORTED: Final[dict[str, tuple[str, str, float]]] = {
+    "debt_to_income": ("harp", "harp", 32.0),
+}
+
+
+def absorb_not_reported(episodes: pd.DataFrame, requested: Sequence[str] | None = None) -> None:
+    """Fill what a loan does not report, where a level of the model absorbs the fill.
+
+    In place, and refusing rather than guessing: a missing value whose indicator is not in
+    the frame, or which the indicator does not explain, is a gap nobody has looked at.
+
+    ``requested`` is the covariate list the caller will fit on, and the fill is only harmless
+    while the indicator is in it. A model reading a filled debt-to-income without the HARP
+    level would read a constant of 32 as a real ratio for 18% of a decade of vintages, which
+    is the imputation this whole arrangement exists to avoid, so it raises instead. ``None``
+    means the caller has not decided yet and the check belongs to whoever does.
+    """
+    for name, (indicator, level, fill) in NOT_REPORTED.items():
+        if name not in episodes.columns:
+            continue
+        missing = episodes[name].isna().to_numpy()
+        if not missing.any():
+            continue
+        if requested is not None and name in requested and indicator not in requested:
+            message = (
+                f"{name} is fitted without {indicator}, and is missing on "
+                f"{missing.sum():,} rows. The level that absorbs the fill has to be in the model."
+            )
+            raise ValueError(message)
+        if indicator not in episodes.columns:
+            message = (
+                f"{name} is missing on {missing.sum():,} rows and the frame does not carry "
+                f"{indicator}, the level that would absorb the fill."
+            )
+            raise ValueError(message)
+        unexplained = missing & (episodes[indicator].astype(str) != level).to_numpy()
+        if unexplained.any():
+            message = (
+                f"{unexplained.sum():,} rows do not report {name} and are not {indicator} "
+                f"= {level}. Only a {level} loan is allowed to be missing it."
+            )
+            raise ValueError(message)
+        episodes[name] = episodes[name].fillna(fill)
+
 
 #: Suffix for the representative value of a covariate's band.
 BINNED_SUFFIX: str = "_binned"
@@ -339,6 +419,11 @@ MACRO_DERIVED: Final[tuple[str, ...]] = (
     "housing_starts_growth",
     "volatility_change",
     "inflation_change",
+    # The two that need the loan's own note rate, which is why the cell key carries it:
+    # with the rate in the key they are functions of the key like every other member here,
+    # and cost no cells of their own.
+    "origination_spread",
+    "refinance_incentive",
 )
 
 
@@ -472,6 +557,31 @@ def add_macro_family(
             store("mortgage_rate_decline", np.where(short, -gap("mortgage_rate_15y"), thirty))
         else:
             store("mortgage_rate_decline", thirty)
+
+    # The loan's own rate against the market's. Until the note rate entered the cell key
+    # this was out of reach after the collapse, and mortgage_rate_decline -- the movement
+    # without the constant -- was as close as the panel could get.
+    #
+    # Same benchmark switch by term, for the same reason: a fifteen-year loan is refinanced
+    # against the fifteen-year rate.
+    #
+    # Only two of the three may enter a model: see MACRO_IDENTITIES.
+    if "note_rate" in episodes.columns and "mortgage_rate_30y" in available:
+        note = episodes["note_rate"].to_numpy(dtype=float)
+
+        def market(when: pd.Series) -> np.ndarray:
+            """The market mortgage rate the loan would be refinanced at."""
+            thirty = at("mortgage_rate_30y", when)
+            if "term_years" not in episodes.columns or "mortgage_rate_15y" not in available:
+                return thirty
+            short = episodes["term_years"].to_numpy(dtype=float) <= 20.0
+            switched: np.ndarray = np.where(short, at("mortgage_rate_15y", when), thirty)
+            return switched
+
+        if requested("origination_spread"):
+            store("origination_spread", note - market(origination_month))
+        if requested("refinance_incentive"):
+            store("refinance_incentive", note - market(observation))
 
     # Mark-to-market leverage, from the national house price index. Derived here
     # rather than carried in the grouping key because it is a function of original_ltv

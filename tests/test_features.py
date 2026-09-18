@@ -187,3 +187,99 @@ def test_binned_formula_rewrites_only_continuous_terms() -> None:
     # Categoricals are already discrete and must be left alone.
     assert "C(purpose, Treatment('purchase'))" in rewritten
     assert "purpose_binned" not in rewritten
+
+
+# --------------------------------------------------------------------------------------
+# The loan's own rate, and the ratio a HARP loan does not report
+# --------------------------------------------------------------------------------------
+
+
+def test_the_spread_and_the_incentive_are_the_note_rate_against_the_market_rate(
+    macro: pd.DataFrame,
+) -> None:
+    """Both were out of reach until the note rate entered the cell key. The spread is
+    priced at origination and never moves; the incentive is the same comparison made now,
+    which is what a prepayment model turns on.
+    """
+    from creditsurv.features import add_macro_family
+
+    origination = pd.Series([2000 * 12 + 5] * 3)
+    ages = pd.Series([0, 6, 12])
+    episodes = pd.DataFrame({"note_rate": [6.5, 6.5, 6.5], "term_years": [30, 30, 30]})
+
+    add_macro_family(episodes, macro, origination, origination + ages, lag_months=3)
+
+    at_origination = value_at(macro.shift(3), "2000-06", "mortgage_rate_30y")
+    assert episodes["origination_spread"].tolist() == pytest.approx([6.5 - at_origination] * 3)
+    # The identity the three rate covariates obey: incentive = spread + the fall since.
+    rebuilt = episodes["origination_spread"] + episodes["mortgage_rate_decline"]
+    assert episodes["refinance_incentive"].tolist() == pytest.approx(rebuilt.tolist())
+
+
+def test_the_benchmark_follows_the_term_as_the_refinancing_rate_does(macro: pd.DataFrame) -> None:
+    """A fifteen-year loan is refinanced against the fifteen-year rate, which is only
+    possible because the term is in the cell key.
+    """
+    from creditsurv.features import add_macro_family
+
+    origination = pd.Series([2000 * 12 + 5] * 2)
+    episodes = pd.DataFrame({"note_rate": [6.5, 6.5], "term_years": [15, 30]})
+
+    add_macro_family(episodes, macro, origination, origination + 12, lag_months=3)
+
+    short, long = episodes["refinance_incentive"].tolist()
+    assert short != pytest.approx(long), "both terms read the same benchmark"
+    assert short == pytest.approx(6.5 - value_at(macro.shift(3), "2001-06", "mortgage_rate_15y"))
+    assert long == pytest.approx(6.5 - value_at(macro.shift(3), "2001-06", "mortgage_rate_30y"))
+
+
+def test_a_ratio_a_harp_loan_does_not_report_is_absorbed_by_the_harp_level() -> None:
+    """The dummy-variable adjustment, and the reason it is not an imputation: the fill is
+    a constant on every row carrying the level, so the level's coefficient takes all of it
+    and the slope is estimated on the loans that report the ratio.
+    """
+    from creditsurv.features import NOT_REPORTED, absorb_not_reported
+
+    fill = NOT_REPORTED["debt_to_income"][2]
+    frame = pd.DataFrame(
+        {
+            "debt_to_income": [32.0, np.nan, 41.0],
+            "harp": pd.Categorical(["standard", "harp", "standard"]),
+        }
+    )
+
+    absorb_not_reported(frame, ["debt_to_income", "harp"])
+
+    assert frame["debt_to_income"].tolist() == [32.0, fill, 41.0]
+
+
+def test_a_missing_ratio_nothing_explains_is_refused_rather_than_filled() -> None:
+    from creditsurv.features import absorb_not_reported
+
+    unexplained = pd.DataFrame(
+        {"debt_to_income": [32.0, np.nan], "harp": pd.Categorical(["standard", "standard"])}
+    )
+    with pytest.raises(ValueError, match="do not report debt_to_income and are not harp"):
+        absorb_not_reported(unexplained, ["debt_to_income", "harp"])
+
+    no_level = pd.DataFrame({"debt_to_income": [32.0, np.nan]})
+    with pytest.raises(ValueError, match="does not carry harp"):
+        absorb_not_reported(no_level, ["debt_to_income", "harp"])
+
+
+def test_the_ratio_cannot_be_fitted_without_the_level_that_absorbs_its_fill() -> None:
+    """A model reading the filled ratio without the HARP level reads a constant of 32 as a
+    real debt-to-income for 18% of a decade of vintages. That is the imputation the whole
+    arrangement exists to avoid, so it raises.
+    """
+    from creditsurv.features import absorb_not_reported
+
+    frame = pd.DataFrame(
+        {
+            "debt_to_income": [32.0, np.nan],
+            "harp": pd.Categorical(["standard", "harp"]),
+        }
+    )
+
+    with pytest.raises(ValueError, match="fitted without harp"):
+        absorb_not_reported(frame, ["debt_to_income"])
