@@ -386,3 +386,98 @@ def test_an_extra_fit_is_estimated_once_and_read_back_after(
     assert calls == ["loglogistic", "weibull"]
     assert again.fitter.params_.equals(first.fitter.params_)
     assert other.distribution == "weibull"
+
+
+# --------------------------------------------------------------------------------------
+# The family as an input, and step 10
+# --------------------------------------------------------------------------------------
+
+
+def test_the_family_is_an_input_and_reaches_the_fit_and_its_name(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rule 2 of docs/rules.md compares the two *selected* models, so the whole procedure
+    has to run under a family it is told rather than one written into it -- and the two
+    runs must not share a cache, since they fit the same formulas on the same rows.
+    """
+    from creditsurv.data.store import fit_fingerprint
+    from creditsurv.models.procedure import selection_description
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    fits = Fits(
+        train, identity="fixture", as_of="2008-12", moratorium="exclude", distribution="loglogistic"
+    )
+
+    result = fits.fit(Specification(continuous=("credit_score",)))
+
+    assert result.distribution == "loglogistic"
+    assert fits.record[0]["distribution"] == "loglogistic"
+    common = {
+        "identity": "fixture",
+        "as_of": "2008-12",
+        "moratorium": "exclude",
+        "formula": "credit_score",
+    }
+    weibull = fit_fingerprint(**selection_description(**common))
+    loglogistic = fit_fingerprint(**selection_description(**common, distribution="loglogistic"))
+    assert weibull != loglogistic
+
+
+def test_step_ten_removes_the_macro_covariate_whose_effect_is_immaterial() -> None:
+    """The threshold is on the effect of one standard deviation on log survival time, and
+    it applies to the macro block only: a small coefficient on a macro series is usually a
+    statement about which of five correlated series happened to be left.
+    """
+    from creditsurv.models.procedure import MATERIALITY_THRESHOLD, _immaterial
+
+    spec = Specification(continuous=("credit_score", "ltv_change", "unemployment_change"))
+    summary = pd.DataFrame(
+        {"coef": [0.5, 0.004, -0.06]},
+        index=["credit_score", "ltv_change", "unemployment_change"],
+    )
+    result = cast(
+        "FitResult",
+        SimpleNamespace(
+            fitter=SimpleNamespace(
+                summary=pd.concat({"lambda_": summary}), _primary_parameter_name="lambda_"
+            )
+        ),
+    )
+    deviations = pd.Series({"credit_score": 0.001, "ltv_change": 1.0, "unemployment_change": 1.0})
+
+    verdict = _immaterial(spec, result, deviations, macro=["ltv_change", "unemployment_change"])
+
+    assert verdict is not None
+    name, effect = verdict
+    assert name == "ltv_change"
+    assert effect == pytest.approx(0.004)
+    assert abs(effect) < MATERIALITY_THRESHOLD
+    # The credit score's effect is 0.0005, far under the threshold, and it is not eligible.
+    assert _immaterial(spec, result, deviations, macro=["unemployment_change"]) is None, (
+        "the loan block is not screened for materiality"
+    )
+
+
+def test_the_materiality_step_is_reported_and_recorded(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from creditsurv.reporting import selection
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    record, _ = _run(train)
+
+    assert list(record.materiality.columns) == [
+        "step",
+        "removed",
+        "effect_1sd",
+        "threshold",
+        "remaining",
+    ]
+    assert set(record.materiality["removed"]).isdisjoint(record.selected.covariates)
+    for name in record.materiality["removed"].astype(str):
+        assert record.eliminated[name].startswith("step 10:")
+
+    selection.generate(record, reports_dir=tmp_path / "reports")
+    body = (tmp_path / "reports" / "selection.md").read_text()
+    assert "10. Materiality" in body
+    assert (tmp_path / "reports" / "selection_materiality.csv").exists()

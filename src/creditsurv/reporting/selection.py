@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
+from creditsurv.models.procedure import MATERIALITY_THRESHOLD
 from creditsurv.reporting.builder import Report, provenance
 
 if TYPE_CHECKING:
@@ -32,6 +33,7 @@ TABLE_FILES: Final[dict[str, str]] = {
     "screening": "selection_screening.csv",
     "elimination": "selection_elimination.csv",
     "stability": "selection_stability.csv",
+    "materiality": "selection_materiality.csv",
 }
 
 #: The fits the run made, with their times and whether they came from the cache.
@@ -109,6 +111,20 @@ An unstable covariate with no such partner is kept, and left visible here.
         report.text("Stability was not run.")
     else:
         report.table(record.stability)
+
+    report.heading("10. Materiality", level=3).text(
+        f"""
+A macro covariate whose effect of one standard deviation on log survival time is under
+{MATERIALITY_THRESHOLD:g} in absolute value contributes its sign and little else, and a covariate
+that small changes sign when the sample does. The threshold is fixed in `docs/rules.md`,
+before any of these fits, and the removals are made one at a time because each one moves
+every other coefficient.
+"""
+    )
+    if record.materiality.empty:
+        report.text("Every covariate that survived step 9 clears the threshold.")
+    else:
+        report.table(record.materiality, caption="One covariate a step, the smallest first")
 
     fits = pd.DataFrame(record.fits)
     if not fits.empty:

@@ -101,6 +101,13 @@ BASE_CATEGORICAL: Final[dict[str, str]] = {
 #: Correlation above which a pair is reported at step 5.
 CORRELATION_THRESHOLD: Final = 0.8
 
+#: Effect of one standard deviation on log survival time below which a macro covariate is
+#: removed at step 10. Fixed in `docs/rules.md` before any fit of this branch: 0.02 of log
+#: survival time is about a 2% change in expected time to default per standard deviation,
+#: the smallest effect this data can tell from a difference in specification. Identification,
+#: not significance, is the reason -- at 60 million episodes every p-value is zero.
+MATERIALITY_THRESHOLD: Final = 0.02
+
 
 @dataclass(frozen=True)
 class Specification:
@@ -144,6 +151,10 @@ class Fits:
     identity: str
     as_of: str
     moratorium: str
+    #: The distribution family every fit of this run uses. An input, not a constant: rule 2
+    #: of docs/rules.md takes both families through the whole selection and compares the two
+    #: *selected* models, which cannot be done while the family is written into the procedure.
+    distribution: str = "weibull"
     block_rows: int = DEFAULT_BLOCK_ROWS
     record: list[dict[str, object]] = field(default_factory=list)
 
@@ -161,6 +172,7 @@ class Fits:
             moratorium=self.moratorium,
             formula=spec.formula,
             sample=sample,
+            distribution=self.distribution,
         )
         fingerprint = fit_fingerprint(**described)
         cached = load_fit(fingerprint)
@@ -177,6 +189,7 @@ class Fits:
             self.train,
             spec.covariates,
             spec.formula,
+            distribution=self.distribution,
             weights_col=WEIGHT,
             block_rows=self.block_rows,
             initial_point=None if start is None else start.fitter.params_,
@@ -192,7 +205,13 @@ class Fits:
 
 
 def selection_description(
-    *, identity: str, as_of: str, moratorium: str, formula: str, sample: str = "training half"
+    *,
+    identity: str,
+    as_of: str,
+    moratorium: str,
+    formula: str,
+    sample: str = "training half",
+    distribution: str = "weibull",
 ) -> dict[str, object]:
     """What a selection fit is saved under, and so how it is found again."""
     return {
@@ -202,12 +221,19 @@ def selection_description(
         "moratorium": moratorium,
         "sample": sample,
         "formula": formula,
-        "distribution": "weibull",
+        "distribution": distribution,
         "likelihood": "interval_censored",
     }
 
 
-def selected_fit(*, identity: str, as_of: str, moratorium: str, formula: str) -> FitResult | None:
+def selected_fit(
+    *,
+    identity: str,
+    as_of: str,
+    moratorium: str,
+    formula: str,
+    distribution: str = "weibull",
+) -> FitResult | None:
     """The selection's own fit of ``formula`` on the training half, if it made one.
 
     The model ``creditsurv report`` fits is the specification the selection ended on, on
@@ -217,7 +243,11 @@ def selected_fit(*, identity: str, as_of: str, moratorium: str, formula: str) ->
     cached = load_fit(
         fit_fingerprint(
             **selection_description(
-                identity=identity, as_of=as_of, moratorium=moratorium, formula=formula
+                identity=identity,
+                as_of=as_of,
+                moratorium=moratorium,
+                formula=formula,
+                distribution=distribution,
             )
         )
     )
@@ -238,6 +268,7 @@ class SelectionRecord:
     screening: pd.DataFrame
     elimination: pd.DataFrame
     stability: pd.DataFrame
+    materiality: pd.DataFrame
     selected: Specification
     eliminated: dict[str, str]
     fits: list[dict[str, object]]
@@ -386,6 +417,39 @@ def run_selection(
             previous = whole
     stability = pd.concat(rounds, ignore_index=True) if rounds else pd.DataFrame()
 
+    # 10. Materiality. A macro covariate whose effect of one standard deviation on log
+    # survival time is under the threshold contributes its sign and little else, and the
+    # validation's objection was that covariates this small change sign when the sample
+    # does. The threshold is declared in docs/rules.md, before any of these fits.
+    #
+    # One at a time, refitting between, for the reason step 8 gives: removing a covariate
+    # moves every other coefficient, so a list of what was immaterial beside the whole model
+    # is not a list of what is immaterial beside what remains.
+    log.info("step 10: materiality")
+    material: list[dict[str, object]] = []
+    while True:
+        result = fits.fit(current, start=previous)
+        smallest = _immaterial(current, result, deviations, macro=macro)
+        if smallest is None:
+            break
+        name, effect = smallest
+        material.append(
+            {
+                "step": len(material) + 1,
+                "removed": name,
+                "effect_1sd": effect,
+                "threshold": MATERIALITY_THRESHOLD,
+                "remaining": len(current.covariates) - 1,
+            }
+        )
+        eliminated[name] = (
+            f"step 10: 1 sd effect {effect:+.4f} on log survival time, under "
+            f"{MATERIALITY_THRESHOLD:g}"
+        )
+        current = current.minus(name)
+        previous = result
+    materiality = pd.DataFrame(material, columns=_MATERIALITY_COLUMNS)
+
     return SelectionRecord(
         as_of=fits.as_of,
         moratorium=fits.moratorium,
@@ -397,6 +461,7 @@ def run_selection(
         screening=screening,
         elimination=elimination,
         stability=stability,
+        materiality=materiality,
         selected=current,
         eliminated=eliminated,
         fits=fits.record,
@@ -417,6 +482,36 @@ _SCREENING_COLUMNS: Final = [
 ]
 
 _ELIMINATION_COLUMNS: Final = ["step", "removed", "coef", "p", "reason", "remaining"]
+
+_MATERIALITY_COLUMNS: Final = ["step", "removed", "effect_1sd", "threshold", "remaining"]
+
+
+def _immaterial(
+    spec: Specification,
+    result: FitResult,
+    deviations: pd.Series,
+    *,
+    macro: Sequence[str],
+) -> tuple[str, float] | None:
+    """The macro covariate step 10 removes next: the smallest effect under the threshold.
+
+    The loan block is not eligible. A small coefficient on the credit score is a statement
+    about this book; a small coefficient on a macro series is usually a statement about
+    which of five correlated series happened to be left, and it is that instability the
+    threshold is aimed at.
+    """
+    effects = {
+        name: _number(_terms(result), name, "coef") * float(deviations[name])
+        for name in spec.continuous
+        if name in macro and name in deviations.index
+    }
+    below = {
+        name: effect for name, effect in effects.items() if abs(effect) < MATERIALITY_THRESHOLD
+    }
+    if not below:
+        return None
+    name = min(below, key=lambda key: abs(below[key]))
+    return name, below[name]
 
 
 def _number(frame: pd.DataFrame, row: str, column: str) -> float:

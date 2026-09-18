@@ -805,13 +805,21 @@ def select(
         str, typer.Option(help="Select on everything up to this month.")
     ] = DEFAULT_AS_OF,
     moratorium: MoratoriumOption = "exclude",
+    dist: Annotated[
+        str, typer.Option(help="weibull or loglogistic: the family the whole run uses.")
+    ] = "weibull",
 ) -> None:
     """Run the variable selection on the training half, and write what it chose.
 
-    Steps 5 to 9 of ``docs/variable_selection.md`` on the whole population up to
+    Steps 5 to 10 of ``docs/variable_selection.md`` on the whole population up to
     ``--as-of``: correlation, variance inflation, univariate screening, backward
-    elimination and stability. On the whole population that is days, and it resumes --
-    every fit is saved as it lands -- so a run that stops picks up where it was.
+    elimination, stability and materiality. On the whole population that is days, and it
+    resumes -- every fit is saved as it lands -- so a run that stops picks up where it was.
+
+    ``--dist`` takes the whole procedure through one family. Rule 2 of ``docs/rules.md``
+    compares the two *selected* models rather than two fits of one specification, which is
+    only possible because every rule of steps 8, 9 and 10 reads the family's own
+    coefficients.
 
     The report goes to ``docs/reports/selection.md`` with ``selection.json`` beside it, the
     record the configuration is tested against. See ``creditsurv.models.procedure``.
@@ -875,9 +883,12 @@ def select(
         del train[column]
 
     identity = cells_identity(moratorium)
-    typer.echo(f"Selecting on {len(train):,} cells, {int(train[WEIGHT].sum()):,} loan-months.")
+    typer.echo(
+        f"Selecting on {len(train):,} cells, {int(train[WEIGHT].sum()):,} loan-months, "
+        f"with the {dist} family."
+    )
 
-    fits = Fits(train, identity=identity, as_of=as_of, moratorium=moratorium)
+    fits = Fits(train, identity=identity, as_of=as_of, moratorium=moratorium, distribution=dist)
     record = run_selection(train, fits, halves=halves)
     written = selection.generate(record, reports_dir=reports_dir())
 
