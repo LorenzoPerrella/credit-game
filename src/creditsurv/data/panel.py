@@ -249,6 +249,10 @@ class CellBlocks:
     vintage_parity: int | None = None
     weights_col: str = WEIGHT
     lag_months: int = MACRO_LAG_MONTHS
+    #: Which exit the episodes are built for. For prepayment a default is censoring exactly
+    #: as a survivor is, which is what makes the two cause-specific hazards separable and
+    #: what lets one cell file serve both models.
+    cause: str = DEFAULT_CAUSE
     #: The episode width and categorical levels of the file, when they are already known.
     #: Read once and carried, so six worker processes do not each read the whole of two
     #: columns of a 63-million-row file to learn the same thing -- which they did, and it
@@ -284,6 +288,7 @@ class CellBlocks:
                 covariates=list(self.covariates),
                 step=step,
                 lag_months=self.lag_months,
+                cause=self.cause,
             )
             frame = model_frame(episodes, list(self.covariates))
             frame[self.weights_col] = episodes[self.weights_col].to_numpy()
@@ -314,6 +319,7 @@ def cell_blocks(
     vintage_parity: int | None = None,
     weights_col: str = WEIGHT,
     lag_months: int = MACRO_LAG_MONTHS,
+    cause: str = DEFAULT_CAUSE,
 ) -> Iterator[pd.DataFrame]:
     """Model frames straight from the cell file, a batch of cells at a time.
 
@@ -335,6 +341,7 @@ def cell_blocks(
         months=months,
         vintage_parity=vintage_parity,
         weights_col=weights_col,
+        cause=cause,
         lag_months=lag_months,
     )()
 

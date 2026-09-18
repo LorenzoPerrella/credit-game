@@ -198,3 +198,56 @@ def test_a_file_written_under_the_former_names_streams_under_the_current_ones(
         assert not frame.isna().to_numpy().any()
         assert set(frame["purpose"].cat.categories) == {"cash_out_refinance", "purchase"}
         assert frame["credit_score"].between(600.0, 800.0).all()
+
+
+def test_the_same_cells_stream_a_default_model_and_a_prepayment_one(
+    cell_file: Path, cells: pd.DataFrame, macro_module: pd.DataFrame
+) -> None:
+    """One cell table, two cause-specific models.
+
+    For prepayment a default is censoring exactly as a survivor is -- the loan was there,
+    and then it was not there for another reason -- which is what makes the two hazards
+    separable and what stops a second aggregation from being needed.
+    """
+    from creditsurv.data.panel import PREPAYMENT_CAUSE, ended_in
+
+    prepaid = fit_streamed(
+        CellBlocks(
+            str(cell_file),
+            macro_module,
+            tuple(COVARIATES),
+            rows=len(cells) // 4 + 1,
+            cause=PREPAYMENT_CAUSE,
+        ).prepared(),
+        COVARIATES,
+        FORMULA,
+        weights_col=WEIGHT,
+    )
+    defaulted = fit_streamed(
+        CellBlocks(str(cell_file), macro_module, tuple(COVARIATES), rows=len(cells) // 4 + 1),
+        COVARIATES,
+        FORMULA,
+        weights_col=WEIGHT,
+    )
+
+    assert prepaid.n_episodes == defaulted.n_episodes, "the same rows are read"
+    assert prepaid.n_events == int(cells.loc[ended_in(cells, PREPAYMENT_CAUSE), WEIGHT].sum())
+    assert defaulted.n_events != prepaid.n_events
+    assert prepaid.log_likelihood != defaulted.log_likelihood
+
+
+def test_a_prepayment_fit_is_cached_under_a_name_of_its_own() -> None:
+    """Same cells, same formula, same window: only the cause tells the two fits apart, so
+    without it in the description one would be served from the other's cache.
+    """
+    from creditsurv.cli import _fit_description
+    from creditsurv.data.store import fit_fingerprint
+
+    default = _fit_description((10, 100), "credit_score", as_of="2024-12", moratorium="exclude")
+    prepayment = _fit_description(
+        (10, 100), "credit_score", as_of="2024-12", moratorium="exclude", cause="prepayment"
+    )
+
+    assert "cause" not in default, "the fits made before prepayment existed keep their names"
+    assert prepayment["cause"] == "prepayment"
+    assert fit_fingerprint(**default) != fit_fingerprint(**prepayment)

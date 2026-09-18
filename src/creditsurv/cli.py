@@ -11,7 +11,7 @@ Commands that need a model fit one.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, cast
+from typing import TYPE_CHECKING, Annotated, Final, cast
 
 import typer
 
@@ -24,6 +24,12 @@ from creditsurv.config import (
     default_formula,
     reports_dir,
 )
+
+#: The exit a fit is of unless another is asked for, spelled here rather than imported
+#: from ``creditsurv.data.panel``: that module pulls pandas in, and importing it at the top
+#: of the CLI put **0.85 s on every ``creditsurv --help``**. ``tests/test_smoke.py`` holds the
+#: two to each other.
+DEFAULT_CAUSE: Final = "default"
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -249,6 +255,9 @@ def portfolio() -> None:
 @app.command()
 def profile(
     covariate: Annotated[str | None, typer.Option(help="Profile one covariate in detail.")] = None,
+    extensions: Annotated[
+        bool, typer.Option(help="Price each extension of the cell key, on nine quarters.")
+    ] = False,
 ) -> None:
     """Screen the covariates before aggregating.
 
@@ -269,6 +278,19 @@ def profile(
     )
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if extensions:
+        # What a covariate in the key actually costs, against the ceiling declared in
+        # docs/rules.md. A ceiling from the product of the level counts is not a cost.
+        from creditsurv.profiling import extension_cost
+
+        table = extension_cost()
+        destination = reports_dir() / "key_extensions.csv"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(destination, index=False)
+        _echo_table(table.round(3))
+        typer.echo(f"Written to {destination}")
+        return
 
     if covariate in _CATEGORICAL:
         _echo_table(profile_categorical(covariate).round(5))
@@ -422,6 +444,9 @@ def fit(
         int, typer.Option(help="Processes the likelihood is evaluated in, when streamed.")
     ] = 1,
     block_rows: Annotated[int, typer.Option(help="Cells read at a time, when streamed.")] = 250_000,
+    cause: Annotated[
+        str, typer.Option(help="default or prepayment: which exit the model is of.")
+    ] = DEFAULT_CAUSE,
 ) -> None:
     """Fit the model and print its coefficients.
 
@@ -450,6 +475,7 @@ def fit(
             distribution=dist,
             workers=workers,
             block_rows=block_rows,
+            cause=cause,
         )
     else:
         # Already encoded: cells_to_episodes writes the interval bounds as it expands,
@@ -943,6 +969,7 @@ def _fit_streamed(
     distribution: str,
     workers: int,
     block_rows: int,
+    cause: str = DEFAULT_CAUSE,
 ) -> FitResult:
     """Fit from the cell file, in ``workers`` processes, and save it under its fingerprint.
 
@@ -968,6 +995,7 @@ def _fit_streamed(
         tuple(default_covariates()),
         rows=block_rows,
         months=(None, cut),
+        cause=cause,
     )
     source = source.prepared()
     typer.echo(f"Reading {source.source} in {workers} process(es)...")
@@ -987,6 +1015,7 @@ def _fit_streamed(
         as_of=as_of,
         moratorium=moratorium,
         distribution=distribution,
+        cause=cause,
     )
     fingerprint = fit_fingerprint(**described)
     path = save_fit(result, fingerprint, {**described, "minutes": result.elapsed_seconds / 60})
@@ -1008,6 +1037,7 @@ def _fit_description(
     weights_col: str | None = "loan_months",
     ancillary: str | None = None,
     likelihood: Likelihood | None = None,
+    cause: str = DEFAULT_CAUSE,
 ) -> dict[str, object]:
     """What a report's fit is cached under, and so how any command finds it again.
 
@@ -1016,8 +1046,10 @@ def _fit_description(
 
     The moratorium policy is in it because the two treatments can produce panels of similar
     size, and a censor fit silently reused for exclude would compare a model with itself.
-    The ancillary formula and the likelihood enter only when they are not the defaults, so
-    the report's own Weibull keeps the name it has always had.
+    The ancillary formula, the likelihood and the cause enter only when they are not the
+    defaults, so the report's own Weibull keeps the name it has always had -- and a
+    prepayment fit, which reads the same cells and the same formula and would otherwise
+    collide with the default fit's fingerprint, does not.
     """
     from creditsurv.models.aft import Likelihood as Likelihoods
 
@@ -1035,6 +1067,8 @@ def _fit_description(
         "rows": rows,
         "loan_months": loan_months,
     }
+    if cause != DEFAULT_CAUSE:
+        described["cause"] = cause
     if ancillary is not None:
         described["ancillary"] = ancillary
     if likelihood is not None and likelihood is not Likelihoods.INTERVAL_CENSORED:
