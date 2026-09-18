@@ -17,6 +17,7 @@ import typer
 
 from creditsurv.config import (
     CATEGORICAL_REFERENCE,
+    DISTRIBUTION,
     MACRO_SERIES,
     ORDINAL,
     STATIC_CONTINUOUS,
@@ -428,7 +429,7 @@ def _split(moratorium: str, as_of: pd.Period) -> tuple[Split, pd.DataFrame]:
 
 @app.command()
 def fit(
-    dist: Annotated[str, typer.Option(help="weibull or loglogistic.")] = "weibull",
+    dist: Annotated[str, typer.Option(help="weibull or loglogistic.")] = DISTRIBUTION,
     likelihood: Annotated[
         str, typer.Option(help="interval_censored or right_censored.")
     ] = "interval_censored",
@@ -807,7 +808,7 @@ def select(
     moratorium: MoratoriumOption = "exclude",
     dist: Annotated[
         str, typer.Option(help="weibull or loglogistic: the family the whole run uses.")
-    ] = "weibull",
+    ] = DISTRIBUTION,
 ) -> None:
     """Run the variable selection on the training half, and write what it chose.
 
@@ -1044,7 +1045,7 @@ def _fit_description(
     *,
     as_of: str,
     moratorium: str,
-    distribution: str = "weibull",
+    distribution: str = DISTRIBUTION,
     weights_col: str | None = "loan_months",
     ancillary: str | None = None,
     likelihood: Likelihood | None = None,
@@ -1148,7 +1149,7 @@ def _cached_fit(*, as_of: str, moratorium: str) -> Callable[..., FitResult]:
         covariates: Sequence[str],
         formula: str,
         *,
-        distribution: str = "weibull",
+        distribution: str = DISTRIBUTION,
         likelihood: Likelihood | None = None,
         weights_col: str | None = None,
         ancillary: str | None = None,

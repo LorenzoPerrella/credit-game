@@ -491,3 +491,96 @@ def test_the_incidence_band_is_reported_and_is_as_narrow_as_the_counts_make_it()
     # The band narrows as the square root of the count: four thousand loans already
     # bring it under two percentage points, and the book is four million.
     assert float(table["default_se"].iloc[-1]) < 0.02
+
+
+def test_the_family_rule_excludes_a_broken_model_before_it_ranks_anything() -> None:
+    """Rule 2 of docs/rules.md, first clause: a model that turns a declared sign is not a
+    worse model, it is a broken one, and no likelihood or distance redeems it.
+    """
+    from creditsurv.models.selection import family_by_the_rule, family_comparison
+
+    gaps = {
+        "weibull": pd.DataFrame({"gap_pp": [0.9, -1.1]}),
+        "loglogistic": pd.DataFrame({"gap_pp": [0.1, -0.1]}),
+    }
+    comparison = family_comparison(gaps, {"loglogistic": ["financial_conditions"]})
+
+    chosen, why = family_by_the_rule(comparison)
+
+    assert chosen == "weibull"
+    assert "loglogistic excluded on a declared sign" in why
+    assert bool(comparison.set_index("distribution").loc["loglogistic", "excluded"])
+
+
+def test_the_family_rule_keeps_the_weibull_on_a_tie() -> None:
+    """Within a tenth of a percentage point the two are not distinguishable by this data,
+    and the Weibull's hazard does not fall at long ages -- which is where the families
+    differ most and where a lifetime PD spends its time.
+    """
+    from creditsurv.models.selection import family_by_the_rule, family_comparison
+
+    gaps = {
+        "weibull": pd.DataFrame({"gap_pp": [1.05, -1.05]}),
+        "loglogistic": pd.DataFrame({"gap_pp": [1.0, -1.0]}),
+    }
+
+    chosen, why = family_by_the_rule(family_comparison(gaps, {}))
+
+    assert chosen == "weibull"
+    assert "inside the 0.1 pp tie" in why
+
+
+def test_the_family_rule_takes_the_closer_model_when_the_gap_is_real() -> None:
+    from creditsurv.models.selection import family_by_the_rule, family_comparison
+
+    gaps = {
+        "weibull": pd.DataFrame({"gap_pp": [2.0, -2.0]}),
+        "loglogistic": pd.DataFrame({"gap_pp": [1.0, -1.0]}),
+    }
+
+    chosen, why = family_by_the_rule(family_comparison(gaps, {}))
+
+    assert chosen == "loglogistic"
+    assert "1.000 pp closer" in why
+
+
+def test_the_predicted_incidence_is_comparable_with_the_observed_one() -> None:
+    """Both curves are built the same way -- a mean hazard by age, chained -- which is what
+    makes the gap between them a statement about the model rather than about two different
+    constructions.
+    """
+    from creditsurv.data.panel import AGE, OUTCOME, WEIGHT
+    from creditsurv.models.nonparametric import (
+        cumulative_incidence,
+        incidence_gap,
+        predicted_incidence_curve,
+    )
+
+    rng = np.random.default_rng(23)
+    duration = rng.integers(1, 30, size=3_000)
+    cause = rng.choice(["default", "prepayment", "none"], size=3_000, p=[0.25, 0.45, 0.3])
+    cells = pd.DataFrame(
+        [
+            {AGE: age, OUTCOME: ending if age == months - 1 else "none", WEIGHT: 1}
+            for months, ending in zip(duration, cause, strict=True)
+            for age in range(int(months))
+        ]
+    )
+    observed = cumulative_incidence(cells)
+
+    # A "model" that knows the answer: the observed hazard of each cause at each age.
+    ages = cells[AGE].to_numpy(dtype=int)
+    hazards = {}
+    for name in ("default", "prepayment"):
+        ended = (cells[OUTCOME] == name).to_numpy(dtype=float)
+        at_risk = np.bincount(ages)
+        hazards[name] = (np.bincount(ages, weights=ended) / at_risk)[ages]
+    predicted = predicted_incidence_curve(hazards, ages)
+
+    np.testing.assert_allclose(
+        predicted["default"].to_numpy(), observed["default"].to_numpy(), atol=1e-12
+    )
+    gap = incidence_gap(predicted, observed, exposure_floor=100.0)
+    assert not gap.empty
+    assert gap["at_risk"].min() >= 100.0
+    assert float(gap["gap_pp"].abs().max()) < 1e-9

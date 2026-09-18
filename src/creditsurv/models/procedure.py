@@ -44,6 +44,7 @@ import numpy as np
 import pandas as pd
 
 from creditsurv.config import (
+    DISTRIBUTION,
     ECONOMIC_DIMENSION,
     MACRO_CANDIDATES,
     MACRO_ELIMINATION_PRIORITY,
@@ -154,7 +155,7 @@ class Fits:
     #: The distribution family every fit of this run uses. An input, not a constant: rule 2
     #: of docs/rules.md takes both families through the whole selection and compares the two
     #: *selected* models, which cannot be done while the family is written into the procedure.
-    distribution: str = "weibull"
+    distribution: str = DISTRIBUTION
     block_rows: int = DEFAULT_BLOCK_ROWS
     record: list[dict[str, object]] = field(default_factory=list)
 
@@ -211,7 +212,7 @@ def selection_description(
     moratorium: str,
     formula: str,
     sample: str = "training half",
-    distribution: str = "weibull",
+    distribution: str = DISTRIBUTION,
 ) -> dict[str, object]:
     """What a selection fit is saved under, and so how it is found again."""
     return {
@@ -232,7 +233,7 @@ def selected_fit(
     as_of: str,
     moratorium: str,
     formula: str,
-    distribution: str = "weibull",
+    distribution: str = DISTRIBUTION,
 ) -> FitResult | None:
     """The selection's own fit of ``formula`` on the training half, if it made one.
 
@@ -260,6 +261,7 @@ class SelectionRecord:
 
     as_of: str
     moratorium: str
+    distribution: str
     rows: int
     loan_months: float
     correlation: pd.DataFrame
@@ -279,6 +281,7 @@ class SelectionRecord:
         return {
             "as_of": self.as_of,
             "moratorium": self.moratorium,
+            "distribution": self.distribution,
             "static_continuous": [name for name in continuous if name in LOAN_CONTINUOUS],
             "ordinal": [name for name in continuous if name in LOAN_ORDINAL],
             "time_varying_continuous": [name for name in continuous if name in MACRO_CANDIDATES],
@@ -453,6 +456,7 @@ def run_selection(
     return SelectionRecord(
         as_of=fits.as_of,
         moratorium=fits.moratorium,
+        distribution=fits.distribution,
         rows=len(train),
         loan_months=float(train[WEIGHT].sum()),
         correlation=correlation,

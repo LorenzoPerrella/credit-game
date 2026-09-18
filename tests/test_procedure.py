@@ -324,6 +324,7 @@ def test_the_configuration_is_what_the_last_selection_chose() -> None:
     is who went."""
     from creditsurv.config import (
         CATEGORICAL_REFERENCE,
+        DISTRIBUTION,
         ELIMINATED,
         ORDINAL,
         STATIC_CONTINUOUS,
@@ -342,6 +343,10 @@ def test_the_configuration_is_what_the_last_selection_chose() -> None:
     assert list(TIME_VARYING_CONTINUOUS) == summary["time_varying_continuous"]
     assert dict(CATEGORICAL_REFERENCE) == summary["categorical"]
     assert set(ELIMINATED) == set(summary["eliminated"])
+    # The family is an output too, chosen by rule 2 of docs/rules.md between two selections
+    # rather than between two fits of one specification. Records written before the family
+    # was an input do not carry it, and a missing key is not a disagreement.
+    assert summary.get("distribution", DISTRIBUTION) == DISTRIBUTION
 
 
 def test_an_extra_fit_is_estimated_once_and_read_back_after(

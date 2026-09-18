@@ -432,6 +432,16 @@ MACRO_ELIMINATION_PRIORITY: Final[tuple[str, ...]] = (
     "ltv_change",
 )
 
+#: The distribution family the published model uses.
+#:
+#: **An output, like the specification.** Rule 2 of `docs/rules.md` takes both families
+#: through the whole selection and keeps the selected model closest to the Aalen-Johansen
+#: cumulative incidence of default, excluding any family that turns a declared sign and
+#: falling back on the Weibull inside a tenth of a percentage point.
+#: ``tests/test_procedure.py`` fails when this and the selection record part, so the family
+#: cannot be changed here without the run that justifies it.
+DISTRIBUTION: Final = "weibull"
+
 #: Categorical covariates mapped to their treatment-coding reference level.
 #: ``mortgage_insurance`` and ``buyer_type`` entered the key with the validation (M3), at 1.19x
 #: the cells where an unmeasured sixteenfold had kept them out, and the model with the
