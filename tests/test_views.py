@@ -310,3 +310,112 @@ def test_the_views_command_publishes_the_selection_record_as_long_tables(
         (table["first"] == "mortgage_rate_decline") & (table["second"] == "policy_rate_change")
     ]
     assert pair["correlation"].iloc[0] == pytest.approx(-0.8)
+
+
+# --------------------------------------------------------------------------------------
+# Competing risks, the new levels, the grades, the anchoring and the windows
+# --------------------------------------------------------------------------------------
+
+
+def _outcome_cells(rng: np.random.Generator, months: int = 24, loans: int = 600) -> pd.DataFrame:
+    """Cells with three outcomes and both new levels of the key."""
+    duration = rng.integers(1, months, size=loans)
+    cause = rng.choice(["default", "prepayment", "none"], size=loans, p=[0.2, 0.5, 0.3])
+    harp = rng.choice(["standard", "harp"], size=loans, p=[0.8, 0.2])
+    rows = [
+        {
+            "age": age,
+            "outcome": ending if age == int(length) - 1 else "none",
+            "harp": flag,
+            "delinquency_state": "current" if age < int(length) - 1 else "one_month",
+            "loan_months": 1,
+        }
+        for length, ending, flag in zip(duration, cause, harp, strict=True)
+        for age in range(int(length))
+    ]
+    return pd.DataFrame(rows)
+
+
+def test_the_competing_view_sets_the_observed_incidence_beside_the_model() -> None:
+    from creditsurv.views.competing import competing_incidence
+
+    cells = _outcome_cells(np.random.default_rng(51))
+    hazards = {
+        "default": np.full(len(cells), 0.01),
+        "prepayment": np.full(len(cells), 0.03),
+    }
+
+    table = competing_incidence(cells, hazards)
+
+    assert {"observed_default", "observed_prepayment", "model_default"} <= set(table.columns)
+    # Both sides account for the whole book at every age.
+    observed = table["observed_survival"] + table["observed_default"] + table["observed_prepayment"]
+    modelled = table["model_survival"] + table["model_default"] + table["model_prepayment"]
+    np.testing.assert_allclose(observed.to_numpy(), 1.0, atol=1e-12)
+    np.testing.assert_allclose(modelled.to_numpy(), 1.0, atol=1e-12)
+    # Without a model it is the observed curve alone, and says so.
+    assert "model_default" not in competing_incidence(cells).columns
+
+
+def test_a_level_of_the_key_is_opened_with_its_exposure_and_both_exits() -> None:
+    """The table the HARP level and the payment state exist for: how much of the book each
+    holds, and how differently it behaves.
+    """
+    from creditsurv.views.competing import exposure_by_level
+
+    cells = _outcome_cells(np.random.default_rng(52))
+
+    table = exposure_by_level(cells, "harp")
+
+    assert set(table["harp"]) == {"standard", "harp"}
+    assert table["loan_months"].sum() == cells["loan_months"].sum()
+    assert table["share"].sum() == pytest.approx(1.0)
+    assert (table["default_rate"] >= 0).all()
+    assert table["default"].sum() == float((cells["outcome"] == "default").sum())
+
+
+def test_the_cycle_criterion_counts_the_years_inside_the_band() -> None:
+    """The previous model ran 0.47 to 1.60 across years and nothing said whether that was
+    acceptable. Rule 5 asks for 70% of years in the band, and this is where it is counted.
+    """
+    from creditsurv.views.competing import cycle_in_band
+
+    good = pd.DataFrame({"actual_over_expected": [0.9, 1.0, 1.1, 1.2, 0.85, 1.3, 0.95, 1.05]})
+    bad = pd.DataFrame({"actual_over_expected": [0.47, 1.60, 1.1, 0.5, 1.9, 1.0]})
+
+    assert bool(cycle_in_band(good)["passed"].iloc[0])
+    assert float(cycle_in_band(good)["share_in_band"].iloc[0]) == pytest.approx(7 / 8)
+    assert not bool(cycle_in_band(bad)["passed"].iloc[0])
+    assert float(cycle_in_band(bad)["lowest"].iloc[0]) == 0.47
+
+
+def test_the_anchoring_view_shows_the_same_rows_before_and_after_one_multiplier() -> None:
+    from creditsurv.models.anchoring import Anchor
+    from creditsurv.views.competing import anchoring_view
+
+    anchor = Anchor(1.2, ("2022-01", "2024-12"), 120.0, 100.0, 1_000_000.0)
+    before = pd.DataFrame({"year": [2025, 2026], "actual_over_expected": [1.2, 1.1]})
+    after = pd.DataFrame({"year": [2025, 2026], "actual_over_expected": [1.0, 0.917]})
+
+    view = anchoring_view(anchor, before=before, after=after)
+
+    assert set(view.frame["model"]) == {"unanchored", "anchored"}
+    assert view.frame["anchor_multiplier"].unique().tolist() == [1.2]
+    assert "1.2000" in view.description
+    assert len(view.frame) == 4
+
+
+def test_the_grade_view_names_what_the_scale_did() -> None:
+    from creditsurv.views.competing import grade_view
+
+    cells = _outcome_cells(np.random.default_rng(53), loans=4_000)
+    cells["loan_months"] = 50
+    hazard = np.full(len(cells), 0.002)
+
+    view = grade_view(hazard, cells)
+
+    assert view.name == "pd_by_grade"
+    assert "grades hold" in view.description
+    assert {"grade", "predicted_pd", "actual_pd", "lower", "upper", "passed"} <= set(
+        view.frame.columns
+    )
