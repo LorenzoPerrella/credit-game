@@ -809,6 +809,9 @@ def select(
     dist: Annotated[
         str, typer.Option(help="weibull or loglogistic: the family the whole run uses.")
     ] = DISTRIBUTION,
+    cause: Annotated[
+        str, typer.Option(help="default or prepayment: which exit is being modelled.")
+    ] = DEFAULT_CAUSE,
 ) -> None:
     """Run the variable selection on the training half, and write what it chose.
 
@@ -821,6 +824,12 @@ def select(
     compares the two *selected* models rather than two fits of one specification, which is
     only possible because every rule of steps 8, 9 and 10 reads the family's own
     coefficients.
+
+    ``--cause prepayment`` selects the competing model instead, on the same cells: a
+    default becomes censoring, and the declared priors are rule 6's rather than the default
+    model's. They are not the same priors and cannot be -- a credit score that lengthens
+    survival shortens the time to repayment -- so a run with one map and the other cause
+    would eliminate covariates for disagreeing with the wrong economics.
 
     The report goes to ``docs/reports/selection.md`` with ``selection.json`` beside it, the
     record the configuration is tested against. See ``creditsurv.models.procedure``.
@@ -852,6 +861,7 @@ def select(
         Fits,
         run_selection,
     )
+    from creditsurv.models.selection import EXPECTED_SIGNS, PREPAYMENT_SIGNS
     from creditsurv.reporting import selection
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -872,7 +882,9 @@ def select(
     step = episode_step(cells)
     selected = cells.iloc[np.flatnonzero(observation_months(cells).to_numpy() <= cut)]
     del cells
-    train = cells_to_episodes(selected, load_macro_panel(), covariates=candidates, step=step)
+    train = cells_to_episodes(
+        selected, load_macro_panel(), covariates=candidates, step=step, cause=cause
+    )
     del selected
     halves = (train["origination_month"].to_numpy() // 12) % 2 == 0
 
@@ -885,12 +897,24 @@ def select(
 
     identity = cells_identity(moratorium)
     typer.echo(
-        f"Selecting on {len(train):,} cells, {int(train[WEIGHT].sum()):,} loan-months, "
-        f"with the {dist} family."
+        f"Selecting {cause} on {len(train):,} cells, {int(train[WEIGHT].sum()):,} "
+        f"loan-months, with the {dist} family."
     )
 
-    fits = Fits(train, identity=identity, as_of=as_of, moratorium=moratorium, distribution=dist)
-    record = run_selection(train, fits, halves=halves)
+    fits = Fits(
+        train,
+        identity=identity,
+        as_of=as_of,
+        moratorium=moratorium,
+        distribution=dist,
+        cause=cause,
+    )
+    record = run_selection(
+        train,
+        fits,
+        halves=halves,
+        signs=EXPECTED_SIGNS if cause == DEFAULT_CAUSE else PREPAYMENT_SIGNS,
+    )
     written = selection.generate(record, reports_dir=reports_dir())
 
     time_varying = tuple(name for name in record.selected.continuous if name in MACRO_CANDIDATES)

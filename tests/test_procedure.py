@@ -486,3 +486,63 @@ def test_the_materiality_step_is_reported_and_recorded(
     body = (tmp_path / "reports" / "selection.md").read_text()
     assert "10. Materiality" in body
     assert (tmp_path / "reports" / "selection_materiality.csv").exists()
+
+
+def test_the_prepayment_model_is_selected_under_its_own_priors() -> None:
+    """A model of a different exit has different economics, and the same map read for both
+    would eliminate every covariate of the second for disagreeing with the first.
+
+    The credit score is the clearest case: better credit lengthens survival and *shortens*
+    the time to repayment, because the borrowers who can refinance are the ones who qualify.
+    """
+    from creditsurv.models.selection import EXPECTED_SIGNS, PREPAYMENT_SIGNS
+
+    assert EXPECTED_SIGNS["credit_score"] == +1
+    assert PREPAYMENT_SIGNS["credit_score"] == -1
+    assert PREPAYMENT_SIGNS["ltv_change"] == +1, "leverage that has risen blocks a refinance"
+    assert PREPAYMENT_SIGNS["unemployment_change"] == +1, "a weaker labour market prepays less"
+    assert PREPAYMENT_SIGNS["house_price_growth"] == -1, "rising prices free equity"
+    # The refinancing incentive rule 6 names is not here: the key cannot carry the note
+    # rate at this cell count, and the fall in the market rate stands in for it.
+    assert "refinance_incentive" not in PREPAYMENT_SIGNS
+    assert PREPAYMENT_SIGNS["mortgage_rate_decline"] == -1
+
+
+def test_a_backwards_sign_is_read_against_the_map_the_run_was_given() -> None:
+    from creditsurv.models.procedure import _worst
+    from creditsurv.models.selection import PREPAYMENT_SIGNS
+
+    spec = Specification(continuous=("credit_score",))
+    summary = pd.DataFrame({"coef": [0.5], "se(coef)": [0.01], "p": [0.0]}, index=["credit_score"])
+    result = cast(
+        "FitResult",
+        SimpleNamespace(
+            fitter=SimpleNamespace(
+                summary=pd.concat({"lambda_": summary}), _primary_parameter_name="lambda_"
+            )
+        ),
+    )
+
+    assert _worst(spec, result) is None, "a positive score is what the default model expects"
+    verdict = _worst(spec, result, signs=PREPAYMENT_SIGNS)
+    assert verdict is not None
+    assert verdict[0] == "credit_score"
+    assert "wrong sign" in verdict[1]
+
+
+def test_a_prepayment_selection_is_cached_under_a_name_of_its_own() -> None:
+    from creditsurv.data.store import fit_fingerprint
+    from creditsurv.models.procedure import selection_description
+
+    common = {
+        "identity": "cells",
+        "as_of": "2021-12",
+        "moratorium": "exclude",
+        "formula": "credit_score",
+    }
+    default = selection_description(**common)
+    prepayment = selection_description(**common, cause="prepayment")
+
+    assert "cause" not in default
+    assert prepayment["cause"] == "prepayment"
+    assert fit_fingerprint(**default) != fit_fingerprint(**prepayment)

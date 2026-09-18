@@ -490,6 +490,26 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
     # macro cycle. They are eliminated rather than re-signed -- see ``config.ELIMINATED``.
 }
 
+#: The signs the **prepayment** model's coefficients must take, on the same scale: positive
+#: lengthens the time to prepayment.
+#:
+#: A different model of a different exit, so a different prior on every covariate, and the
+#: two must not be confused -- a credit score that lengthens survival *shortens* the time to
+#: repayment, because the borrowers who can refinance are the ones who qualify. These are
+#: the priors declared in rule 6 of `docs/rules.md`, before the fit.
+#:
+#: The refinancing incidence itself is absent because the key cannot carry the note rate at
+#: this cell count (`docs/reports/key_extensions.csv`); ``mortgage_rate_decline``, the fall in
+#: the market rate since origination, is the same comparison without its constant and takes
+#: the sign the incentive would have.
+PREPAYMENT_SIGNS: Final[dict[str, int]] = {
+    "mortgage_rate_decline": -1,  # rates below the note rate: refinance, and sooner
+    "credit_score": -1,  # better credit can refinance, and does
+    "ltv_change": +1,  # leverage that has risen blocks a refinance
+    "house_price_growth": -1,  # rising prices free equity and enable cash-out
+    "unemployment_change": +1,  # a weaker labour market prepays less
+}
+
 #: Covariates deliberately left out of ``EXPECTED_SIGNS``, with the reason. Listed so
 #: the omission reads as a decision rather than an oversight.
 #:
