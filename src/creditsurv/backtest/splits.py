@@ -48,6 +48,11 @@ class Split:
     as_of: pd.Period
     train: pd.DataFrame
     test: pd.DataFrame
+    #: The last period the test window covers, when it has an end. A window with no end
+    #: runs to wherever the data stops, which is the right thing for the one reporting date
+    #: the model is published at and the wrong thing for a cut in the middle of the history:
+    #: the 2018 cut judged on everything after it would be judged on the pandemic as well.
+    until: pd.Period | None = None
 
     @staticmethod
     def _exposure(frame: pd.DataFrame) -> int:
@@ -70,6 +75,7 @@ class Split:
     def describe(self) -> dict[str, object]:
         return {
             "as_of": str(self.as_of),
+            "until": None if self.until is None else str(self.until),
             "train_loan_months": self._exposure(self.train),
             "train_defaults": self._defaults(self.train),
             "train_rows": len(self.train),
@@ -79,7 +85,7 @@ class Split:
         }
 
 
-def cell_split(cells: pd.DataFrame, as_of: pd.Period) -> Split:
+def cell_split(cells: pd.DataFrame, as_of: pd.Period, *, until: pd.Period | None = None) -> Split:
     """Everything observed by ``as_of`` trains; everything after it tests.
 
     Aggregated cells have no loan identifier -- that is what aggregating means -- so
@@ -92,11 +98,14 @@ def cell_split(cells: pd.DataFrame, as_of: pd.Period) -> Split:
     it defaulted.
     """
     train = cells[cells[PERIOD] <= as_of].reset_index(drop=True)
-    test = cells[cells[PERIOD] > as_of].reset_index(drop=True)
+    after = cells[PERIOD] > as_of
+    if until is not None:
+        after &= cells[PERIOD] <= until
+    test = cells[after].reset_index(drop=True)
     if train.empty:
         message = f"No exposure at or before {as_of}."
         raise ValueError(message)
-    return Split(as_of=as_of, train=train, test=test)
+    return Split(as_of=as_of, train=train, test=test, until=until)
 
 
 def split_cells(
@@ -105,6 +114,7 @@ def split_cells(
     as_of: pd.Period,
     *,
     covariates: Sequence[str] | None = None,
+    until: pd.Period | None = None,
 ) -> Split:
     """:func:`cell_split` of the expanded panel, without the whole panel ever existing.
 
@@ -115,7 +125,11 @@ def split_cells(
     halves -- which a test holds to the row -- and each half is expanded on its own.
     """
     cut = as_of.year * 12 + as_of.month - 1
-    before = observation_months(cells).to_numpy() <= cut
+    months = observation_months(cells).to_numpy()
+    before = months <= cut
+    after = ~before
+    if until is not None:
+        after &= months <= until.year * 12 + until.month - 1
     if not before.any():
         message = f"No exposure at or before {as_of}."
         raise ValueError(message)
@@ -126,7 +140,7 @@ def split_cells(
     # passes a table it does not keep frees it here.
     step = episode_step(cells)
     train_cells = cells.iloc[np.flatnonzero(before)]
-    test_cells = cells.iloc[np.flatnonzero(~before)]
+    test_cells = cells.iloc[np.flatnonzero(after)]
     del cells
 
     train = cells_to_episodes(train_cells, macro, covariates=covariates, step=step)
@@ -139,7 +153,7 @@ def split_cells(
         if len(test_cells)
         else train.iloc[:0].copy()
     )
-    return Split(as_of=as_of, train=train, test=test)
+    return Split(as_of=as_of, train=train, test=test, until=until)
 
 
 def assert_no_lookahead(split: Split) -> None:

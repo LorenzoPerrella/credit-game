@@ -550,3 +550,160 @@ def test_the_predicted_pd_and_the_realised_rate_are_in_the_same_unit() -> None:
     assert row["obligor_years"] == pytest.approx(100 * 1_200.0 / 12.0)
     assert row["actual_pd"] == pytest.approx(120.0 / 10_000.0)
     assert row["predicted_pd"] == pytest.approx(1.0 - 0.999**12)
+
+
+# --------------------------------------------------------------------------------------
+# Windows with an end
+# --------------------------------------------------------------------------------------
+
+
+def test_the_declared_cuts_each_carry_twenty_four_months() -> None:
+    """Three cuts rather than one, and each closed. The previous model cut once, at
+    2024-12, and was judged on fifteen quiet months; open-ended, the 2018 cut would be
+    judged on the pandemic as well and the three would not be three regimes.
+    """
+    from creditsurv.backtest.runner import (
+        BACKTEST_CUTS,
+        BACKTEST_WINDOW_MONTHS,
+        backtest_windows,
+    )
+
+    windows = backtest_windows()
+
+    assert len(windows) == len(BACKTEST_CUTS) == 3
+    for (cut, until), declared in zip(windows, BACKTEST_CUTS, strict=True):
+        assert str(cut) == declared
+        assert (until - cut).n == BACKTEST_WINDOW_MONTHS
+    assert [str(cut) for cut, _ in windows] == ["2018-12", "2020-12", "2022-12"]
+
+
+def test_a_closed_window_scores_only_the_months_it_covers() -> None:
+    from creditsurv.backtest.splits import cell_split
+
+    months = pd.period_range("2018-01", "2022-12", freq="M")
+    cells = pd.DataFrame(
+        {
+            "period": months,
+            "event": False,
+            "loan_months": 10,
+        }
+    )
+
+    closed = cell_split(cells, pd.Period("2018-12", freq="M"), until=pd.Period("2020-12", freq="M"))
+    open_ended = cell_split(cells, pd.Period("2018-12", freq="M"))
+
+    assert closed.until == pd.Period("2020-12", freq="M")
+    assert list(closed.test["period"]) == list(pd.period_range("2019-01", "2020-12", freq="M"))
+    assert len(open_ended.test) > len(closed.test)
+    assert closed.describe()["until"] == "2020-12"
+    # The training half is the same either way: an end bounds what is scored, never what
+    # the model saw.
+    assert len(closed.train) == len(open_ended.train)
+
+
+def test_the_split_taken_from_cells_honours_the_same_end(
+    macro: pd.DataFrame,
+) -> None:
+    """The halves are taken before either is expanded, so the end has to be applied there
+    too -- expanding first and trimming after is what put the moratorium comparison at a
+    17.3 GB footprint.
+    """
+    from creditsurv.backtest.splits import split_cells
+
+    months = pd.PeriodIndex(macro.index[-30:])
+    cells = pd.DataFrame(
+        {
+            "credit_score": 720.0,
+            "original_ltv": 80.0,
+            "origination_month": [month.year * 12 + month.month - 1 for month in months],
+            "age": 0,
+            "outcome": "none",
+            "loan_months": 5,
+        }
+    )
+    as_of = months[9]
+    until = months[19]
+
+    split = split_cells(cells, macro, as_of, covariates=["credit_score"], until=until)
+
+    assert split.until == until
+    assert split.test["period"].max() == until
+    assert split.test["period"].min() == as_of + 1
+    assert len(split.test) == 10
+
+
+# --------------------------------------------------------------------------------------
+# Anchoring the level
+# --------------------------------------------------------------------------------------
+
+
+def _anchoring_frame() -> tuple[np.ndarray, np.ndarray, np.ndarray, pd.PeriodIndex]:
+    """Four years of loan-months at a known hazard, defaulting at twice the rate."""
+    months = pd.period_range("2021-01", "2025-12", freq="M")
+    hazard = np.full(len(months), 0.001)
+    weight = np.full(len(months), 100_000.0)
+    events = np.where(pd.PeriodIndex(months).year >= 2022, 0.002, 0.004)
+    return hazard, events, weight, pd.PeriodIndex(months)
+
+
+def test_the_anchor_reads_the_anchoring_window_and_nothing_else() -> None:
+    """The development window ends in 2021-12 and the test window begins in 2025-01, so a
+    multiplier that read either would be re-fitting the intercept or marking its own
+    homework. The 2021 months here default at four times the expected rate and must not
+    move the answer.
+    """
+    from creditsurv.models.anchoring import ANCHOR_WINDOW, anchor_on_window
+
+    hazard, events, weight, months = _anchoring_frame()
+
+    anchor = anchor_on_window(hazard, events, weight, months)
+
+    assert anchor.window == ANCHOR_WINDOW
+    assert anchor.multiplier == pytest.approx(2.0)
+    assert anchor.loan_months == pytest.approx(36 * 100_000.0), "36 months, not 60"
+
+
+def test_anchoring_puts_actual_over_expected_at_one_on_its_own_window() -> None:
+    from creditsurv.models.anchoring import anchor_on_window
+
+    hazard, events, weight, months = _anchoring_frame()
+    inside = (months >= pd.Period("2022-01", freq="M")) & (months <= pd.Period("2024-12", freq="M"))
+
+    anchor = anchor_on_window(hazard, events, weight, months)
+    anchored = anchor.apply(hazard)
+
+    expected = (anchored[inside] * weight[inside]).sum()
+    actual = (events[inside] * weight[inside]).sum()
+    assert actual / expected == pytest.approx(1.0)
+
+
+def test_anchoring_changes_the_level_and_leaves_the_ranking_alone() -> None:
+    """One multiplier on every hazard: the order of loans is exactly what it was, which is
+    why discrimination cannot change and why the segment views still mean something. A
+    per-segment adjustment would fix every segment's level by absorbing the model's errors
+    into the cuts the model is examined through.
+    """
+    from creditsurv.models.anchoring import Anchor
+
+    hazard = np.array([0.0001, 0.002, 0.0005, 0.01])
+    anchor = Anchor(1.7, ("2022-01", "2024-12"), 17.0, 10.0, 1_000.0)
+
+    anchored = anchor.apply(hazard)
+
+    np.testing.assert_allclose(anchored, hazard * 1.7)
+    assert list(np.argsort(anchored)) == list(np.argsort(hazard))
+    assert anchor.apply(np.array([0.9])) == pytest.approx(1.0), "a hazard stays a probability"
+
+
+def test_a_level_too_far_out_to_be_a_level_is_refused() -> None:
+    """Out by more than four times, the specification is what is wrong, and multiplying
+    would hide that behind a number that then looks calibrated.
+    """
+    from creditsurv.models.anchoring import anchor_on_window
+
+    hazard, events, weight, months = _anchoring_frame()
+
+    with pytest.raises(ValueError, match="not a level to be scaled"):
+        anchor_on_window(hazard, events * 6.0, weight, months)
+    with pytest.raises(ValueError, match="No exposure in the anchoring window"):
+        anchor_on_window(hazard[:6], events[:6], weight[:6], months[:6])
