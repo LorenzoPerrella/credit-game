@@ -125,6 +125,132 @@ def conditional_pd(
     return (1.0 - survival_at_end / survival_at_start).rename("pd")
 
 
+@dataclass(frozen=True)
+class CompetingPaths:
+    """Where a book ends up, month by month, when two exits compete for it.
+
+    Three tables on the same index and columns -- loans by months from the start of the
+    projection -- and every row of them adds to one at every month: a loan has defaulted,
+    has been repaid, or is still there.
+    """
+
+    #: Still performing at the end of month k.
+    survival: pd.DataFrame
+    #: Cumulative incidence by cause: the share that has left that way by the end of month k.
+    incidence: dict[str, pd.DataFrame]
+
+    def account(self) -> pd.DataFrame:
+        """Survival plus every incidence, which is one wherever the arithmetic is right."""
+        total = self.survival.copy()
+        for table in self.incidence.values():
+            total += table
+        return total
+
+
+def competing_paths(
+    hazards: Mapping[str, pd.DataFrame],
+) -> CompetingPaths:
+    """Chain cause-specific hazards into survival and a cumulative incidence per cause.
+
+    The lifetime PD of a mortgage is **not** one minus survival. A loan that is repaid
+    cannot afterwards default, and on this book repayment is the commoner exit by an order
+    of magnitude, so a model that treats it as censoring answers what the default rate
+    would be if borrowers could not repay -- a quantity no provision is calculated from. It
+    is not a small correction either: the naive figure is the one the old model published.
+
+    In discrete monthly time, with at most one exit a month:
+
+        S(t)   = prod over a <= t of (1 - sum of the cause hazards at a)
+        F_k(t) = sum over a <= t of S(a-) * h_k(a)
+
+    ``hazards`` maps a cause to a loan-by-step table of its cause-specific hazard, which is
+    what ``hazard_paths`` returns for a fit made under that cause.
+    """
+    tables = {cause: table for cause, table in hazards.items()}
+    first = next(iter(tables.values()))
+    leaving = sum(table.to_numpy(dtype=float) for table in tables.values())
+
+    survival = np.cumprod(1.0 - np.asarray(leaving), axis=1)
+    # S(a-), survival into the month rather than out of it: the loans the month's hazard
+    # is applied to are the ones that reached it.
+    entering = np.concatenate([np.ones((len(survival), 1)), survival[:, :-1]], axis=1)
+
+    months = pd.Index([int(step) + 1 for step in first.columns], name="month")
+    incidence = {
+        cause: pd.DataFrame(
+            np.cumsum(entering * table.to_numpy(dtype=float), axis=1),
+            index=first.index,
+            columns=months,
+        )
+        for cause, table in tables.items()
+    }
+    return CompetingPaths(
+        survival=pd.DataFrame(survival, index=first.index, columns=months), incidence=incidence
+    )
+
+
+def lifetime_incidence(
+    paths: CompetingPaths,
+    cause: str = "default",
+    *,
+    as_of_month: int = 0,
+    horizon_months: int | None = None,
+) -> pd.Series:
+    """Probability of leaving through ``cause`` over a horizon, given performing today.
+
+        [F_k(as_of + horizon) - F_k(as_of)] / S(as_of)
+
+    The denominator is survival, not one: the loans conditioned on are those still
+    performing, and dividing by anything else mixes in the ones already gone. With one
+    cause and no competition this is exactly :func:`conditional_pd`, which is the check
+    the tests make.
+    """
+    table = paths.incidence[cause]
+    columns = list(table.columns)
+    if as_of_month not in {0, *columns}:
+        message = f"as_of_month {as_of_month} is outside the projected horizon."
+        raise ValueError(message)
+
+    end_month = columns[-1] if horizon_months is None else as_of_month + horizon_months
+    if end_month not in columns:
+        message = f"Horizon reaches month {end_month}, beyond the projected {columns[-1]}."
+        raise ValueError(message)
+
+    at_start = 0.0 if as_of_month == 0 else table[as_of_month]
+    surviving = 1.0 if as_of_month == 0 else paths.survival[as_of_month]
+    return ((table[end_month] - at_start) / surviving).rename("pd")
+
+
+def incidence_term_structure(paths: CompetingPaths, cause: str = "default") -> pd.DataFrame:
+    """Marginal and cumulative incidence by month, averaged over the book.
+
+    The competing-risks counterpart of :func:`pd_term_structure`, and balanced for the
+    same reason: a ragged table averages different loans at different ages, and the
+    composition change reads as a falling hazard near the horizon.
+    """
+    table = paths.incidence[cause]
+    missing = int(table.isna().to_numpy().sum())
+    if missing:
+        message = (
+            f"Incidence table has {missing} missing cells, so loans enter and leave "
+            "between ages and the term structure would mix different populations. "
+            "Build a balanced path with project_panel first."
+        )
+        raise ValueError(message)
+
+    cumulative = table.mean(axis=0)
+    marginal = cumulative.diff().fillna(cumulative.iloc[0])
+    mean_survival = paths.survival.mean(axis=0)
+    return pd.DataFrame(
+        {
+            "survival": mean_survival,
+            "cumulative_incidence": cumulative,
+            "marginal_incidence": marginal,
+            "hazard": marginal / mean_survival.shift(1).fillna(1.0),
+        }
+    )
+
+
 def origination_book(encoded: pd.DataFrame, macro: pd.DataFrame, size: int) -> pd.DataFrame:
     """The commonest origination profiles, as a book to be scored from today.
 

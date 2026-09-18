@@ -232,3 +232,100 @@ def test_the_scenario_legs_say_what_moves_and_what_reads_it() -> None:
     assert legs.loc["house_price_index", "move"] == "-20%"
     assert legs.loc["unemployment_rate", "move"] == "+4.0"
     assert legs.loc["unemployment_rate", "month reached"] == 12
+
+
+# --------------------------------------------------------------------------------------
+# Competing risks
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def forward_hazards(
+    fitted: FitResult, new_business: pd.DataFrame, macro_module: pd.DataFrame
+) -> pd.DataFrame:
+    """The default hazard of every projected loan-month, as the paths are chained from."""
+    from creditsurv.models.lifetime_pd import hazard_paths
+
+    extended = extend_macro(macro_module, HORIZON + 2, BASELINE)
+    projected = project_panel(new_business, extended, horizon_months=HORIZON)
+    return hazard_paths(fitted, projected, COVARIATES)
+
+
+def test_with_nothing_competing_the_incidence_is_one_minus_survival(
+    forward_hazards: pd.DataFrame, forward_survival: pd.DataFrame
+) -> None:
+    """The reduction that says the competing-risks machinery is the same calculation
+    generalised, not a different one: with no prepayment, the two agree exactly.
+    """
+    from creditsurv.models.lifetime_pd import competing_paths
+
+    paths = competing_paths({"default": forward_hazards})
+
+    np.testing.assert_allclose(paths.survival.to_numpy(), forward_survival.to_numpy(), rtol=1e-12)
+    np.testing.assert_allclose(
+        paths.incidence["default"].to_numpy(), 1.0 - forward_survival.to_numpy(), atol=1e-12
+    )
+
+
+def test_every_loan_is_accounted_for_at_every_month(forward_hazards: pd.DataFrame) -> None:
+    from creditsurv.models.lifetime_pd import competing_paths
+
+    paths = competing_paths({"default": forward_hazards, "prepayment": forward_hazards * 4.0})
+
+    np.testing.assert_allclose(paths.account().to_numpy(), 1.0, atol=1e-12)
+
+
+def test_prepayment_takes_loans_away_from_default(forward_hazards: pd.DataFrame) -> None:
+    """The correction the whole of phase 2 exists for. Loans that are repaid cannot
+    afterwards default, so the incidence of default is lower than one minus a survival
+    curve that treated repayment as censoring -- and by more at every further horizon.
+    """
+    from creditsurv.models.lifetime_pd import competing_paths, lifetime_incidence
+
+    alone = competing_paths({"default": forward_hazards})
+    competing = competing_paths({"default": forward_hazards, "prepayment": forward_hazards * 4.0})
+
+    naive = lifetime_incidence(alone).mean()
+    corrected = lifetime_incidence(competing).mean()
+    early = (
+        lifetime_incidence(alone, horizon_months=12).mean()
+        - lifetime_incidence(competing, horizon_months=12).mean()
+    )
+    late = naive - corrected
+
+    assert corrected < naive
+    assert late > early, "the gap widens with the horizon"
+
+
+def test_a_lifetime_incidence_conditions_on_the_loans_still_there(
+    forward_hazards: pd.DataFrame,
+) -> None:
+    """Conditioning on survival to month k divides by survival, not by one: the loans the
+    question is about are the ones still performing.
+    """
+    from creditsurv.models.lifetime_pd import competing_paths, lifetime_incidence
+
+    paths = competing_paths({"default": forward_hazards, "prepayment": forward_hazards * 4.0})
+
+    from_today = lifetime_incidence(paths, horizon_months=24)
+    seasoned = lifetime_incidence(paths, as_of_month=12, horizon_months=24)
+    table = paths.incidence["default"]
+    expected = (table[36] - table[12]) / paths.survival[12]
+
+    assert (seasoned > from_today).all(), "a seasoned loan carries more of the curve ahead"
+    np.testing.assert_allclose(seasoned.to_numpy(), expected.to_numpy(), rtol=1e-12)
+
+
+def test_the_incidence_term_structure_adds_up_to_the_curve(forward_hazards: pd.DataFrame) -> None:
+    from creditsurv.models.lifetime_pd import competing_paths, incidence_term_structure
+
+    paths = competing_paths({"default": forward_hazards, "prepayment": forward_hazards * 4.0})
+
+    structure = incidence_term_structure(paths)
+
+    np.testing.assert_allclose(
+        structure["marginal_incidence"].cumsum().to_numpy(),
+        structure["cumulative_incidence"].to_numpy(),
+        atol=1e-12,
+    )
+    assert structure["survival"].is_monotonic_decreasing
