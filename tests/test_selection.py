@@ -584,3 +584,34 @@ def test_the_predicted_incidence_is_comparable_with_the_observed_one() -> None:
     assert not gap.empty
     assert gap["at_risk"].min() >= 100.0
     assert float(gap["gap_pp"].abs().max()) < 1e-9
+
+
+def test_the_family_report_says_which_clause_of_the_rule_decided(tmp_path: Path) -> None:
+    """A rule applied without saying which clause fired is indistinguishable from a
+    preference, so the sentence goes in the report and a test reads it there.
+    """
+    from creditsurv.reporting import family
+
+    gaps = {
+        "weibull": pd.DataFrame({"age": [12, 24], "at_risk": [1e6, 1e6], "gap_pp": [0.4, -0.6]}),
+        "loglogistic": pd.DataFrame(
+            {"age": [12, 24], "at_risk": [1e6, 1e6], "gap_pp": [0.1, -0.1]}
+        ),
+    }
+
+    chosen, path = family.generate(
+        gaps,
+        {"loglogistic": ["financial_conditions"]},
+        formulas={"weibull": "credit_score", "loglogistic": "credit_score + ltv_change"},
+        reports_dir=tmp_path,
+    )
+    body = path.read_text()
+
+    assert chosen == "weibull"
+    assert "**weibull.**" in body
+    assert "excluded on a declared sign" in body
+    # The rule and its thresholds are stated in the report, not only in the code.
+    assert "100,000 loan-months" in body
+    assert "0.1 percentage points" in body
+    # Each family's own selection, so a reader can see the two are not one specification.
+    assert "credit_score + ltv_change" in body
