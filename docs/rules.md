@@ -184,6 +184,37 @@ already in the model before the third arrives. Declared now:
 - the **prepayment** model carries the **refinancing incentive**, which is the quantity the
   decision to refinance actually turns on, and not the other two.
 
+## 10. What the payment state may be used for
+
+Added on 25 September 2026, after the first selection tried to fit it and before the runs
+that follow. The state a month ago went into the cell key as a candidate covariate; it is
+**not** one, and the reason is arithmetic.
+
+Default is three missed payments, so a loan that opens the month two payments behind is one
+month from the definition:
+
+| State a month ago | Loan-months | Defaults | Monthly rate |
+|---|---|---|---|
+| Current | 2,740,161,293 | 22,276 | **0.0008%** |
+| One month | 23,871,219 | 20,206 | 0.085% |
+| Three or more | 4,269,824 | 109,964 | 2.58% |
+| Two months | 5,337,846 | 1,518,761 | **28.45%** |
+
+Two months behind is 0.2% of the exposure and **91% of every default in the book**, at a rate
+35,000 times the current state's. The likelihood pushes its coefficient as far as the clipping
+allows -- the first attempt reached 1e+80 and an objective of −4.7e275 -- and the model that
+came out would answer *will this loan default next month*, which is a behavioural score.
+
+There is a second objection, and it does not depend on the first. A lifetime PD has to
+**project its covariates** over the remaining life. A macro series can be projected under a
+scenario and an origination characteristic does not move; a payment state can be projected
+only by the model that is trying to predict it. It is the outcome, one month early.
+
+So: the state stays in the key, where it costs 1.19× and earns its place in the **views** --
+it says where the defaults are, which is worth publishing -- and no model reads it. A 12-month
+behavioural model is a different model with a different purpose, and this repository does not
+hold one.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.
@@ -193,3 +224,4 @@ already in the model before the third arrives. Declared now:
 - Fitting the debt-to-income without the HARP level, or imputing the ratio it stands for.
 - Putting the refinancing incentive, the origination spread and the fall in the market rate
   in one model.
+- Letting the payment state into any model of the remaining life.

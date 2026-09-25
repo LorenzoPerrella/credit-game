@@ -812,3 +812,68 @@ def test_the_family_command_reads_both_records_and_applies_the_rule(
     body = (tmp_path / "reports" / "family.md").read_text()
     assert "The verdict" in body
     assert "weibull" in body and "loglogistic" in body
+
+
+def test_a_candidate_that_cannot_be_fitted_is_a_finding_not_a_crash() -> None:
+    """It cost five hours to learn this once. The payment state diverged to coefficients of
+    1e+80 and took the whole selection with it, on the seventeenth fit of eighteen candidates.
+
+    A screen exists to judge candidates, and "this one cannot be fitted beside the loan block"
+    is a judgement about the candidate. The run continues and the record says what happened.
+    """
+    from lifelines import exceptions
+
+    from creditsurv.models.selection import Moments
+
+    class Refuses(Fits):
+        """Fits everything but one candidate, which will not converge."""
+
+        def fit(self, spec: Specification, **kwargs: object) -> FitResult:
+            if "equity_volatility" in spec.formula:
+                message = "Fitting did not converge after 11 evaluations"
+                raise exceptions.ConvergenceError(message)
+            return cast("FitResult", _stub_fit(spec))
+
+    def _stub_fit(spec: Specification) -> object:
+        index = pd.Index([*spec.continuous, "Intercept"])
+        summary = pd.DataFrame(
+            {
+                "coef": [0.1] * len(index),
+                "se(coef)": [0.01] * len(index),
+                "p": [0.0] * len(index),
+            },
+            index=index,
+        )
+        return SimpleNamespace(
+            log_likelihood=-100.0,
+            fitter=SimpleNamespace(
+                summary=pd.concat({"lambda_": summary}), _primary_parameter_name="lambda_"
+            ),
+            blocks=None,
+        )
+
+    names = ["credit_score", "ltv_change", "equity_volatility"]
+    moments = Moments(
+        covariance=pd.DataFrame(np.eye(3), index=names, columns=names),
+        rows=10,
+        loan_months=100.0,
+    )
+
+    record = run_selection(
+        None,
+        Refuses(None, identity="fixture", as_of="2021-12", moratorium="exclude"),
+        static=["credit_score"],
+        ordinal=[],
+        macro=["ltv_change", "equity_volatility"],
+        base_categorical={},
+        candidate_categorical={},
+        moments=moments,
+    )
+
+    assert "equity_volatility" in record.eliminated
+    assert "did not converge" in record.eliminated["equity_volatility"]
+    assert "equity_volatility" not in record.selected.covariates
+    # The run went on: the next candidate was screened, and then removed by step 8 on its
+    # sign -- which is the stub's doing and, more to the point, proof that step 8 ran at all.
+    assert record.eliminated["ltv_change"].startswith("step 8:")
+    assert not record.screening.empty

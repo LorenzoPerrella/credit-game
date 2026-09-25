@@ -378,6 +378,11 @@ ELIMINATED: Final[dict[str, str]] = {
     # numbers. The first run's arguments for eliminating by hand are in
     # docs/variable_selection.md, kept as history.
     #
+    # The payment state is **not** in this dictionary, and the distinction is the point: this
+    # records what the procedure removed, and the state was never a candidate for it to
+    # remove. Why it is not one is in `procedure.CANDIDATE_CATEGORICAL` and rule 10 of
+    # docs/rules.md, with the measurement.
+    #
     # --- step 6: collinearity, in the priority fixed before any fit ---
     "corporate_bond_spread": (
         "variance inflation 11.9, above 10 -- the first candidate over the threshold. The "

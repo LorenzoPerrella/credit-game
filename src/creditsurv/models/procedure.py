@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Final, cast
 
 import numpy as np
 import pandas as pd
+from lifelines import exceptions
 
 from creditsurv.config import (
     DISTRIBUTION,
@@ -74,12 +75,40 @@ log = logging.getLogger(__name__)
 CANDIDATE_CATEGORICAL: Final[dict[str, str]] = {
     "mortgage_insurance": "uninsured",
     "buyer_type": "repeat",
-    # The payment state a month ago, which entered the key in September 2026. A candidate
-    # and not a fixture: it is the strongest thing the performance file holds, strong enough
-    # that it could crowd out the origination covariates a lifetime PD has to extrapolate
-    # on, and the selection is the place that argument gets settled rather than asserted.
-    "delinquency_state": "current",
 }
+
+#: The payment state is **not** a candidate, and the reason is a measurement rather than a
+#: preference. It entered the key in September 2026 and was a candidate until the first
+#: selection tried to fit it: SLSQP reached coefficients of 1e+80 and an objective of -4.7e275,
+#: and no damped Newton step could lower the objective from the warm start.
+#:
+#: Why it cannot be fitted is arithmetic, not optimisation. Default is three missed payments,
+#: so a loan that opens the month two payments behind is one month from the definition:
+#:
+#: =============  ===============  ==========  ==================
+#: State a month   Loan-months      Defaults    Monthly rate
+#: ago
+#: =============  ===============  ==========  ==================
+#: current         2,740,161,293       22,276   **0.0008%**
+#: one month          23,871,219       20,206   0.085%
+#: three or more       4,269,824      109,964   2.58%
+#: two months          5,337,846    1,518,761   **28.45%**
+#: =============  ===============  ==========  ==================
+#:
+#: Two months behind is 0.2% of the exposure and **91% of every default in the book**, at a
+#: rate 35,000 times the current state's. A coefficient for it is a number the likelihood
+#: pushes as far as the clipping allows, and the model that came out would answer "will this
+#: loan default next month" -- which is a behavioural score, not a lifetime PD. A lifetime PD
+#: also has to *project* its covariates over the remaining life, and there is no way to
+#: project a payment state: it is the outcome, one month early.
+#:
+#: It stays in the cell key, where it costs 1.19x and pays for itself in the views: it says
+#: where the defaults are, which is worth publishing. The model does not read it.
+DELINQUENCY_STATE_NOT_A_CANDIDATE: Final = (
+    "step 7: 91% of defaults occur at two months behind, a 28.45% monthly rate against "
+    "0.0008% for a current loan. The state is the event one month early, and a lifetime PD "
+    "cannot project it forward."
+)
 
 #: The loan block the selection starts from and protects from variance inflation, fixed
 #: here as ``config.MACRO_CANDIDATES`` fixes the macro block. ``config.STATIC_CONTINUOUS``,
@@ -445,7 +474,17 @@ def run_selection(
     ]
     alone: dict[str, float] = {}
     for name, reference in candidates:
-        result = fits.fit(base.plus(name, reference=reference), start=base_fit)
+        try:
+            result = fits.fit(base.plus(name, reference=reference), start=base_fit)
+        except exceptions.ConvergenceError as error:
+            # A candidate that cannot be fitted beside the loan block is a **finding about the
+            # candidate**, not a crash: that is what a screen is for. It cost five hours to
+            # learn that once -- the payment state diverged to coefficients of 1e+80 and took
+            # the whole run with it, seventeen fits from the end -- and the run has no business
+            # ending on the seventeenth of eighteen candidates.
+            log.warning("step 7: %s did not converge beside the loan block", name)
+            eliminated[name] = f"step 7: did not converge beside the loan block ({error!s:.120})"
+            continue
         rows = _screen(name, reference, result, base_fit, deviations, signs=signs)
         screened.extend(rows)
         if reference is None:
