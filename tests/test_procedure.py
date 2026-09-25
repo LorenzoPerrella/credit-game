@@ -14,6 +14,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -65,7 +66,7 @@ def _run(train: pd.DataFrame, *, identity: str = "fixture") -> tuple[SelectionRe
         macro=["ltv_change", "unemployment_change", "equity_volatility"],
         base_categorical={"purpose": reference},
         candidate_categorical=candidates,
-        halves=halves,
+        stability=halves,
     )
     return record, fits
 
@@ -546,3 +547,141 @@ def test_a_prepayment_selection_is_cached_under_a_name_of_its_own() -> None:
     assert "cause" not in default
     assert prepayment["cause"] == "prepayment"
     assert fit_fingerprint(**default) != fit_fingerprint(**prepayment)
+
+
+# --------------------------------------------------------------------------------------
+# The selection without the rows
+# --------------------------------------------------------------------------------------
+
+STREAMED_CANDIDATES = ["credit_score", "original_ltv", "ltv_change", "unemployment_change"]
+
+
+@pytest.fixture(scope="module")
+def selection_cells(tmp_path_factory: pytest.TempPathFactory, macro_module: pd.DataFrame) -> Path:
+    """A book filed, ingested and aggregated, as the pipeline does it."""
+    from creditsurv.data.aggregate import build_cells
+    from creditsurv.data.ingest import ingest
+    from creditsurv.data.store import save_cells
+    from fixtures import write_book_archives
+
+    root = tmp_path_factory.mktemp("selection")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("CREDITSURV_DATA_DIR", str(root))
+        write_book_archives(root / "FREDDIE MAC", macro_module, n_loans=700, seed=17)
+        ingest()
+        return save_cells(build_cells())
+
+
+def test_the_moments_are_the_same_read_whole_or_read_in_batches(
+    selection_cells: Path, macro_module: pd.DataFrame
+) -> None:
+    """Steps 5 and 6 need a weighted covariance and nothing else, and a covariance is a sum:
+    the same sum whether the rows arrive as one frame or as the batches of the cell file.
+    """
+    from creditsurv.data.panel import WEIGHT, CellBlocks, cells_to_episodes
+    from creditsurv.models.selection import weighted_moments
+
+    cells = pd.read_parquet(selection_cells)
+    whole = cells_to_episodes(cells, macro_module, covariates=STREAMED_CANDIDATES)
+    source = CellBlocks(
+        str(selection_cells), macro_module, tuple(STREAMED_CANDIDATES), rows=len(cells) // 5 + 1
+    ).prepared()
+
+    held = weighted_moments(whole, STREAMED_CANDIDATES, weight=WEIGHT)
+    streamed = weighted_moments(source(), STREAMED_CANDIDATES, weight=WEIGHT)
+
+    assert streamed.rows == held.rows
+    assert streamed.loan_months == pytest.approx(held.loan_months)
+    np.testing.assert_allclose(
+        streamed.covariance.to_numpy(), held.covariance.to_numpy(), rtol=1e-10
+    )
+
+
+def test_the_variance_inflation_step_can_be_given_the_covariance_it_needs() -> None:
+    """The selection was taking the same pass over the training half twice, once for its
+    correlation table and once inside this step.
+    """
+    from creditsurv.models.selection import stepwise_vif, weighted_covariance
+
+    rng = np.random.default_rng(6)
+    first = rng.normal(size=4_000)
+    frame = pd.DataFrame(
+        {
+            "a": first,
+            "b": first + rng.normal(scale=0.01, size=4_000),
+            "keep": rng.normal(size=4_000),
+        }
+    )
+    columns = ["keep", "a", "b"]
+
+    from_rows = stepwise_vif(frame, columns, threshold=10.0)
+    from_matrix = stepwise_vif(
+        None, columns, threshold=10.0, covariance=weighted_covariance(frame, columns)
+    )
+
+    assert from_rows[1] == from_matrix[1]
+    pd.testing.assert_frame_equal(from_rows[0], from_matrix[0])
+    with pytest.raises(ValueError, match="either the rows or a covariance"):
+        stepwise_vif(None, columns)
+
+
+def test_a_selection_streamed_from_the_cells_chooses_what_the_held_panel_chose(
+    selection_cells: Path,
+    macro_module: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refactor's whole claim. The training half used to be expanded into a frame the
+    twenty-odd fits then sat beside; here the cell file is described instead and each fit
+    reads its own share. The two must end on the same specification, with the same
+    covariates eliminated for the same reasons.
+
+    The two runs are given different identities so neither can be served the other's cached
+    fits, which is exactly what they would be in production.
+    """
+    from creditsurv.data.panel import WEIGHT, CellBlocks, cells_to_episodes
+    from creditsurv.models.selection import weighted_moments
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    cells = pd.read_parquet(selection_cells)
+    held = cells_to_episodes(cells, macro_module, covariates=STREAMED_CANDIDATES)
+    halves = (held["origination_month"].to_numpy() // 12) % 2 == 0
+    in_memory = run_selection(
+        held,
+        Fits(held, identity="held", as_of="2014-12", moratorium="exclude"),
+        static=["credit_score", "original_ltv"],
+        ordinal=[],
+        macro=["ltv_change", "unemployment_change"],
+        base_categorical={"purpose": "purchase"},
+        candidate_categorical={},
+        stability=halves,
+    )
+
+    source = CellBlocks(
+        str(selection_cells), macro_module, tuple(STREAMED_CANDIDATES), rows=4_000
+    ).prepared()
+    moments = weighted_moments(source(), STREAMED_CANDIDATES, weight=WEIGHT)
+    streamed = run_selection(
+        None,
+        Fits(None, identity="streamed", as_of="2014-12", moratorium="exclude", blocks=source),
+        static=["credit_score", "original_ltv"],
+        ordinal=[],
+        macro=["ltv_change", "unemployment_change"],
+        base_categorical={"purpose": "purchase"},
+        candidate_categorical={},
+        stability=True,
+        moments=moments,
+    )
+
+    assert streamed.selected.formula == in_memory.selected.formula
+    assert streamed.eliminated == in_memory.eliminated
+    assert streamed.rows == in_memory.rows
+    assert streamed.loan_months == pytest.approx(in_memory.loan_months)
+    # The halves are the same halves: taken while reading, or masked over rows held.
+    held_halves = in_memory.stability.set_index(["covariate", "round"])
+    streamed_halves = streamed.stability.set_index(["covariate", "round"])
+    np.testing.assert_allclose(
+        streamed_halves["effect_even"].to_numpy(),
+        held_halves["effect_even"].to_numpy(),
+        rtol=1e-4,
+    )

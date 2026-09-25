@@ -818,6 +818,10 @@ def select(
     cause: Annotated[
         str, typer.Option(help="default or prepayment: which exit is being modelled.")
     ] = DEFAULT_CAUSE,
+    workers: Annotated[
+        int, typer.Option(help="Processes each fit's likelihood is evaluated in.")
+    ] = 1,
+    block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
 ) -> None:
     """Run the variable selection on the training half, and write what it chose.
 
@@ -842,23 +846,12 @@ def select(
     """
     import logging
 
-    import numpy as np
     import pandas as pd
 
     from creditsurv.config import MACRO_CANDIDATES
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import (
-        AGE_START,
-        EVENT,
-        EXACT_OBSERVATION,
-        LOWER_BOUND,
-        UPPER_BOUND,
-        WEIGHT,
-        cells_to_episodes,
-        episode_step,
-        observation_months,
-    )
-    from creditsurv.data.store import cells_identity, load_cells
+    from creditsurv.data.panel import WEIGHT, CellBlocks
+    from creditsurv.data.store import cells_identity, cells_path
     from creditsurv.models.procedure import (
         BASE_CATEGORICAL,
         CANDIDATE_CATEGORICAL,
@@ -867,7 +860,7 @@ def select(
         Fits,
         run_selection,
     )
-    from creditsurv.models.selection import EXPECTED_SIGNS, PREPAYMENT_SIGNS
+    from creditsurv.models.selection import EXPECTED_SIGNS, PREPAYMENT_SIGNS, weighted_moments
     from creditsurv.reporting import selection
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -880,45 +873,49 @@ def select(
         *CANDIDATE_CATEGORICAL,
     ]
 
-    # The training half only, and nothing of the test half is ever built: selection runs
-    # on the months the model may see. The half is taken out and the whole table let go
-    # before the expansion, which adds fifteen macro columns and peaks at several GB more.
-    cells = load_cells(moratorium)
+    # **The training half is never an object.** It used to be expanded whole -- 91.6 million
+    # cells, fifteen macro columns, a frame of many gigabytes -- and every one of the twenty-odd
+    # fits then held its stored design beside it. Here the cell file is described instead, and
+    # each fit reads its own share of the parquet in `workers` processes: the same
+    # specification the two ways agrees to 9.4e-07 standard errors, at 4.7 GB against 15.
+    #
+    # Nothing of the test half is read either way: the window stops at the reporting date.
     cut = reporting_date.year * 12 + reporting_date.month - 1
-    step = episode_step(cells)
-    selected = cells.iloc[np.flatnonzero(observation_months(cells).to_numpy() <= cut)]
-    del cells
-    train = cells_to_episodes(
-        selected, load_macro_panel(), covariates=candidates, step=step, cause=cause
-    )
-    del selected
-    halves = (train["origination_month"].to_numpy() // 12) % 2 == 0
+    source = CellBlocks(
+        str(cells_path(moratorium)),
+        load_macro_panel(),
+        tuple(candidates),
+        rows=block_rows,
+        months=(None, cut),
+        cause=cause,
+    ).prepared()
 
-    # Only what a fit or a covariance reads. The calendar columns, the episode end and the
-    # vintage label are a quarter of the frame on ~60 million rows, and every fit in the
-    # selection holds its stored design beside it.
-    keep = {*candidates, AGE_START, LOWER_BOUND, UPPER_BOUND, EXACT_OBSERVATION, WEIGHT, EVENT}
-    for column in [name for name in train.columns if name not in keep]:
-        del train[column]
-
+    # One pass for steps 5 and 6, which need a weighted covariance of the candidates and
+    # nothing else. It also counts the rows and the exposure, so the record has them without
+    # a second pass -- the selection used to take that pass twice.
+    typer.echo(f"Reading {source.source} for the correlation of {len(candidates)} candidates...")
+    moments = weighted_moments(source(), candidates, weight=WEIGHT)
     identity = cells_identity(moratorium)
     typer.echo(
-        f"Selecting {cause} on {len(train):,} cells, {int(train[WEIGHT].sum()):,} "
-        f"loan-months, with the {dist} family."
+        f"Selecting {cause} on {moments.rows:,} cells, {int(moments.loan_months):,} "
+        f"loan-months, with the {dist} family in {workers} process(es)."
     )
 
     fits = Fits(
-        train,
+        None,
         identity=identity,
         as_of=as_of,
         moratorium=moratorium,
         distribution=dist,
         cause=cause,
+        blocks=source,
+        workers=workers,
     )
     record = run_selection(
-        train,
+        None,
         fits,
-        halves=halves,
+        stability=True,
+        moments=moments,
         signs=EXPECTED_SIGNS if cause == DEFAULT_CAUSE else PREPAYMENT_SIGNS,
     )
     written = selection.generate(record, reports_dir=reports_dir())

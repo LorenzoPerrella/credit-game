@@ -30,6 +30,7 @@ in-sample.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
@@ -46,7 +47,7 @@ from creditsurv.data.panel import EVENT, duration_view
 from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS, FitResult, Likelihood, fit_aft
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
     from lifelines.fitters import ParametricUnivariateFitter
 
@@ -552,35 +553,97 @@ def variance_inflation(
 MOMENT_BLOCK_ROWS: Final = 5_000_000
 
 
-def weighted_covariance(
-    frame: pd.DataFrame,
+@dataclass(frozen=True)
+class Moments:
+    """The sums a covariance, a correlation and a VIF are all made of.
+
+    Kept as the sums rather than the matrix so a caller that read the rows once -- at this
+    scale, an hour of parquet and macro rebuilding -- also has the row count and the exposure
+    without reading them again.
+    """
+
+    covariance: pd.DataFrame
+    rows: int
+    loan_months: float
+
+    @property
+    def deviations(self) -> pd.Series:
+        """The weighted standard deviation of each covariate."""
+        return pd.Series(np.sqrt(np.diag(self.covariance.to_numpy())), index=self.covariance.index)
+
+    @property
+    def correlation(self) -> pd.DataFrame:
+        scale = self.deviations.to_numpy()
+        return pd.DataFrame(
+            self.covariance.to_numpy() / np.outer(scale, scale),
+            index=self.covariance.index,
+            columns=self.covariance.columns,
+        )
+
+
+def weighted_moments(
+    source: pd.DataFrame | Iterable[pd.DataFrame],
     columns: Sequence[str],
     *,
     weight: str | None = None,
     rows: int = MOMENT_BLOCK_ROWS,
-) -> pd.DataFrame:
-    """Exposure-weighted covariance of ``columns``, added up a block at a time.
+) -> Moments:
+    """Exposure-weighted moments of ``columns``, added up a block at a time.
 
     A weight total, the weighted sums and the weighted cross-products are everything a
     variance inflation factor or a correlation needs, and all three are sums. The first
     version copied the covariates out whole and then again for every covariate it
     regressed: on the training half of the exact key, tens of gigabytes to produce a
     matrix a dozen entries wide.
+
+    ``source`` is a frame, or **any iterable of frames** -- which is how the selection now
+    reads it: the batches of the cell file, expanded one at a time, so the training half
+    never exists as an object. The sums are the same either way, which is what makes the
+    two paths interchangeable and testable against each other.
     """
     names = list(columns)
     total = 0.0
+    counted = 0
     first = np.zeros(len(names))
     second = np.zeros((len(names), len(names)))
-    for start in range(0, len(frame), rows):
-        block = frame.iloc[start : start + rows]
+    blocks = _blocks(source, rows)
+    for block in blocks:
         values = block.loc[:, names].to_numpy(dtype=float)
         weights = block[weight].to_numpy(dtype=float) if weight else np.ones(len(block))
         total += float(weights.sum())
+        counted += len(block)
         first += weights @ values
         second += values.T @ (values * weights[:, None])
+    if total <= 0:
+        message = "No exposure to take moments over."
+        raise ValueError(message)
     mean = first / total
     covariance = second / total - np.outer(mean, mean)
-    return pd.DataFrame(covariance, index=names, columns=names)
+    return Moments(
+        covariance=pd.DataFrame(covariance, index=names, columns=names),
+        rows=counted,
+        loan_months=total,
+    )
+
+
+def _blocks(source: pd.DataFrame | Iterable[pd.DataFrame], rows: int) -> Iterator[pd.DataFrame]:
+    """Either a frame cut into blocks, or the frames the caller is already producing."""
+    if isinstance(source, pd.DataFrame):
+        for start in range(0, len(source), rows):
+            yield source.iloc[start : start + rows]
+        return
+    yield from source
+
+
+def weighted_covariance(
+    frame: pd.DataFrame | Iterable[pd.DataFrame],
+    columns: Sequence[str],
+    *,
+    weight: str | None = None,
+    rows: int = MOMENT_BLOCK_ROWS,
+) -> pd.DataFrame:
+    """The covariance alone, for callers with no use for the counts beside it."""
+    return weighted_moments(frame, columns, weight=weight, rows=rows).covariance
 
 
 def inflation_from_covariance(covariance: pd.DataFrame) -> pd.DataFrame:
@@ -617,16 +680,20 @@ def _inflation(covariance: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame
 
 
 def stepwise_vif(
-    frame: pd.DataFrame,
+    frame: pd.DataFrame | None,
     columns: Sequence[str],
     *,
     weight: str | None = None,
     threshold: float = VIF_THRESHOLD,
     priority: Sequence[str] = (),
+    covariance: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Drop the most inflated covariate, recompute, repeat.
 
     Returns the elimination log and the surviving covariates.
+
+    ``covariance`` is the matrix of the candidates when the caller has already computed it;
+    ``frame`` may then be ``None``, and nothing here reads a row.
 
     ``priority`` names covariates to protect, most protected last — the convention
     `nmds` uses, and the reason it matters: when two covariates are collinear the
@@ -637,9 +704,15 @@ def stepwise_vif(
     protected = {name: rank for rank, name in enumerate(priority)}
     surviving = list(columns)
     log: list[dict[str, object]] = []
-    # Once: every later step's covariance is a submatrix of this one, so no step reads
-    # the rows again.
-    covariance = weighted_covariance(frame, columns, weight=weight)
+    # Once: every later step's covariance is a submatrix of this one, so no step reads the
+    # rows again -- and ``covariance`` lets a caller that has already taken the moments skip
+    # the pass altogether. The selection had been paying for two identical passes over the
+    # training half, one for its correlation table and one here.
+    if covariance is None:
+        if frame is None:
+            message = "stepwise_vif needs either the rows or a covariance matrix."
+            raise ValueError(message)
+        covariance = weighted_covariance(frame, columns, weight=weight)
 
     while len(surviving) > 1:
         inflation = _inflation(covariance, surviving)
