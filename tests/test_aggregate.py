@@ -917,3 +917,33 @@ def _GIVE_UP_ORDER() -> tuple[object, ...]:
     from creditsurv.data.aggregate import GIVE_UP_ORDER
 
     return GIVE_UP_ORDER
+
+
+def test_a_window_of_the_cells_is_read_without_the_rest_of_the_table(tmp_path: Path) -> None:
+    """A backtest window is two years of observation, about 3% of the table, and the whole
+    table is a few gigabytes as a frame. The filter is on the observation month, which is
+    origination plus age and so not a column parquet can be asked about by name.
+    """
+    from creditsurv.data.store import load_cells_window, save_cells
+
+    origination = [origination_row(f"F{i:09d}") for i in range(4)]
+    performance = [
+        performance_row(f"F{i:09d}", f"2015{month:02d}", str(month - 3))
+        for i in range(4)
+        for month in (3, 4, 5, 6)
+    ]
+    _ingested(tmp_path, origination, performance)
+    cells = build_cells(*_sources(tmp_path))
+    save_cells(cells, "exclude")
+
+    april = 2015 * 12 + 4 - 1
+    window = load_cells_window("exclude", first=april, last=april + 1)
+    whole = load_cells_window("exclude")
+
+    observed = window["origination_month"] + window["age"]
+    assert set(observed) == {april, april + 1}
+    assert len(whole) == len(cells)
+    assert int(window["loan_months"].sum()) < int(whole["loan_months"].sum())
+    # Open at either end, as a development window is.
+    assert len(load_cells_window("exclude", last=april)) < len(whole)
+    assert len(load_cells_window("exclude", first=april)) < len(whole)

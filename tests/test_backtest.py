@@ -762,3 +762,51 @@ def test_prepayment_calibration_by_decile_reads_the_same_table_as_default_does()
 
     assert len(table) == 10
     np.testing.assert_allclose(table["ratio"].to_numpy(), 1.1, rtol=1e-9)
+
+
+def test_the_windows_command_cuts_anchors_and_grades_end_to_end(
+    tmp_path: Path, macro_module: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole of rule 1, 4, 5 and 7 on a book small enough for the suite.
+
+    The command's own numbers belong to the population, not to seven hundred loans; what
+    this holds is that every stage runs and that the report says which windows it used --
+    the failure mode of a command like this is dying at minute twenty of a four-hour run.
+    """
+    from typer.testing import CliRunner
+
+    from creditsurv.cli import app
+    from creditsurv.data.aggregate import build_cells
+    from creditsurv.data.ingest import ingest
+    from creditsurv.data.store import save_cells
+    from fixtures import write_book_archives
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CREDITSURV_REPORTS_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(
+        "creditsurv.data.fred.load_macro_panel", lambda *_args, **_kwargs: macro_module
+    )
+    write_book_archives(tmp_path / "FREDDIE MAC", macro_module, n_loans=700, seed=45)
+    ingest()
+    save_cells(build_cells())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "windows",
+            "--cuts",
+            "2012-06",
+            "--as-of",
+            "2013-06",
+            "--anchor-window",
+            "2013-07,2014-06",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    body = (tmp_path / "reports" / "windows.md").read_text()
+    assert "2012-06" in body, "the report states the cut it used"
+    assert "2013-07 to 2014-06" in body, "and the window the level was anchored on"
+    assert "multiplier" in body
+    assert "Twelve-month PD by grade" in body
+    assert "The cycle, in sample" in body

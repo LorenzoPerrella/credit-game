@@ -580,6 +580,234 @@ def backtest(
 
 
 @app.command()
+def windows(
+    moratorium: MoratoriumOption = "exclude",
+    workers: Annotated[int, typer.Option(help="Processes each window's fit is evaluated in.")] = 1,
+    block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
+    cuts: Annotated[
+        str,
+        typer.Option(help="Reporting dates to cut at, comma-separated. The rule's, by default."),
+    ] = "",
+    as_of: Annotated[
+        str, typer.Option(help="End of the development window the level is anchored for.")
+    ] = DEFAULT_AS_OF,
+    anchor_window: Annotated[
+        str, typer.Option(help="First and last month the level is anchored on, comma-separated.")
+    ] = "",
+) -> None:
+    """Backtest the model at three cuts, anchor its level on 2022-24, and grade it.
+
+    Every threshold is declared in ``docs/rules.md`` before this runs, and those are the
+    defaults of every option here: the cuts at the end of 2018, 2020 and 2022 with 24 months
+    after each, the anchoring window of 2022-01 to 2024-12, the master scale of eight grades
+    and the criteria. The options exist so the command can be exercised on a fixture book,
+    and the report states the windows it actually used.
+
+    One fit per cut, streamed from the cell file and warm-started from the cut before, each
+    estimated on everything up to its own cut so that no window is scored by a model that saw
+    it. Nothing large is ever held: a window is read out of the parquet by its observation
+    months, which is about 3% of the table, and the in-sample cycle is taken a calendar year
+    at a time for the same reason.
+    """
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.backtest.metrics import grade_backtest
+    from creditsurv.backtest.runner import ACCEPTANCE, backtest_windows, predicted_hazard, score
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.panel import WEIGHT, CellBlocks, cells_to_episodes, ended_in
+    from creditsurv.data.store import cells_path, fit_fingerprint, load_cells_window, save_fit
+    from creditsurv.models.aft import fit_streamed
+    from creditsurv.models.anchoring import ANCHOR_WINDOW, anchor_on_window
+    from creditsurv.reporting import windows as windows_report
+    from creditsurv.views.competing import cycle_in_band
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    covariates, formula = default_covariates(), default_formula()
+    macro = load_macro_panel()
+    development_cut = pd.Period(as_of, freq="M")
+    first, last = ANCHOR_WINDOW if not anchor_window else anchor_window.split(",", 1)
+    declared = backtest_windows() if not cuts else backtest_windows(cuts.split(","))
+
+    def ordinal(period: pd.Period) -> int:
+        return int(period.year) * 12 + int(period.month) - 1
+
+    def fitted_to(cut: pd.Period, start: FitResult | None) -> FitResult:
+        """The model estimated on everything up to ``cut``, read from the cell file."""
+        source = CellBlocks(
+            str(cells_path(moratorium)),
+            macro,
+            tuple(covariates),
+            rows=block_rows,
+            months=(None, ordinal(cut)),
+        ).prepared()
+        result = fit_streamed(
+            source,
+            covariates,
+            formula,
+            distribution=DISTRIBUTION,
+            weights_col=WEIGHT,
+            initial_point=None if start is None else start.fitter.params_,
+            workers=workers,
+        )
+        record = result.blocks
+        assert record is not None
+        described = _fit_description(
+            (result.n_episodes, int(record.loan_months)),
+            formula,
+            as_of=str(cut),
+            moratorium=moratorium,
+            distribution=DISTRIBUTION,
+        )
+        save_fit(result, fit_fingerprint(**described), described)
+        return result
+
+    def episodes(opens: int | None, closes: int | None) -> pd.DataFrame | None:
+        """The episodes of one window, and nothing else from the table.
+
+        ``None`` where the window holds no cells, which for the in-sample cycle is every
+        calendar year before the book opens, and for a scoring window is a mistake that
+        deserves a message rather than a traceback.
+        """
+        cells = load_cells_window(moratorium, first=opens, last=closes)
+        if cells.empty:
+            return None
+        return cells_to_episodes(cells, macro, covariates=covariates)
+
+    def scored(opens: int | None, closes: int | None, what: str) -> pd.DataFrame:
+        """The same, where an empty window is an error: nothing to score is not a result."""
+        frame = episodes(opens, closes)
+        if frame is None:
+            message = f"No exposure in {what}; there is nothing to score there."
+            raise typer.BadParameter(message)
+        return frame
+
+    # 1. The three cuts, each judged on the months after it.
+    rows: list[dict[str, object]] = []
+    criteria: list[pd.DataFrame] = []
+    previous: FitResult | None = None
+    for cut, until in declared:
+        typer.echo(f"\nWindow {cut} to {until}: fitting on everything up to the cut...")
+        model = fitted_to(cut, previous)
+        previous = model
+        window = scored(ordinal(cut) + 1, ordinal(until), f"{cut} to {until}")
+        result = score(model, window, covariates, as_of=cut)
+        summary = result.summary()
+        rows.append(
+            {
+                "cut": str(cut),
+                "until": str(until),
+                "loan_months": summary["loan_months"],
+                "actual_defaults": summary["actual_defaults"],
+                "expected_defaults": summary["expected_defaults"],
+                "actual_over_expected": summary["actual_over_expected"],
+                "gini": summary["gini"],
+                "minutes": round(model.elapsed_seconds / 60, 1),
+            }
+        )
+        criteria.append(ACCEPTANCE.assess(result).assign(window=f"{cut} to {until}"))
+        typer.echo(
+            f"  actual over expected {result.actual_over_expected:.4f}, Gini {result.gini:.4f}"
+        )
+        del window
+
+    # 2. The development model, which the anchoring and the grades are of.
+    typer.echo(f"\nThe development model, on everything up to {development_cut}...")
+    development = fitted_to(development_cut, previous)
+
+    # 3. The level, on the anchoring window alone. Not the development window, whose months
+    #    the coefficients have already seen, and not the test window, which would be marking
+    #    its own homework.
+    anchoring = scored(
+        ordinal(pd.Period(first, freq="M")),
+        ordinal(pd.Period(last, freq="M")),
+        f"the anchoring window {first} to {last}",
+    )
+    anchor = anchor_on_window(
+        predicted_hazard(development, anchoring, covariates),
+        ended_in(anchoring),
+        anchoring[WEIGHT],
+        anchoring["period"],
+        window=(first, last),
+    )
+    typer.echo(f"  multiplier {anchor.multiplier:.4f} on {anchor.window[0]} to {anchor.window[1]}")
+    del anchoring
+
+    # 4. The test window, scored twice: the same ranking at two levels.
+    test = scored(ordinal(pd.Period(last, freq="M")) + 1, None, f"the months after {last}")
+    unanchored = score(development, test, covariates, as_of=development_cut)
+    exposure = test[WEIGHT].astype(float)
+    events = exposure * ended_in(test)
+    scaled = anchor.apply(predicted_hazard(development, test, covariates))
+    expected = float((scaled * exposure).sum())
+    level = pd.DataFrame(
+        [
+            {
+                "model": "unanchored",
+                "loan_months": unanchored.loan_months,
+                "expected_defaults": round(unanchored.expected_defaults, 1),
+                "actual_defaults": round(unanchored.actual_defaults, 1),
+                "actual_over_expected": round(unanchored.actual_over_expected, 4),
+                "gini": round(unanchored.gini, 4),
+            },
+            {
+                "model": "anchored",
+                "loan_months": int(exposure.sum()),
+                "expected_defaults": round(expected, 1),
+                "actual_defaults": round(float(events.sum()), 1),
+                "actual_over_expected": round(float(events.sum()) / expected, 4),
+                "gini": round(unanchored.gini, 4),
+            },
+        ]
+    )
+    grades = grade_backtest(pd.Series(scaled), pd.Series(events.to_numpy()), exposure)
+    criteria.append(ACCEPTANCE.assess(unanchored).assign(window=f"after {last}"))
+    del test
+
+    # 5. The cycle, in sample, a calendar year at a time -- the dispersion a single
+    #    out-of-time ratio hides, and the reason it cannot be read alone.
+    typer.echo("\nThe cycle, year by year in sample...")
+    years: list[dict[str, object]] = []
+    for year in range(int(macro.index.min().year), development_cut.year + 1):
+        opens = ordinal(pd.Period(f"{year}-01", freq="M"))
+        closes = min(ordinal(pd.Period(f"{year}-12", freq="M")), ordinal(development_cut))
+        rows_of_year = episodes(opens, closes)
+        if rows_of_year is None:
+            continue
+        weight = rows_of_year[WEIGHT].astype(float)
+        actual = float((weight * ended_in(rows_of_year)).sum())
+        predicted = float((predicted_hazard(development, rows_of_year, covariates) * weight).sum())
+        years.append(
+            {
+                "year": year,
+                "loan_months": int(weight.sum()),
+                "actual_defaults": round(actual, 1),
+                "expected_defaults": round(predicted, 1),
+                "actual_over_expected": actual / predicted if predicted > 0 else float("nan"),
+            }
+        )
+        del rows_of_year
+    by_year = pd.DataFrame(years)
+    cycle = cycle_in_band(by_year)
+
+    written = windows_report.generate(
+        pd.DataFrame(rows),
+        cycle=pd.concat(
+            [cycle, by_year.assign(year=by_year["year"].astype(str))], ignore_index=True
+        ),
+        anchor=anchor,
+        level=level,
+        grades=grades,
+        acceptance=criteria,
+        reports_dir=reports_dir(),
+    )
+    _echo_table(pd.DataFrame(rows))
+    _echo_table(cycle)
+    typer.echo(f"Written: {written}")
+
+
+@app.command()
 def report(
     horizon: Annotated[int, typer.Option(help="Months for the PD term structure.")] = 60,
     as_of: Annotated[str, typer.Option(help="Reporting date for the backtest.")] = DEFAULT_AS_OF,

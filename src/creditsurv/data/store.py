@@ -86,6 +86,49 @@ def load_cells(
     return cells
 
 
+def load_cells_window(
+    policy: str = DEFAULT_POLICY,
+    *,
+    first: int | None = None,
+    last: int | None = None,
+) -> pd.DataFrame:
+    """The cells observed between two month ordinals, read without the rest of the table.
+
+    ``first`` and ``last`` are ``year * 12 + month - 1``, inclusive, on the **observation**
+    month -- which is ``origination_month + age`` and therefore not a column, so the filter
+    cannot be pushed into parquet by name. DuckDB evaluates it while reading instead, and
+    what comes back is the window alone.
+
+    That is the difference between a backtest window and the book: 91.6 million cells are a
+    few gigabytes as a frame, and two years of observation are about 3% of them. The whole
+    table is read only where the whole table is the question.
+    """
+    import duckdb
+
+    path = cells_path(policy)
+    if not path.exists():
+        message = (
+            f"No aggregated cells at {path}. Build them first:\n"
+            "  uv run creditsurv ingest\n"
+            f"  uv run creditsurv aggregate --moratorium {policy}"
+        )
+        raise FileNotFoundError(message)
+
+    bounds = []
+    if first is not None:
+        bounds.append(f"origination_month + age >= {int(first)}")
+    if last is not None:
+        bounds.append(f"origination_month + age <= {int(last)}")
+    where = f"WHERE {' AND '.join(bounds)}" if bounds else ""
+    cells: pd.DataFrame = (
+        duckdb.connect().execute(f"SELECT * FROM read_parquet('{path}') {where}").df()
+    )
+    for column in cells.columns:
+        if cells[column].dtype == object:
+            cells[column] = cells[column].astype("category")
+    return cells
+
+
 def cells_identity(policy: str = DEFAULT_POLICY) -> str:
     """The cell table's name, size and time of writing.
 
