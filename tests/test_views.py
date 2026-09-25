@@ -546,3 +546,89 @@ def test_the_decile_boundaries_divide_the_book_into_equal_exposure(
     assert (np.diff(boundaries) > 0).all(), "the boundaries are increasing"
     # Within a percentage point of a tenth each, on a book of seven hundred loans.
     np.testing.assert_allclose(shares, 0.1, atol=0.01)
+
+
+def test_the_in_sample_views_are_the_same_accumulated_as_computed_whole(
+    streamed_cells: Path, macro_module: pd.DataFrame
+) -> None:
+    """The published tables, name for name and column for column, from one pass over the cell
+    file instead of from the expanded training half.
+
+    Segment by segment, because that is where the saving is: `calibration_views` opens every
+    table by every segment, and each of those was a pass over the panel it held.
+    """
+    from creditsurv.data.panel import CellBlocks, cells_to_episodes
+    from creditsurv.models.aft import fit_aft
+    from creditsurv.views.model import calibration_views, in_sample_recipes, in_sample_views
+    from creditsurv.views.streamed import accumulate, decile_boundaries
+
+    covariates = ["credit_score", "original_ltv"]
+    cells = pd.read_parquet(streamed_cells)
+    held = cells_to_episodes(cells, macro_module, covariates=covariates)
+    fitted = fit_aft(held, covariates, " + ".join(covariates), weights_col=WEIGHT)
+    source = CellBlocks(
+        str(streamed_cells),
+        macro_module,
+        tuple(covariates),
+        rows=len(cells) // 5 + 1,
+        model_only=False,
+    ).prepared()
+
+    hazard = predicted_hazard(fitted, held, covariates).to_numpy()
+    split = Split(as_of=pd.PeriodIndex(held["period"]).max(), train=held, test=held.iloc[:0])
+    whole = {
+        view.name: view.frame
+        for view in calibration_views(split, train_hazard=hazard, test_hazard=hazard[:0])
+        if view.name.startswith(("km_vs_model", "ae_by_"))
+    }
+
+    boundaries = decile_boundaries(source(), fitted, covariates)
+    accumulated = accumulate(
+        source(),
+        {"weibull": (fitted, covariates)},
+        in_sample_recipes(primary="weibull", boundaries=boundaries),
+    )
+    streamed = {view.name: view.frame for view in in_sample_views(accumulated, as_of="2014-12")}
+
+    assert set(streamed) == set(whole)
+    for name, table in streamed.items():
+        reference = whole[name]
+        assert list(table.columns) == list(reference.columns), name
+        keys = [column for column in ("segment", "group") if column in table.columns]
+        keys += [
+            column
+            for column in ("age", "year", "vintage_year", "age_band", "decile")
+            if column in table.columns
+        ]
+        merged = reference.merge(table, on=keys, suffixes=("_whole", "_streamed"))
+        assert len(merged) == len(reference), name
+
+        # The decile table is the one that cannot agree row by row, and the reason is stated
+        # where it is built: a decile needs the whole distribution, so its boundaries come off
+        # a weighted histogram, which lands within a bin of the true quantile and **cannot
+        # split a tie**. Cells sharing a key share a hazard, so a boundary inside such a
+        # cluster puts all of it on one side. What must still hold exactly is that the deciles
+        # partition the same rows -- every loan-month and every default is in one of them.
+        if name == "ae_by_decile":
+            for segment, rows in table.groupby("segment", observed=True):
+                assert set(rows["decile"]) <= set(range(1, 11)), segment
+            for column in ("exposure", "events", "expected"):
+                by_segment = table.groupby("segment", observed=True)[column].sum()
+                expected_by_segment = reference.groupby("segment", observed=True)[column].sum()
+                np.testing.assert_allclose(
+                    by_segment.to_numpy(),
+                    expected_by_segment.reindex(by_segment.index).to_numpy(),
+                    rtol=1e-9,
+                    err_msg=f"{name}.{column} over the deciles",
+                )
+            continue
+
+        for column in ("exposure", "events", "expected", "at_risk", "defaults", "km_survival"):
+            if f"{column}_whole" not in merged.columns:
+                continue
+            np.testing.assert_allclose(
+                merged[f"{column}_streamed"].to_numpy(),
+                merged[f"{column}_whole"].to_numpy(),
+                rtol=1e-9,
+                err_msg=f"{name}.{column}",
+            )

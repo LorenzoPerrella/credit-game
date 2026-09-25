@@ -20,7 +20,7 @@ import pandas as pd
 
 from creditsurv.backtest.metrics import exposure_buckets, weighted_gini
 from creditsurv.backtest.runner import ACCEPTANCE
-from creditsurv.data.panel import EVENT, LOAN_ID, WEIGHT
+from creditsurv.data.panel import DEFAULT_CAUSE, EVENT, LOAN_ID, WEIGHT
 from creditsurv.models.aft import coefficient_table
 from creditsurv.models.lifetime_pd import (
     conditional_pd,
@@ -29,8 +29,17 @@ from creditsurv.models.lifetime_pd import (
     scenario_lifetime_pd,
     survival_along_path,
 )
-from creditsurv.views.calibration import WHOLE_BOOK, actual_expected, survival_by_age
+from creditsurv.views.calibration import (
+    WHOLE_BOOK,
+    actual_expected,
+    curves_from,
+    exposure_totals,
+    rates_from,
+    risk_sets,
+    survival_by_age,
+)
 from creditsurv.views.segments import age_bands, available, calendar_years
+from creditsurv.views.streamed import Recipe, deciles_of
 from creditsurv.views.tables import View
 
 if TYPE_CHECKING:
@@ -384,3 +393,184 @@ def projection_views(
             source="fit",
         ),
     ]
+
+
+# --------------------------------------------------------------------------------------
+# The same in-sample tables, accumulated over the cell file
+# --------------------------------------------------------------------------------------
+
+
+def _segments_of(frame: pd.DataFrame) -> list[tuple[str, pd.Series | None]]:
+    """Every segment the frame can be opened by, the whole book first."""
+    return [(ALL, None), *((segment.name, segment.label(frame)) for segment in available(frame))]
+
+
+def _risk_sets_by_segment(
+    frame: pd.DataFrame, hazard: np.ndarray, *, cause: str = DEFAULT_CAUSE
+) -> pd.DataFrame:
+    """The three sums of a survival curve, for every segment of one batch."""
+    pieces = []
+    for name, groups in _segments_of(frame):
+        sums = risk_sets(frame, hazard, groups=groups, cause=cause)
+        pieces.append(sums.assign(segment=name))
+    return pd.concat(pieces, ignore_index=True)
+
+
+def _totals_by_segment(
+    frame: pd.DataFrame,
+    hazard: np.ndarray,
+    name: str,
+    dimension: pd.Series | pd.Categorical | np.ndarray,
+) -> pd.DataFrame:
+    """Exposure, defaults and expected defaults by one dimension, for every segment."""
+    pieces = []
+    for segment, groups in _segments_of(frame):
+        if groups is None:
+            totals = exposure_totals(frame, hazard, {name: dimension}).assign(group=WHOLE_BOOK)
+        else:
+            totals = exposure_totals(frame, hazard, {"group": groups, name: dimension})
+        pieces.append(totals.assign(segment=segment))
+    return pd.concat(pieces, ignore_index=True)
+
+
+def _leading(table: pd.DataFrame) -> pd.DataFrame:
+    """``segment`` and ``group`` first, as every published view has them."""
+    leading = [name for name in ("segment", "group") if name in table.columns]
+    return table[[*leading, *(name for name in table.columns if name not in leading)]]
+
+
+def _curves_by_segment(sums: pd.DataFrame) -> pd.DataFrame:
+    pieces = [
+        curves_from(rows.drop(columns="segment")).assign(segment=segment)
+        for segment, rows in sums.groupby("segment", observed=True, sort=False)
+    ]
+    return _leading(pd.concat(pieces, ignore_index=True))
+
+
+def in_sample_recipes(
+    *,
+    primary: str,
+    families: Sequence[str] = (),
+    boundaries: np.ndarray | None = None,
+) -> list[Recipe]:
+    """What one pass over the training half has to accumulate.
+
+    ``primary`` names the published model among ``models``; ``families`` the others, which the
+    site sets beside it. ``boundaries`` are the decile cut points taken in the pass before
+    this one -- without them the decile table is skipped, since a decile cannot be assigned
+    from a batch.
+    """
+
+    def by(name: str, dimension: Callable[[pd.DataFrame], pd.Series | np.ndarray]) -> Recipe:
+        return Recipe(
+            name=f"ae_by_{name}",
+            keys=("segment", "group", _DIMENSION[name]),
+            build=lambda frame, hazards: _totals_by_segment(
+                frame, hazards[primary], _DIMENSION[name], dimension(frame)
+            ),
+            finish=lambda table: _leading(rates_from(table)),
+        )
+
+    recipes = [
+        Recipe(
+            name="km_vs_model",
+            keys=("segment", "group", "age"),
+            build=lambda frame, hazards: _risk_sets_by_segment(frame, hazards[primary]),
+            finish=_curves_by_segment,
+        ),
+        by("year", lambda frame: calendar_years(frame)),
+        by("vintage", _vintage_years),
+        by("age_band", lambda frame: age_bands(frame)),
+    ]
+    if boundaries is not None:
+        recipes.append(
+            Recipe(
+                name="ae_by_decile",
+                keys=("segment", "group", "decile"),
+                build=lambda frame, hazards: _totals_by_segment(
+                    frame,
+                    hazards[primary],
+                    "decile",
+                    deciles_of(hazards[primary], boundaries) + 1,
+                ),
+                finish=lambda table: _leading(rates_from(table)),
+            )
+        )
+    for family in families:
+        recipes.append(_family_recipe(family))
+    return recipes
+
+
+def _family_recipe(family: str) -> Recipe:
+    """One family's survival curves. A function rather than a lambda in the loop, so the
+    family it closes over is the one it was made for."""
+    return Recipe(
+        name=f"family_{family}",
+        keys=("segment", "group", "age"),
+        build=lambda frame, hazards: _risk_sets_by_segment(frame, hazards[family]),
+        finish=_curves_by_segment,
+    )
+
+
+#: The column each dimension is published under, which the site's figures read by name.
+_DIMENSION: Final[dict[str, str]] = {
+    "year": "year",
+    "vintage": "vintage_year",
+    "age_band": "age_band",
+    "decile": "decile",
+}
+
+
+def in_sample_views(accumulated: Mapping[str, pd.DataFrame], *, as_of: str) -> list[View]:
+    """The accumulated tables as the views the site publishes, names and columns unchanged."""
+    in_sample = "On the training half, the data the model was fitted to."
+    described = {
+        "km_vs_model": (
+            "Kaplan-Meier against the model, by segment",
+            "Survival by loan age, observed and predicted along each loan's realised "
+            f"covariate path, with the Greenwood band. {in_sample}",
+        ),
+        "ae_by_year": (
+            "Actual against expected by calendar year",
+            f"Defaults against the model's expectation, year of observation by segment. "
+            f"{in_sample}",
+        ),
+        "ae_by_vintage": (
+            "Actual against expected by vintage year",
+            f"Defaults against expectation by year of origination. {in_sample}",
+        ),
+        "ae_by_age_band": (
+            "Actual against expected by loan age",
+            f"Defaults against expectation by seasoning band. {in_sample}",
+        ),
+        "ae_by_decile": (
+            "Actual against expected by decile of predicted risk",
+            f"Deciles of the whole training half's exposure, cut on the hazards of every "
+            f"loan-month up to {as_of}. {in_sample}",
+        ),
+    }
+    views = [
+        View(name, title, description, accumulated[name], source="fit")
+        for name, (title, description) in described.items()
+        if name in accumulated
+    ]
+    families = {
+        name.removeprefix("family_"): table
+        for name, table in accumulated.items()
+        if name.startswith("family_")
+    }
+    if families:
+        views.append(
+            View(
+                "families_vs_km",
+                "Distribution families against Kaplan-Meier",
+                "Each family's own selected model, chained along the realised covariate "
+                f"paths. {in_sample}",
+                pd.concat(
+                    [table.assign(distribution=name) for name, table in families.items()],
+                    ignore_index=True,
+                ),
+                source="fit",
+            )
+        )
+    return views

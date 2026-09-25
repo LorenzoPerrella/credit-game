@@ -12,11 +12,18 @@ the views, which were the last thing holding it.
 
 One quantity is not a sum: a decile of predicted risk needs the whole distribution before any
 row can be assigned. It is taken in two passes -- a weighted histogram of the log hazard, then
-the boundaries it implies -- which is exact to the width of a bin and costs one more read.
+the boundaries it implies -- which costs one more read and is exact to the width of a bin.
+
+Two consequences worth knowing. The boundary lands within a bin of the true quantile, and a
+histogram **cannot split a tie**: cells sharing a key share a hazard, so a boundary falling
+inside such a cluster puts all of it on one side. The deciles therefore hold a tenth of the
+exposure each to a fraction of a percent on the production table, rather than exactly, and
+the difference is in the membership of the boundary cluster and nowhere else.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -39,6 +46,50 @@ HISTOGRAM_BINS: int = 10_000
 
 def _hazard(fitted: FitResult, frame: pd.DataFrame, covariates: Sequence[str]) -> np.ndarray:
     return predicted_hazard(fitted, frame, covariates).to_numpy(dtype=float)
+
+
+@dataclass(frozen=True)
+class Recipe:
+    """One additive table to accumulate, and the keys it is grouped by.
+
+    ``build`` takes a batch of episodes and its hazards and returns a table whose every
+    column is a sum. ``finish`` turns the accumulated sums into the table a view publishes --
+    the curves, the rates -- and runs once, at the end, on a few hundred rows.
+    """
+
+    name: str
+    keys: tuple[str, ...]
+    build: Callable[[pd.DataFrame, Mapping[str, np.ndarray]], pd.DataFrame]
+    finish: Callable[[pd.DataFrame], pd.DataFrame] = lambda table: table
+
+
+def accumulate(
+    blocks: Iterable[pd.DataFrame],
+    models: Mapping[str, tuple[FitResult, Sequence[str]]],
+    recipes: Sequence[Recipe],
+) -> dict[str, pd.DataFrame]:
+    """Every table in one pass over the cell file.
+
+    A pass is the expensive thing here -- reading the parquet, rebuilding the macro family and
+    scoring -- and there are a dozen tables, most of them the same three sums cut a different
+    way. One pass scores each batch once per model and adds that batch's contribution to every
+    table, which is the difference between one read of the training half and a dozen.
+
+    ``models`` maps a name to a fit and the covariates it reads, so the comparison of
+    distribution families costs no extra read either: both hazards of a batch are computed
+    while the batch is in hand.
+    """
+    pieces: dict[str, list[pd.DataFrame]] = {recipe.name: [] for recipe in recipes}
+    for frame in blocks:
+        hazards = {
+            name: _hazard(fitted, frame, covariates)
+            for name, (fitted, covariates) in models.items()
+        }
+        for recipe in recipes:
+            pieces[recipe.name].append(recipe.build(frame, hazards))
+    return {
+        recipe.name: recipe.finish(_summed(pieces[recipe.name], recipe.keys)) for recipe in recipes
+    }
 
 
 def risk_sets_over(
