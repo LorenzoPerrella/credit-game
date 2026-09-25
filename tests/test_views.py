@@ -419,3 +419,130 @@ def test_the_grade_view_names_what_the_scale_did() -> None:
     assert {"grade", "predicted_pd", "actual_pd", "lower", "upper", "passed"} <= set(
         view.frame.columns
     )
+
+
+# --------------------------------------------------------------------------------------
+# The same tables, accumulated over the cell file
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def streamed_cells(tmp_path_factory: pytest.TempPathFactory, macro_module: pd.DataFrame) -> Path:
+    from creditsurv.data.aggregate import build_cells
+    from creditsurv.data.ingest import ingest
+    from creditsurv.data.store import save_cells
+    from fixtures import write_book_archives
+
+    root = tmp_path_factory.mktemp("views_streamed")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("CREDITSURV_DATA_DIR", str(root))
+        write_book_archives(root / "FREDDIE MAC", macro_module, n_loans=700, seed=51)
+        ingest()
+        return save_cells(build_cells())
+
+
+def test_the_curves_are_the_same_accumulated_as_computed_whole(
+    streamed_cells: Path, macro_module: pd.DataFrame
+) -> None:
+    """Every column of a survival table is a function of three sums, and sums add over
+    batches. This is the claim that lets the views come off the expanded panel.
+    """
+    from creditsurv.data.panel import CellBlocks, cells_to_episodes
+    from creditsurv.models.aft import fit_aft
+    from creditsurv.views.calibration import survival_by_age
+    from creditsurv.views.streamed import risk_sets_over
+
+    covariates = ["credit_score", "original_ltv"]
+    formula = " + ".join(covariates)
+    cells = pd.read_parquet(streamed_cells)
+    held = cells_to_episodes(cells, macro_module, covariates=covariates)
+    fitted = fit_aft(held, covariates, formula, weights_col=WEIGHT)
+
+    whole = survival_by_age(held, predicted_hazard(fitted, held, covariates).to_numpy())
+    source = CellBlocks(
+        str(streamed_cells),
+        macro_module,
+        tuple(covariates),
+        rows=len(cells) // 6 + 1,
+        model_only=False,
+    ).prepared()
+    accumulated = risk_sets_over(source(), fitted, covariates)
+
+    assert list(accumulated.columns) == list(whole.columns)
+    assert len(accumulated) == len(whole)
+    for column in ("at_risk", "defaults", "km_survival", "predicted_survival", "km_lower"):
+        np.testing.assert_allclose(
+            accumulated[column].to_numpy(), whole[column].to_numpy(), rtol=1e-10
+        )
+
+
+def test_actual_against_expected_is_the_same_accumulated_as_computed_whole(
+    streamed_cells: Path, macro_module: pd.DataFrame
+) -> None:
+    from creditsurv.data.panel import CellBlocks, cells_to_episodes
+    from creditsurv.models.aft import fit_aft
+    from creditsurv.views.calibration import actual_expected
+    from creditsurv.views.segments import calendar_years
+    from creditsurv.views.streamed import totals_over
+
+    covariates = ["credit_score", "original_ltv"]
+    cells = pd.read_parquet(streamed_cells)
+    held = cells_to_episodes(cells, macro_module, covariates=covariates)
+    fitted = fit_aft(held, covariates, " + ".join(covariates), weights_col=WEIGHT)
+
+    whole = actual_expected(
+        held,
+        predicted_hazard(fitted, held, covariates).to_numpy(),
+        {"year": calendar_years(held)},
+    )
+    source = CellBlocks(
+        str(streamed_cells),
+        macro_module,
+        tuple(covariates),
+        rows=len(cells) // 6 + 1,
+        model_only=False,
+    ).prepared()
+    accumulated = totals_over(
+        source(), fitted, covariates, lambda frame: {"year": calendar_years(frame)}
+    )
+
+    merged = whole.merge(accumulated, on="year", suffixes=("_whole", "_streamed"))
+    assert len(merged) == len(whole)
+    for column in ("exposure", "events", "expected", "actual_over_expected"):
+        np.testing.assert_allclose(
+            merged[f"{column}_streamed"].to_numpy(), merged[f"{column}_whole"].to_numpy(), rtol=1e-9
+        )
+
+
+def test_the_decile_boundaries_divide_the_book_into_equal_exposure(
+    streamed_cells: Path, macro_module: pd.DataFrame
+) -> None:
+    """A decile is the one quantity that is not a sum: it needs the whole distribution before
+    a row can be assigned, so it is taken in two passes off a weighted histogram.
+    """
+    from creditsurv.data.panel import CellBlocks, cells_to_episodes
+    from creditsurv.models.aft import fit_aft
+    from creditsurv.views.streamed import decile_boundaries, deciles_of
+
+    covariates = ["credit_score", "original_ltv"]
+    cells = pd.read_parquet(streamed_cells)
+    held = cells_to_episodes(cells, macro_module, covariates=covariates)
+    fitted = fit_aft(held, covariates, " + ".join(covariates), weights_col=WEIGHT)
+    source = CellBlocks(
+        str(streamed_cells),
+        macro_module,
+        tuple(covariates),
+        rows=len(cells) // 6 + 1,
+        model_only=False,
+    ).prepared()
+
+    boundaries = decile_boundaries(source(), fitted, covariates)
+    hazard = predicted_hazard(fitted, held, covariates).to_numpy()
+    buckets = deciles_of(hazard, boundaries)
+    exposure = held[WEIGHT].to_numpy(dtype=float)
+    shares = np.bincount(buckets, weights=exposure, minlength=10) / exposure.sum()
+
+    assert len(boundaries) == 9
+    assert (np.diff(boundaries) > 0).all(), "the boundaries are increasing"
+    # Within a percentage point of a tenth each, on a book of seven hundred loans.
+    np.testing.assert_allclose(shares, 0.1, atol=0.01)

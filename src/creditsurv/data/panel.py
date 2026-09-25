@@ -242,6 +242,11 @@ class CellBlocks:
     #: as a survivor is, which is what makes the two cause-specific hazards separable and
     #: what lets one cell file serve both models.
     cause: str = DEFAULT_CAUSE
+    #: What each batch comes back as. ``True`` gives the narrow frame a fit reads -- the
+    #: covariates, the interval bounds and the weight. ``False`` gives the whole episode
+    #: frame, with the calendar columns, the age and the outcome, which is what a view has to
+    #: group by and what a fit has no use for.
+    model_only: bool = True
     #: The episode width and categorical levels of the file, when they are already known.
     #: Read once and carried, so six worker processes do not each read the whole of two
     #: columns of a 63-million-row file to learn the same thing -- which they did, and it
@@ -253,7 +258,7 @@ class CellBlocks:
         return self if self.shape is not None else replace(self, shape=cell_shape(self.source))
 
     def __call__(self, part: int = 0, of: int = 1) -> Iterator[pd.DataFrame]:
-        """The model frames of this part: every ``of``-th batch, starting at ``part``."""
+        """The frames of this part: every ``of``-th batch, starting at ``part``."""
         import pyarrow.parquet as pq
 
         step, levels = self.shape if self.shape is not None else cell_shape(self.source)
@@ -277,6 +282,9 @@ class CellBlocks:
                 lag_months=self.lag_months,
                 cause=self.cause,
             )
+            if not self.model_only:
+                yield episodes
+                continue
             frame = model_frame(episodes, list(self.covariates))
             frame[self.weights_col] = episodes[self.weights_col].to_numpy()
             yield frame
