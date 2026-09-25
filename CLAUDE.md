@@ -42,11 +42,28 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
   the selection's cached fit is already the optimum, and Newton goes from there instead of
   SLSQP from lifelines' seed. A cell table rebuilt since has another identity, and the fit
   starts cold.
-- **Never hold the panel beside its halves.** Build them from the cells with
-  `split_cells`, which lets the table go before expanding either half, keep text keys
-  categorical, and let `episode_hazards` narrow each block instead of copying the
-  covariates out. Each of those was gigabytes: holding the table took the comparison of
-  moratorium policies to a 17.3 GB footprint on this 16 GB machine.
+- **Nothing holds the panel any more, and nothing should start again.** Every command that
+  used to expand the training half now reads the cell file a batch at a time: the fits
+  (`models.blocks`), the selection (`Fits(blocks=...)`), the views (`views.streamed`) and the
+  backtest windows. A whole selection was measured at **2.75 GB** across its parent and three
+  workers, where one fit holding the half had been 15 GB. `split_cells` remains for a caller
+  that genuinely needs both halves as frames; on this table that is nobody.
+- **The views are sums.** Every calibration table is loan-months at risk, the defaults among
+  them and the defaults expected, grouped by an age, a year, a segment or a decile -- and sums
+  add over batches, so one pass fills every table for every segment and every family.
+  `survival_by_age` and `actual_expected` are each split into the additive part and the
+  derivation for that reason. A **decile** is the exception: it needs the whole distribution,
+  so its boundaries come off a weighted histogram of the log hazard in a pass of its own, land
+  within a bin of the true quantile, and cannot split a tie.
+- **A cached fit is searchable.** The fingerprint hashes the row counts, so naming a fit meant
+  expanding the rows to count them -- to find the model that would have scored them.
+  `find_fits(**criteria)` reads the descriptions written beside the pickles instead, and tells
+  a report's fit from a selection's by whether it carries `purpose`.
+- **A window is read, not filtered.** `load_cells_window` selects on the observation month,
+  which is `origination_month + age` and therefore not a column parquet can be asked about by
+  name; DuckDB evaluates it while reading. Two years of observation are about 3% of the table,
+  and `outcomes_by_age` and `load_largest_cells` do the same for a non-parametric curve and
+  for the origination profiles.
 - Aggregation peaks at ~11.3 GB, concatenating and writing the table. One heavy job at a
   time.
 - A successful fit is saved to `data/processed/fits/<hash>.pickle` the moment it
