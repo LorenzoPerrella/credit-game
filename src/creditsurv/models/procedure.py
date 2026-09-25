@@ -291,6 +291,7 @@ def selected_fit(
     moratorium: str,
     formula: str,
     distribution: str = DISTRIBUTION,
+    cause: str = DEFAULT_CAUSE,
 ) -> FitResult | None:
     """The selection's own fit of ``formula`` on the training half, if it made one.
 
@@ -306,6 +307,7 @@ def selected_fit(
                 moratorium=moratorium,
                 formula=formula,
                 distribution=distribution,
+                cause=cause,
             )
         )
     )

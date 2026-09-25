@@ -723,12 +723,14 @@ def test_two_selections_write_two_records(
     record, _ = _run(train)
     reports = tmp_path / "reports"
 
-    assert selection.record_name(record) == "selection"
-    assert selection.record_name(replace_field(record, distribution="loglogistic")) == (
-        "selection_loglogistic"
+    assert selection.record_name(distribution="weibull", cause="default") == "selection"
+    assert (
+        selection.record_name(distribution="loglogistic", cause="default")
+        == "selection_loglogistic"
     )
-    assert selection.record_name(replace_field(record, cause="prepayment")) == (
-        "selection_weibull_prepayment"
+    assert (
+        selection.record_name(distribution="weibull", cause="prepayment")
+        == "selection_weibull_prepayment"
     )
 
     selection.generate(record, reports_dir=reports)
@@ -741,3 +743,72 @@ def test_two_selections_write_two_records(
     assert (reports / "selection_loglogistic_screening.csv").exists()
     assert other.name == "selection_loglogistic.md"
     assert "--dist loglogistic" in other.read_text()
+
+
+def test_the_family_command_reads_both_records_and_applies_the_rule(
+    selection_cells: Path,
+    macro_module: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end on a fixture book: three selections cached, then the rule applied to what
+    they chose. The numbers belong to the population; what this holds is that the command
+    finds each family's record and its fit, and that it fits nothing itself.
+    """
+    from typer.testing import CliRunner
+
+    from creditsurv.cli import app
+    from creditsurv.data.panel import WEIGHT, CellBlocks
+    from creditsurv.data.store import cells_identity, save_cells
+    from creditsurv.models.selection import weighted_moments
+    from creditsurv.reporting import selection
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CREDITSURV_REPORTS_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(
+        "creditsurv.data.fred.load_macro_panel", lambda *_args, **_kwargs: macro_module
+    )
+    save_cells(pd.read_parquet(selection_cells))
+    # The command looks a fit up by the cell file's identity, as `select` saves it under: the
+    # two have to agree, or a cached fit is invisible to the command that needs it.
+    identity = cells_identity("exclude")
+
+    candidates = ["credit_score", "ltv_change"]
+    for distribution, cause in (
+        ("weibull", "default"),
+        ("loglogistic", "default"),
+        ("weibull", "prepayment"),
+    ):
+        source = CellBlocks(
+            str(tmp_path / "processed" / "cells_exclude.parquet"),
+            macro_module,
+            tuple(candidates),
+            rows=20_000,
+            cause=cause,
+        ).prepared()
+        record = run_selection(
+            None,
+            Fits(
+                None,
+                identity=identity,
+                as_of="2014-12",
+                moratorium="exclude",
+                distribution=distribution,
+                cause=cause,
+                blocks=source,
+            ),
+            static=["credit_score"],
+            ordinal=[],
+            macro=["ltv_change"],
+            base_categorical={},
+            candidate_categorical={},
+            moments=weighted_moments(source(), candidates, weight=WEIGHT),
+        )
+        selection.generate(record, reports_dir=tmp_path / "reports")
+
+    result = CliRunner().invoke(app, ["family", "--as-of", "2014-12"])
+
+    assert result.exit_code == 0, result.output
+    body = (tmp_path / "reports" / "family.md").read_text()
+    assert "The verdict" in body
+    assert "weibull" in body and "loglogistic" in body

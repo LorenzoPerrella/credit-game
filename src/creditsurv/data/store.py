@@ -129,6 +129,40 @@ def load_cells_window(
     return cells
 
 
+def outcomes_by_age(
+    policy: str = DEFAULT_POLICY, *, first: int | None = None, last: int | None = None
+) -> pd.DataFrame:
+    """Loan-months by loan age and outcome, aggregated inside the parquet reader.
+
+    Everything the Aalen-Johansen estimator needs -- the exposure at each age and the exits
+    of each kind among it -- as a few hundred rows. The cells themselves are 91.6 million,
+    and a non-parametric curve is a statement about sums, so there is no reason to hold them
+    to compute one.
+    """
+    import duckdb
+
+    path = cells_path(policy)
+    bounds = []
+    if first is not None:
+        bounds.append(f"origination_month + age >= {int(first)}")
+    if last is not None:
+        bounds.append(f"origination_month + age <= {int(last)}")
+    where = f"WHERE {' AND '.join(bounds)}" if bounds else ""
+    frame: pd.DataFrame = (
+        duckdb.connect()
+        .execute(
+            f"""
+            SELECT age, outcome, SUM(loan_months) AS loan_months
+            FROM read_parquet('{path}') {where}
+            GROUP BY ALL ORDER BY age
+            """
+        )
+        .df()
+    )
+    frame["outcome"] = frame["outcome"].astype("category")
+    return frame
+
+
 def cells_identity(policy: str = DEFAULT_POLICY) -> str:
     """The cell table's name, size and time of writing.
 

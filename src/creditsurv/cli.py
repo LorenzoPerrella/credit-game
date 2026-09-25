@@ -808,6 +808,156 @@ def windows(
 
 
 @app.command()
+def family(
+    moratorium: MoratoriumOption = "exclude",
+    as_of: Annotated[
+        str, typer.Option(help="End of the development window both families were selected on.")
+    ] = DEFAULT_AS_OF,
+    block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
+) -> None:
+    """Apply rule 2 of ``docs/rules.md``: which distribution family the model keeps.
+
+    Each family's **selected** model is compared with the Aalen-Johansen cumulative incidence
+    of default, which accounts for prepayment as a competing risk, over the loan ages carrying
+    at least the exposure floor. A family whose selected model turns a declared sign is
+    excluded whatever its fit; inside a tenth of a percentage point the Weibull is kept.
+
+    Nothing is fitted here. Each selection cached the fit of the model it chose and this reads
+    them, so a family whose selection has not been run is named and skipped. The prepayment
+    hazard is the one the Weibull selection chose, held fixed across the comparison: a
+    cumulative incidence needs both hazards, and what the rule is about is the default model.
+    """
+    import json
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.panel import PREPAYMENT_CAUSE, WEIGHT, CellBlocks
+    from creditsurv.data.store import cells_identity, cells_path, outcomes_by_age
+    from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
+    from creditsurv.models.nonparametric import (
+        cumulative_incidence,
+        hazard_by_age,
+        incidence_from_hazards,
+        incidence_gap,
+    )
+    from creditsurv.models.procedure import selected_fit
+    from creditsurv.models.selection import signs_against_prior
+    from creditsurv.reporting import family as family_report
+    from creditsurv.reporting.selection import record_name
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    macro = load_macro_panel()
+    identity = cells_identity(moratorium)
+    reporting_date = pd.Period(as_of, freq="M")
+    cut = reporting_date.year * 12 + reporting_date.month - 1
+
+    def record(distribution: str, cause: str = DEFAULT_CAUSE) -> dict[str, object] | None:
+        """One selection's record, read from the JSON it wrote beside its report."""
+        name = record_name(distribution=distribution, cause=cause, published=DISTRIBUTION)
+        path = reports_dir() / f"{name}.json"
+        if not path.exists():
+            return None
+        return cast("dict[str, object]", json.loads(path.read_text()))
+
+    def covariates_of(described: dict[str, object]) -> list[str]:
+        """What the selected model reads, from the record rather than from its formula."""
+        listed = [
+            *cast("list[str]", described["static_continuous"]),
+            *cast("list[str]", described["ordinal"]),
+            *cast("list[str]", described["time_varying_continuous"]),
+            *cast("dict[str, str]", described["categorical"]),
+        ]
+        return listed
+
+    def hazards(described: dict[str, object], cause: str) -> pd.DataFrame:
+        """The selected model's mean hazard by age, over the development window."""
+        distribution = str(described["distribution"])
+        fitted = selected_fit(
+            identity=identity,
+            as_of=as_of,
+            moratorium=moratorium,
+            formula=str(described["formula"]),
+            distribution=distribution,
+            cause=cause,
+        )
+        if fitted is None:
+            flags = f"--dist {distribution}" + (
+                f" --cause {cause}" if cause != DEFAULT_CAUSE else ""
+            )
+            message = (
+                f"No cached fit of the {distribution} {cause} model on these cells. "
+                f"Run `creditsurv select {flags}`."
+            )
+            raise typer.BadParameter(message)
+        covariates = covariates_of(described)
+        source = CellBlocks(
+            str(cells_path(moratorium)),
+            macro,
+            tuple(covariates),
+            rows=block_rows,
+            months=(None, cut),
+            cause=cause,
+        ).prepared()
+        typer.echo(f"  reading the {distribution} {cause} hazards by age...")
+        return hazard_by_age(source(), fitted, covariates, weights_col=WEIGHT)
+
+    # The observed side is a statement about sums, so it is taken inside the parquet reader:
+    # a few hundred rows out of 91.6 million cells, with nothing expanded.
+    typer.echo("The observed cumulative incidence, from the cells...")
+    observed = cumulative_incidence(outcomes_by_age(moratorium, last=cut))
+
+    prepayment = record(DISTRIBUTION, PREPAYMENT_CAUSE)
+    if prepayment is None:
+        message = (
+            "The prepayment model has not been selected on these cells, and a cumulative "
+            "incidence needs both hazards. Run `creditsurv select --cause prepayment`."
+        )
+        raise typer.BadParameter(message)
+    prepaid = hazards(prepayment, PREPAYMENT_CAUSE)
+
+    gaps: dict[str, pd.DataFrame] = {}
+    signs: dict[str, list[str]] = {}
+    formulas: dict[str, str] = {}
+    for distribution in CONVERGENT_DISTRIBUTIONS:
+        described = record(distribution)
+        if described is None:
+            typer.echo(f"{distribution}: no selection record on these cells; skipped.")
+            continue
+        formulas[distribution] = str(described["formula"])
+        predicted = incidence_from_hazards(
+            {DEFAULT_CAUSE: hazards(described, DEFAULT_CAUSE), PREPAYMENT_CAUSE: prepaid}
+        )
+        gaps[distribution] = incidence_gap(predicted, observed)
+        fitted = selected_fit(
+            identity=identity,
+            as_of=as_of,
+            moratorium=moratorium,
+            formula=formulas[distribution],
+            distribution=distribution,
+        )
+        assert fitted is not None
+        signs[distribution] = signs_against_prior(fitted)
+
+    if not gaps:
+        message = "No selection has been run on these cells; there is nothing to compare."
+        raise typer.BadParameter(message)
+
+    chosen, written = family_report.generate(
+        gaps, signs, formulas=formulas, reports_dir=reports_dir()
+    )
+    typer.echo(f"\nThe rule chooses: {chosen}")
+    if chosen != DISTRIBUTION:
+        typer.echo(
+            f"config.DISTRIBUTION is {DISTRIBUTION}. Set it to {chosen} and re-run "
+            "`creditsurv select` -- every fit of it is cached, so it costs minutes -- so that "
+            "selection.json is the record of the published model."
+        )
+    typer.echo(f"Written: {written}")
+
+
+@app.command()
 def report(
     horizon: Annotated[int, typer.Option(help="Months for the PD term structure.")] = 60,
     as_of: Annotated[str, typer.Option(help="Reporting date for the backtest.")] = DEFAULT_AS_OF,

@@ -42,7 +42,7 @@ TABLE_FILES: Final[dict[str, str]] = {
 FITS_FILE: Final = "selection_fits.csv"
 
 
-def record_name(record: SelectionRecord, *, published: str = "weibull") -> str:
+def record_name(*, distribution: str, cause: str, published: str = "weibull") -> str:
     """What this run's files are called.
 
     ``selection`` is the **published** model's record, which ``tests/test_procedure.py``
@@ -51,17 +51,18 @@ def record_name(record: SelectionRecord, *, published: str = "weibull") -> str:
     overwrite it: two selections write two records, and the family rule then decides which
     one the configuration should agree with.
     """
-    if record.distribution == published and record.cause == DEFAULT_CAUSE:
+    if distribution == published and cause == DEFAULT_CAUSE:
         return "selection"
-    parts = ["selection", record.distribution]
-    if record.cause != DEFAULT_CAUSE:
-        parts.append(record.cause)
+    parts = ["selection", distribution]
+    if cause != DEFAULT_CAUSE:
+        parts.append(cause)
     return "_".join(parts)
 
 
 def generate(record: SelectionRecord, *, reports_dir: Path, name: str | None = None) -> Path:
     """Write ``<name>.md`` and ``<name>.json`` under ``reports_dir``."""
-    name = record_name(record) if name is None else name
+    if name is None:
+        name = record_name(distribution=record.distribution, cause=record.cause)
     reports_dir.mkdir(parents=True, exist_ok=True)
     report = Report(
         "Variable selection, run end to end",
