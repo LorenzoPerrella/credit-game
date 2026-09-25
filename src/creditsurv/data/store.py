@@ -16,7 +16,7 @@ import hashlib
 import json
 import logging
 import pickle
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 import pandas as pd
 
@@ -129,6 +129,34 @@ def load_cells_window(
     return cells
 
 
+def load_largest_cells(
+    policy: str = DEFAULT_POLICY, *, age: int = 0, limit: int = 500
+) -> pd.DataFrame:
+    """The ``limit`` heaviest cells at one loan age, read without the rest of the table.
+
+    At age zero these are the origination profiles the book was written in, and their weights
+    say how much of it each accounts for -- which is what the projections are scored on. A
+    few hundred rows out of 91.6 million: the ordering and the limit belong in the reader.
+    """
+    import duckdb
+
+    path = cells_path(policy)
+    cells: pd.DataFrame = (
+        duckdb.connect()
+        .execute(
+            f"""
+            SELECT * FROM read_parquet('{path}')
+            WHERE age = {int(age)} ORDER BY loan_months DESC LIMIT {int(limit)}
+            """
+        )
+        .df()
+    )
+    for column in cells.columns:
+        if cells[column].dtype == object:
+            cells[column] = cells[column].astype("category")
+    return cells
+
+
 def outcomes_by_age(
     policy: str = DEFAULT_POLICY, *, first: int | None = None, last: int | None = None
 ) -> pd.DataFrame:
@@ -213,6 +241,36 @@ def save_fit(result: object, fingerprint: str, description: dict[str, object]) -
         pickle.dump(result, handle, protocol=pickle.HIGHEST_PROTOCOL)
     path.with_suffix(".json").write_text(json.dumps(description, indent=2, default=str) + "\n")
     return path
+
+
+def find_fits(**criteria: object) -> list[tuple[str, dict[str, object]]]:
+    """Every cached fit whose description matches ``criteria``, most recent first.
+
+    The fingerprint is a hash of everything that determines a fit, **including the row and
+    loan-month counts**, so a caller that wants a fit it did not make has to know the counts
+    to name it -- which meant expanding the rows to count them, to find the model that would
+    have scored them. The descriptions are written beside the pickles for exactly this: the
+    directory of hashed filenames is unusable otherwise, and it is also searchable.
+
+    A criterion of ``None`` requires the key to be **absent**, which is how a report's fit is
+    told from a selection's: one carries ``purpose`` and the other does not.
+    """
+    directory = processed_dir() / FITS_DIRNAME
+    if not directory.exists():
+        return []
+    found: list[tuple[float, str, dict[str, object]]] = []
+    for path in directory.glob("*.json"):
+        try:
+            described = cast("dict[str, object]", json.loads(path.read_text()))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if any(
+            (key in described) if wanted is None else (described.get(key) != wanted)
+            for key, wanted in criteria.items()
+        ):
+            continue
+        found.append((path.stat().st_mtime, path.stem, described))
+    return [(fingerprint, described) for _, fingerprint, described in sorted(found, reverse=True)]
 
 
 def load_fit(fingerprint: str) -> object | None:

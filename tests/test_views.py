@@ -632,3 +632,77 @@ def test_the_in_sample_views_are_the_same_accumulated_as_computed_whole(
                 rtol=1e-9,
                 err_msg=f"{name}.{column}",
             )
+
+
+def test_the_views_command_scores_from_the_cell_file(
+    streamed_cells: Path,
+    macro_module: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The command end to end, on a book aggregated for real.
+
+    It reads a cached fit, takes two passes over the cell file and writes every table the site
+    reads. What it must not do is hold the training half: that is what the passes are for, and
+    what this test would catch the loss of only by getting slower -- so what it checks is that
+    the tables arrive, named as the site expects them.
+    """
+    from typer.testing import CliRunner
+
+    from creditsurv.cli import _fit_description, app, default_covariates
+    from creditsurv.config import default_formula
+    from creditsurv.data.panel import CellBlocks
+    from creditsurv.data.store import cells_path, fit_fingerprint, save_cells, save_fit
+    from creditsurv.models.aft import fit_streamed
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CREDITSURV_TABLES_DIR", str(tmp_path / "tables"))
+    monkeypatch.setenv("CREDITSURV_REPORTS_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(
+        "creditsurv.data.fred.load_macro_panel", lambda *_args, **_kwargs: macro_module
+    )
+    save_cells(pd.read_parquet(streamed_cells))
+
+    as_of = "2014-06"
+    covariates, formula = default_covariates(), default_formula()
+    cut = 2014 * 12 + 6 - 1
+    source = CellBlocks(
+        str(cells_path("exclude")),
+        macro_module,
+        tuple(covariates),
+        rows=20_000,
+        months=(None, cut),
+    ).prepared()
+    fitted = fit_streamed(source, covariates, formula, weights_col=WEIGHT)
+    record = fitted.blocks
+    assert record is not None
+    described = _fit_description(
+        (fitted.n_episodes, int(record.loan_months)),
+        formula,
+        as_of=as_of,
+        moratorium="exclude",
+    )
+    save_fit(fitted, fit_fingerprint(**described), described)
+
+    result = CliRunner().invoke(
+        app, ["views", "--no-portfolio", "--as-of", as_of, "--block-rows", "20000", "--loans", "50"]
+    )
+
+    assert result.exit_code == 0, result.output
+    manifest = load_manifest(tmp_path / "tables")
+    for name in (
+        "km_vs_model",
+        "ae_by_year",
+        "ae_by_vintage",
+        "ae_by_age_band",
+        "ae_by_decile",
+        "coefficients",
+        "covariates_over_time",
+        "backtest_by_month",
+        "acceptance_by_segment",
+    ):
+        assert name in manifest, f"{name} missing: {sorted(manifest)}"
+    # One fit behind every model view, as the site's build insists.
+    assert len({entry["fit"] for entry in manifest.values() if entry["fit"]}) == 1
+    curves = load_view("km_vs_model", tmp_path / "tables")
+    assert {"segment", "group", "age", "km_survival", "predicted_survival"} <= set(curves.columns)

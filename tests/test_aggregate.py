@@ -947,3 +947,38 @@ def test_a_window_of_the_cells_is_read_without_the_rest_of_the_table(tmp_path: P
     # Open at either end, as a development window is.
     assert len(load_cells_window("exclude", last=april)) < len(whole)
     assert len(load_cells_window("exclude", first=april)) < len(whole)
+
+
+def test_a_cached_fit_can_be_found_by_what_it_is_rather_than_by_its_hash(
+    tmp_path: Path,
+) -> None:
+    """The fingerprint hashes the row counts, so naming a fit means knowing them -- which
+    meant expanding the rows to count them, to find the model that would have scored them.
+    The descriptions beside the pickles are searchable, which is why they are written.
+    """
+    from creditsurv.data.store import find_fits, save_fit
+
+    save_fit(
+        {"a": 1},
+        "aaaa0000",
+        {"as_of": "2021-12", "moratorium": "exclude", "formula": "credit_score", "rows": 10},
+    )
+    save_fit(
+        {"b": 2},
+        "bbbb0000",
+        {
+            "purpose": "selection",
+            "as_of": "2021-12",
+            "moratorium": "exclude",
+            "formula": "credit_score",
+        },
+    )
+
+    both = find_fits(as_of="2021-12", formula="credit_score")
+    report_only = find_fits(as_of="2021-12", formula="credit_score", purpose=None)
+    selection_only = find_fits(purpose="selection")
+
+    assert {fingerprint for fingerprint, _ in both} == {"aaaa0000", "bbbb0000"}
+    assert [fingerprint for fingerprint, _ in report_only] == ["aaaa0000"]
+    assert [fingerprint for fingerprint, _ in selection_only] == ["bbbb0000"]
+    assert find_fits(as_of="2024-12") == []

@@ -242,8 +242,54 @@ def calibration_views(
     return views
 
 
-def coefficient_view(fitted: FitResult, train: pd.DataFrame, continuous: Sequence[str]) -> View:
-    """Coefficients with their intervals, and the effect of one standard deviation."""
+def backtest_views(test: pd.DataFrame, hazard: np.ndarray, *, as_of: str) -> list[View]:
+    """The out-of-time tables: the months after the reporting date, which the model never saw.
+
+    Separate from the in-sample ones because they are read separately and computed
+    differently: the test window is small enough to hold, and its deciles are cut on its own
+    exposure rather than on the training half's.
+    """
+    out_of_time = f"On the months after {as_of}, which the model never saw."
+    return [
+        View(
+            "backtest_by_month",
+            "Backtest by month",
+            f"Defaults against expectation by month of observation. {out_of_time}",
+            _actual_expected_by_segment(test, hazard, "month", _months(test)),
+            source="fit",
+        ),
+        View(
+            "backtest_by_decile",
+            "Backtest by decile of predicted risk",
+            f"Deciles of the test window's exposure. {out_of_time}",
+            _actual_expected_by_segment(test, hazard, "decile", deciles(hazard, test)),
+            source="fit",
+        ),
+        View(
+            "acceptance_by_segment",
+            "Acceptance criteria by segment",
+            f"Actual over expected 0.80 to 1.25 overall and in every decile, Gini above 0.45, "
+            f"for every group. {out_of_time}",
+            acceptance_by_segment(test, hazard),
+            source="fit",
+        ),
+    ]
+
+
+def coefficient_view(
+    fitted: FitResult,
+    train: pd.DataFrame | None,
+    continuous: Sequence[str],
+    *,
+    deviations: pd.Series | None = None,
+) -> View:
+    """Coefficients with their intervals, and the effect of one standard deviation.
+
+    ``deviations`` are the exposure-weighted standard deviations of the covariates when the
+    caller already has them -- the selection takes them in the pass that produces its
+    correlation table -- and ``train`` may then be ``None``. Otherwise they are taken here
+    from the rows.
+    """
     table = coefficient_table(fitted).reset_index()
     table.columns = [
         {
@@ -255,13 +301,19 @@ def coefficient_view(fitted: FitResult, train: pd.DataFrame, continuous: Sequenc
         }.get(str(column), str(column))
         for column in table.columns
     ]
-    weights = train[WEIGHT].to_numpy(dtype=float)
-    steps = {}
-    for name in continuous:
-        if name in train.columns:
-            values = train[name].to_numpy(dtype=float)
-            mean = float(np.average(values, weights=weights))
-            steps[name] = float(np.sqrt(np.average((values - mean) ** 2, weights=weights)))
+    if deviations is not None:
+        steps = {name: float(deviations[name]) for name in continuous if name in deviations.index}
+    elif train is not None:
+        weights = train[WEIGHT].to_numpy(dtype=float)
+        steps = {}
+        for name in continuous:
+            if name in train.columns:
+                values = train[name].to_numpy(dtype=float)
+                mean = float(np.average(values, weights=weights))
+                steps[name] = float(np.sqrt(np.average((values - mean) ** 2, weights=weights)))
+    else:
+        message = "coefficient_view needs either the rows or their standard deviations."
+        raise ValueError(message)
     table["one_sd"] = table["term"].map(steps)
     table["effect_1sd"] = table["coef"] * table["one_sd"]
     return View(
@@ -445,6 +497,42 @@ def _curves_by_segment(sums: pd.DataFrame) -> pd.DataFrame:
         for segment, rows in sums.groupby("segment", observed=True, sort=False)
     ]
     return _leading(pd.concat(pieces, ignore_index=True))
+
+
+def covariate_means_recipe(names: Sequence[str]) -> Recipe:
+    """The exposure-weighted mean of each time-varying covariate, month by month.
+
+    A mean is two sums, so it accumulates like everything else here: the exposure of each
+    month and the covariate weighted by it, divided once at the end.
+    """
+
+    def build(frame: pd.DataFrame, _hazards: Mapping[str, np.ndarray]) -> pd.DataFrame:
+        months = _months(frame)
+        weight = frame[WEIGHT].to_numpy(dtype=float)
+        pieces = []
+        for name in names:
+            if name not in frame.columns:
+                continue
+            pieces.append(
+                pd.DataFrame(
+                    {
+                        "month": months.to_numpy(),
+                        "covariate": name,
+                        "exposure": weight,
+                        "weighted": weight * frame[name].to_numpy(dtype=float),
+                    }
+                )
+            )
+        return pd.concat(pieces, ignore_index=True)
+
+    def finish(table: pd.DataFrame) -> pd.DataFrame:
+        out = table.copy()
+        out["mean"] = out["weighted"] / out["exposure"]
+        return out.drop(columns=["weighted", "exposure"]).sort_values(["covariate", "month"])
+
+    return Recipe(
+        name="covariates_over_time", keys=("month", "covariate"), build=build, finish=finish
+    )
 
 
 def in_sample_recipes(
