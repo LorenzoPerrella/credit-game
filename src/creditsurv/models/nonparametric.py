@@ -41,7 +41,7 @@ from creditsurv.data.panel import (
 from creditsurv.models.aft import episode_hazards
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from lifelines.statistics import StatisticalResult
 
@@ -332,6 +332,76 @@ def predicted_incidence_curve(
     for cause, hazard in mean.items():
         table[cause] = np.cumsum(entering * hazard)
     return table
+
+
+def hazard_by_age(
+    blocks: Iterable[pd.DataFrame],
+    result: FitResult,
+    covariates: Sequence[str],
+    *,
+    weights_col: str = WEIGHT,
+) -> pd.DataFrame:
+    """The exposure-weighted mean hazard at each loan age, accumulated while reading.
+
+    Three sums an age at a time -- the loan-months at risk and the hazard weighted by them --
+    which is all a predicted survival or incidence curve needs. Taken over the batches of the
+    cell file rather than over an expanded panel: scoring the training half as a frame took
+    the footprint to 15 GB, and this reads one batch at a time.
+    """
+    from creditsurv.data.panel import AGE_START
+
+    at_risk = np.zeros(1)
+    weighted = np.zeros(1)
+    for frame in blocks:
+        ages = frame[AGE_START].to_numpy(dtype=int)
+        weight = frame[weights_col].to_numpy(dtype=float)
+        hazard = episode_hazards(result, frame, ages, columns=list(covariates))
+        length = int(ages.max()) + 1
+        if length > len(at_risk):
+            at_risk = np.pad(at_risk, (0, length - len(at_risk)))
+            weighted = np.pad(weighted, (0, length - len(weighted)))
+        at_risk += np.bincount(ages, weights=weight, minlength=len(at_risk))
+        weighted += np.bincount(ages, weights=weight * hazard, minlength=len(weighted))
+
+    present = np.flatnonzero(at_risk > 0)
+    return pd.DataFrame(
+        {
+            "age": present,
+            "at_risk": at_risk[present],
+            "hazard": weighted[present] / at_risk[present],
+        }
+    )
+
+
+def incidence_from_hazards(
+    hazards: Mapping[str, pd.DataFrame],
+) -> pd.DataFrame:
+    """Chain mean hazards by age into survival and a cumulative incidence per cause.
+
+    The counterpart of :func:`predicted_incidence_curve` for hazards already averaged by age
+    -- which is how they arrive from :func:`hazard_by_age`, and the only form a table of this
+    size can be summarised in without holding it.
+    """
+    ages = next(iter(hazards.values()))["age"].to_numpy()
+    for table in hazards.values():
+        if not np.array_equal(table["age"].to_numpy(), ages):
+            message = "The causes' hazards are tabulated at different ages."
+            raise ValueError(message)
+
+    leaving = sum(table["hazard"].to_numpy(dtype=float) for table in hazards.values())
+    survival = np.cumprod(1.0 - np.asarray(leaving))
+    entering = np.concatenate(([1.0], survival[:-1]))
+
+    out = pd.DataFrame(
+        {
+            "age": ages,
+            "at_risk": next(iter(hazards.values()))["at_risk"].to_numpy(),
+            "survival": survival,
+        }
+    )
+    for cause, table in hazards.items():
+        out[cause] = np.cumsum(entering * table["hazard"].to_numpy(dtype=float))
+    return out
 
 
 def incidence_gap(

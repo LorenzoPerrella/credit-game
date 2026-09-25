@@ -706,3 +706,38 @@ def test_moments_that_do_not_cover_the_candidates_are_refused_before_the_first_f
             macro=[],
             moments=partial,
         )
+
+
+def test_two_selections_write_two_records(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`selection.json` belongs to the published model, which the configuration is tested
+    against. A second family, or the prepayment model, is the record of a run rather than of
+    the model in the configuration, and would otherwise overwrite it.
+    """
+    from dataclasses import replace as replace_field
+
+    from creditsurv.reporting import selection
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    record, _ = _run(train)
+    reports = tmp_path / "reports"
+
+    assert selection.record_name(record) == "selection"
+    assert selection.record_name(replace_field(record, distribution="loglogistic")) == (
+        "selection_loglogistic"
+    )
+    assert selection.record_name(replace_field(record, cause="prepayment")) == (
+        "selection_weibull_prepayment"
+    )
+
+    selection.generate(record, reports_dir=reports)
+    other = selection.generate(
+        replace_field(record, distribution="loglogistic"), reports_dir=reports
+    )
+
+    assert (reports / "selection.json").exists()
+    assert (reports / "selection_loglogistic.json").exists()
+    assert (reports / "selection_loglogistic_screening.csv").exists()
+    assert other.name == "selection_loglogistic.md"
+    assert "--dist loglogistic" in other.read_text()
