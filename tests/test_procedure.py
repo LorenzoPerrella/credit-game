@@ -685,3 +685,24 @@ def test_a_selection_streamed_from_the_cells_chooses_what_the_held_panel_chose(
         held_halves["effect_even"].to_numpy(),
         rtol=1e-4,
     )
+
+
+def test_moments_that_do_not_cover_the_candidates_are_refused_before_the_first_fit(
+    train: pd.DataFrame,
+) -> None:
+    """On the production table the pass that produces them is twenty minutes of parquet, so
+    a mismatch has to be an error here rather than an index error an hour in.
+    """
+    from creditsurv.models.selection import weighted_moments
+
+    partial = weighted_moments(train, ["credit_score"], weight="loan_months")
+
+    with pytest.raises(ValueError, match="missing \\['debt_to_income'\\]"):
+        run_selection(
+            None,
+            Fits(None, identity="fixture", as_of="2008-12", moratorium="exclude"),
+            static=["credit_score", "debt_to_income"],
+            ordinal=[],
+            macro=[],
+            moments=partial,
+        )

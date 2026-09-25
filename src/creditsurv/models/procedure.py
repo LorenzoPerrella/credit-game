@@ -395,6 +395,12 @@ def run_selection(
             message = "run_selection needs either the rows or their moments."
             raise ValueError(message)
         moments = weighted_moments(train, continuous, weight=WEIGHT)
+    # Checked before the first fit rather than found by an index error after it: on the
+    # production table the pass that produced these moments is twenty minutes of parquet.
+    absent = [name for name in continuous if name not in moments.covariance.index]
+    if absent:
+        message = f"The moments given cover {list(moments.covariance.index)}, missing {absent}."
+        raise ValueError(message)
     deviations = moments.deviations
     correlation = moments.correlation
     collinear = collinear_pairs(correlation, threshold=CORRELATION_THRESHOLD)

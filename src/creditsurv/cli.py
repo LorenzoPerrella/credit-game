@@ -890,11 +890,13 @@ def select(
         cause=cause,
     ).prepared()
 
-    # One pass for steps 5 and 6, which need a weighted covariance of the candidates and
-    # nothing else. It also counts the rows and the exposure, so the record has them without
-    # a second pass -- the selection used to take that pass twice.
-    typer.echo(f"Reading {source.source} for the correlation of {len(candidates)} candidates...")
-    moments = weighted_moments(source(), candidates, weight=WEIGHT)
+    # One pass for steps 5 and 6, which need a weighted covariance of the **continuous**
+    # candidates and nothing else -- a covariance of a treatment-coded level is not a thing
+    # this procedure has a use for. It also counts the rows and the exposure, so the record
+    # has them without a second pass; the selection used to take that pass twice.
+    continuous = [*LOAN_CONTINUOUS, *LOAN_ORDINAL, *MACRO_CANDIDATES]
+    typer.echo(f"Reading {source.source} for the correlation of {len(continuous)} candidates...")
+    moments = weighted_moments(source(), continuous, weight=WEIGHT)
     identity = cells_identity(moratorium)
     typer.echo(
         f"Selecting {cause} on {moments.rows:,} cells, {int(moments.loan_months):,} "
