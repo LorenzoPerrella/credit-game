@@ -806,6 +806,9 @@ def test_the_windows_command_cuts_anchors_and_grades_end_to_end(
     assert result.exit_code == 0, result.output
     body = (tmp_path / "reports" / "windows.md").read_text()
     assert "2012-06" in body, "the report states the cut it used"
+    # The criteria of the published model are those of the model as published, so the
+    # anchored row is there beside the unanchored one.
+    assert "anchored" in body and "unanchored" in body
     assert "2013-07 to 2014-06" in body, "and the window the level was anchored on"
     assert "multiplier" in body
     assert "Twelve-month PD by grade" in body

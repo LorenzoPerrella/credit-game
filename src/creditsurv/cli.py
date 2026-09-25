@@ -739,30 +739,22 @@ def windows(
     unanchored = score(development, test, covariates, as_of=development_cut)
     exposure = test[WEIGHT].astype(float)
     events = exposure * ended_in(test)
-    scaled = anchor.apply(predicted_hazard(development, test, covariates))
-    expected = float((scaled * exposure).sum())
+    scaled = pd.Series(
+        anchor.apply(predicted_hazard(development, test, covariates)), index=test.index
+    )
+    anchored = score(development, test, covariates, as_of=development_cut, hazard=scaled)
     level = pd.DataFrame(
         [
-            {
-                "model": "unanchored",
-                "loan_months": unanchored.loan_months,
-                "expected_defaults": round(unanchored.expected_defaults, 1),
-                "actual_defaults": round(unanchored.actual_defaults, 1),
-                "actual_over_expected": round(unanchored.actual_over_expected, 4),
-                "gini": round(unanchored.gini, 4),
-            },
-            {
-                "model": "anchored",
-                "loan_months": int(exposure.sum()),
-                "expected_defaults": round(expected, 1),
-                "actual_defaults": round(float(events.sum()), 1),
-                "actual_over_expected": round(float(events.sum()) / expected, 4),
-                "gini": round(unanchored.gini, 4),
-            },
+            {"model": "unanchored", **unanchored.summary()},
+            {"model": "anchored", **anchored.summary()},
         ]
-    )
-    grades = grade_backtest(pd.Series(scaled), pd.Series(events.to_numpy()), exposure)
-    criteria.append(ACCEPTANCE.assess(unanchored).assign(window=f"after {last}"))
+    ).drop(columns="as_of")
+    grades = grade_backtest(scaled, pd.Series(events.to_numpy()), exposure)
+    # The criteria of the published model are the criteria of the model **as published**: the
+    # multiplier is part of it. The Gini is the same on both rows because one multiplier on
+    # every hazard cannot change an order, which is the point of anchoring that way.
+    criteria.append(ACCEPTANCE.assess(unanchored).assign(window=f"after {last}, unanchored"))
+    criteria.append(ACCEPTANCE.assess(anchored).assign(window=f"after {last}, anchored"))
     del test
 
     # 5. The cycle, in sample, a calendar year at a time -- the dispersion a single

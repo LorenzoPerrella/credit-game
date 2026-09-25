@@ -201,6 +201,7 @@ def score(
     *,
     as_of: pd.Period,
     train: pd.DataFrame | None = None,
+    hazard: pd.Series | None = None,
 ) -> BacktestResult:
     """Compare what the model expected after ``as_of`` with what happened.
 
@@ -210,12 +211,18 @@ def score(
 
     Given ``train``, the same comparison is also made **in-sample, year by year**, so the
     out-of-time number arrives with the model's own dispersion beside it.
+
+    ``hazard`` scores a model that is the fit **and something applied to it** -- the anchoring
+    multiplier of rule 4, which is not a coefficient and cannot be folded into one. The
+    criteria of the published model have to be the criteria of the model as published, so the
+    anchored hazard has to be scoreable without pretending it came out of a fit.
     """
     if test.empty:
         message = f"No exposure after {as_of} to score."
         raise ValueError(message)
 
-    hazard = predicted_hazard(fitted, test, covariates)
+    if hazard is None:
+        hazard = predicted_hazard(fitted, test, covariates)
     exposure = test[WEIGHT].astype(float)
     events = exposure * test[EVENT].astype(bool)
 
