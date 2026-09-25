@@ -585,10 +585,17 @@ def test_the_in_sample_views_are_the_same_accumulated_as_computed_whole(
     boundaries = decile_boundaries(source(), fitted, covariates)
     accumulated = accumulate(
         source(),
-        {"weibull": (fitted, covariates)},
-        in_sample_recipes(primary="weibull", boundaries=boundaries),
+        {"weibull": (fitted, covariates), "loglogistic": (fitted, covariates)},
+        in_sample_recipes(primary="weibull", families=["loglogistic"], boundaries=boundaries),
     )
-    streamed = {view.name: view.frame for view in in_sample_views(accumulated, as_of="2014-12")}
+    published = in_sample_views(accumulated, as_of="2014-12")
+    streamed = {view.name: view.frame for view in published if view.name != "families_vs_km"}
+
+    # The family comparison is one curve per family over the whole book, as the published view
+    # is: a segment column in it would let a figure draw six curves per family.
+    families = next(view for view in published if view.name == "families_vs_km")
+    assert "segment" not in families.frame.columns
+    assert set(families.frame["distribution"]) == {"loglogistic"}
 
     assert set(streamed) == set(whole)
     for name, table in streamed.items():

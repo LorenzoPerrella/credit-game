@@ -590,13 +590,18 @@ def in_sample_recipes(
 
 
 def _family_recipe(family: str) -> Recipe:
-    """One family's survival curves. A function rather than a lambda in the loop, so the
-    family it closes over is the one it was made for."""
+    """One family's survival curve, over the whole book.
+
+    Not by segment: the published view sets the families beside each other on one curve, and
+    a segment column in it would let a figure draw six curves per family as though they were
+    one. A function rather than a lambda in the loop, so the family it closes over is the one
+    it was made for.
+    """
     return Recipe(
         name=f"family_{family}",
-        keys=("segment", "group", "age"),
-        build=lambda frame, hazards: _risk_sets_by_segment(frame, hazards[family]),
-        finish=_curves_by_segment,
+        keys=("group", "age"),
+        build=lambda frame, hazards: risk_sets(frame, hazards[family]),
+        finish=curves_from,
     )
 
 
