@@ -784,46 +784,6 @@ def test_the_super_conforming_flag_is_mapped_from_what_the_field_holds(tmp_path:
     assert loans == {"conforming": 4, "super_conforming": 2}
 
 
-def test_a_cell_table_written_under_the_former_names_reads_under_the_current_ones(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The cells on disk predate the rename; they are read, not rebuilt."""
-    from creditsurv.data.store import load_cells
-
-    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
-    former = pd.DataFrame(
-        {
-            "fico_s": [-0.4, 1.0],
-            "orig_ltv": [75.0, 85.0],
-            "purpose": pd.Categorical(["purchase", "refinance_cashout"]),
-            "has_mi": pd.Categorical(["N", "Y"]),
-            "first_time_buyer": pd.Categorical(["Y", "N"]),
-            "orig_month": [24_000, 24_001],
-            "event": [False, True],
-            "n": [10, 3],
-        }
-    )
-    path = tmp_path / "processed" / "cells_exclude.parquet"
-    path.parent.mkdir(parents=True)
-    former.to_parquet(path)
-
-    cells = load_cells("exclude")
-    narrow = load_cells("exclude", columns=["credit_score", "loan_months"])
-
-    assert cells["credit_score"].tolist() == [680.0, 750.0]
-    assert list(cells["mortgage_insurance"]) == ["uninsured", "insured"]
-    assert list(cells["buyer_type"]) == ["first_time", "repeat"]
-    assert list(cells["purpose"]) == ["purchase", "cash_out_refinance"]
-    assert cells["loan_months"].tolist() == [10, 3]
-    assert "origination_month" in cells.columns
-    assert list(narrow.columns) == ["credit_score", "loan_months"]
-
-
-# --------------------------------------------------------------------------------------
-# The key extended: HARP, the payment state, the note rate and the finer bands
-# --------------------------------------------------------------------------------------
-
-
 def test_a_harp_refinance_is_kept_with_its_ratio_missing_and_its_level_set(
     tmp_path: Path,
 ) -> None:

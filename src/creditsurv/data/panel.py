@@ -38,7 +38,6 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 
-from creditsurv import names
 from creditsurv.config import MACRO_LAG_MONTHS
 from creditsurv.features import MACRO_DERIVED, absorb_not_reported, add_macro_family
 
@@ -209,22 +208,12 @@ def cell_shape(source: Path | str) -> tuple[int, dict[str, pd.Index]]:
     step = (
         min((later - earlier) for earlier, later in pairwise(distinct)) if len(distinct) > 1 else 1
     )
-    # Under the names the batches are read with, not the ones the file was written with: a
-    # file written before the rename holds `has_mi` with the levels Y and N, and comes back
-    # as `mortgage_insurance` with insured and uninsured.
-    former_columns = {
-        **names.former_names(names.Kind.LOAN),
-        **names.former_names(names.Kind.STRUCTURE),
-    }
-    former_levels = names.former_levels()
     levels: dict[str, pd.Index] = {}
     for field in file.schema_arrow:
         if not (pa.types.is_dictionary(field.type) or pa.types.is_string(field.type)):
             continue
-        column = former_columns.get(field.name, field.name)
-        current = former_levels.get(column, {})
         stored = pq.read_table(source, columns=[field.name]).column(field.name).unique().to_pylist()
-        levels[column] = pd.Index(sorted({current.get(str(value), str(value)) for value in stored}))
+        levels[field.name] = pd.Index(sorted(str(value) for value in stored))
     return step, levels
 
 
@@ -267,14 +256,12 @@ class CellBlocks:
         """The model frames of this part: every ``of``-th batch, starting at ``part``."""
         import pyarrow.parquet as pq
 
-        from creditsurv.data.store import modernise_cells
-
         step, levels = self.shape if self.shape is not None else cell_shape(self.source)
         batches = pq.ParquetFile(self.source).iter_batches(batch_size=self.rows)
         for number, batch in enumerate(batches):
             if number % of != part:
                 continue
-            cells = modernise_cells(batch.to_pandas())
+            cells = batch.to_pandas()
             for name, categories in levels.items():
                 if name in cells.columns:
                     cells[name] = pd.Categorical(cells[name].astype(str), categories=categories)

@@ -7,9 +7,18 @@ obvious from the code and that a mistake in would cost hours or go unnoticed.
 ## The constraints that shape everything
 
 **Memory decides what can be fitted; time decides what is worth fitting.** The cell key
-carries the exact origination month, *mortgage insurance* (`mortgage_insurance`, formerly
-`has_mi`) and *buyer type* (`buyer_type`, formerly `first_time_buyer`): 63.6 million cells
-over 2.54 billion loan-months under the `exclude` policy.
+carries the exact origination month, *mortgage insurance* (`mortgage_insurance`), *buyer type*
+(`buyer_type`), the *HARP level* (`harp`) and the *payment state of the month before*
+(`delinquency_state`): **91.6 million cells over 2.774 billion loan-months** under the
+`exclude` policy, with 1,671,207 defaults and 33,797,300 prepayments.
+
+- **What the key holds is decided by a measured cost against a declared ceiling.**
+  `docs/rules.md` caps the table at 150 million cells and fixes the order the extensions are
+  given up in; `creditsurv profile --extensions` prices them on nine quarters
+  (`docs/reports/key_extensions.csv`). All four wanted extensions came to 4.90x the old key,
+  a projected 312 million, so the finer bands and the note rate went and the HARP level and
+  the payment state stayed. The projection said 80.4 million and the rebuild produced 91.6:
+  **a ratio estimated on nine quarters ran 14% light**, which is the accuracy to expect of it.
 
 - **Every interval-censored fit goes through `creditsurv.models.blocks`.** A stock
   lifelines fit holds ~680 bytes a row of autograd tape and design copies, which would be
@@ -78,6 +87,22 @@ evaluations and 7 Hessians where SLSQP needed 91 evaluations, and ended 3e-5 sta
 from the cold optimum.
 
 ## Rules that are silent when broken
+
+**A loan without a debt-to-income is a HARP refinance, and nothing else.** Freddie Mac
+waived the ratio for the programme, and in the kept book the gap and the programme are the
+same set: on 2012Q2, 181,302 of the 181,356 loans without it carry the flag, and every other
+loan without it is dropped by the complete-case rule. The cells keep the ratio **missing**;
+the model fills it with a constant that the `harp` level absorbs whole, which is the
+dummy-variable adjustment and not an imputation. `features.absorb_not_reported` raises rather
+than fit the filled ratio without the level, and rule 8 of `docs/rules.md` says why. HARP is
+238.8 million loan-months, 8.6% of the book, and 135,070 defaults.
+
+**The payment state is the month before, never the month itself.** At three missed payments
+the loan has defaulted by definition, so the state during the month *is* the event. The month
+before is what a servicer knows in time to act, and it carries most of what there is to know:
+of 1,671,207 defaults, 1,518,761 are loans that opened the month two payments behind. The
+lag is taken on the raw code, not on a number, because `RA` -- an REO acquisition -- would
+otherwise cast to the same NULL as "this is the loan's first month" and read as up to date.
 
 **A moratorium is not a default.** CARES Act and disaster forbearance had to be reported
 as delinquency, and made up 17% of the default events. The event definition is a
@@ -200,11 +225,6 @@ fits: it stops when the report's fit is not in the cache. Scoring the training h
 takes the footprint near 15 GB, so nothing else heavy runs beside it.
 
 ## Open
-
-**HARP refinances are outside the model.** Freddie Mac reports no debt-to-income for them,
-so the complete-case rule drops them: 18% of the 2009Q2-2019Q1 vintages, about three times as
-likely to default as the loans kept (`docs/data_preparation.md`). Covering them takes a level
-of their own in the key -- a re-aggregation and a new selection -- never an imputed DTI.
 
 **The Weibull against the log-logistic.** On the selected specification the log-logistic has
 the better likelihood by 83,961 AIC points and sits slightly closer to Kaplan-Meier (1.21

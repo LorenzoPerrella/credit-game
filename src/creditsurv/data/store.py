@@ -18,10 +18,8 @@ import logging
 import pickle
 from typing import TYPE_CHECKING, Final
 
-import numpy as np
 import pandas as pd
 
-from creditsurv import names
 from creditsurv.config import processed_dir
 
 if TYPE_CHECKING:
@@ -68,11 +66,8 @@ def load_cells(
 ) -> pd.DataFrame:
     """Read the cells built under ``policy``, or say how to build them.
 
-    ``columns`` reads only those, by their current names, whatever names the file was
-    written under.
+    ``columns`` reads only those.
     """
-    import pyarrow.parquet as pq
-
     path = cells_path(policy)
     if not path.exists():
         message = (
@@ -81,11 +76,7 @@ def load_cells(
             f"  uv run creditsurv aggregate --moratorium {policy}"
         )
         raise FileNotFoundError(message)
-    stored = set(pq.read_schema(path).names)
-    if columns is not None:
-        written_as = {new: old for old, new in _FORMER_COLUMNS.items() if old in stored}
-        columns = [written_as.get(name, name) for name in columns]
-    cells = modernise_cells(pd.read_parquet(path, columns=columns))
+    cells = pd.read_parquet(path, columns=None if columns is None else list(columns))
     # A table saved before its text keys were categorical comes back as Python strings.
     # Categorised here, once, over the whole table -- which is also what keeps the levels
     # of every later slice identical.
@@ -93,48 +84,6 @@ def load_cells(
         if cells[column].dtype == object:
             cells[column] = cells[column].astype("category")
     return cells
-
-
-#: Column names a cell table carried before the variables were renamed.
-_FORMER_COLUMNS: Final[dict[str, str]] = {
-    **names.former_names(names.Kind.LOAN),
-    **names.former_names(names.Kind.STRUCTURE),
-}
-
-
-def modernise_cells(cells: pd.DataFrame) -> pd.DataFrame:
-    """A cell table written under the former names, under the current ones.
-
-    The cells on disk were aggregated before the rename, and rebuilding them is an hour and
-    11 GB; they carry the same numbers under older names. Columns and categorical levels
-    are renamed, and the credit score, stored then as ``(score - 700) / 50``, is put back
-    in points. A table already written under the current names is returned as it is.
-    Needed only until the cells are rebuilt.
-    """
-    renames = {old: new for old, new in _FORMER_COLUMNS.items() if old in cells.columns}
-    if not renames:
-        return cells
-    modern = cells.rename(columns=renames)
-    if "fico_s" in renames:
-        modern["credit_score"] = modern["credit_score"] * 50.0 + 700.0
-    if "outcome" in modern.columns:
-        pass
-    elif "event" in modern.columns:
-        # Written before the outcome had three states. The defaults are there; the
-        # prepayments are not, which is the reason the cells are rebuilt.
-        defaulted = modern["event"].to_numpy(dtype=bool)
-        modern["outcome"] = pd.Categorical(
-            np.where(defaulted, "default", "none"), categories=["default", "none"]
-        )
-    for column, levels in names.former_levels().items():
-        if column in modern.columns and isinstance(modern[column].dtype, pd.CategoricalDtype):
-            present = {
-                old: new for old, new in levels.items() if old in modern[column].cat.categories
-            }
-            if present:
-                modern[column] = modern[column].cat.rename_categories(present)
-    _LOGGER.info("Read a cell table written under former names: %s", sorted(renames))
-    return modern
 
 
 def cells_identity(policy: str = DEFAULT_POLICY) -> str:
