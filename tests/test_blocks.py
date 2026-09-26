@@ -389,9 +389,13 @@ def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
         method = str(kwargs.get("method"))
         calls.append(method)
         if method.lower() == "slsqp":
+            # Not merely `success=False`: since the polish decides, a method is only out of the
+            # running when its point is one no likelihood can take -- which is exactly what
+            # SLSQP's failures looked like on the production table.
             failed = real(*args, **{**kwargs, "options": {"maxiter": 1}})
             failed.success = False
             failed.message = "Rank-deficient equality constraint subproblem HFTI"
+            failed.fun = -1.0
             return failed
         return real(*args, **kwargs)
 
@@ -491,3 +495,48 @@ def test_a_coefficient_on_the_bound_is_refused_rather_than_published() -> None:
         _check_interior(np.array([0.5, _PARAMETER_BOUND]))
     with pytest.raises(exceptions.ConvergenceError, match="Coefficient\\(s\\) \\[0\\]"):
         _check_interior(np.array([-_PARAMETER_BOUND, 0.1]))
+
+
+def test_a_method_that_stops_short_of_its_tolerance_is_finished_by_the_polish(
+    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lifelines caps SLSQP at 200 iterations, and a fit that reaches the cap comes back
+    `success=False` although it is at the answer: on the prepayment model one had been stable
+    to nine significant figures for twenty evaluations when it got there.
+
+    Discarding it would have thrown away two and a half hours and started another method from
+    scratch. What settles whether a method worked is the distance to the optimum, which only
+    the polish measures.
+    """
+    from scipy import optimize
+
+    from creditsurv.models import blocks
+
+    calls: list[str] = []
+    real = optimize.minimize
+
+    def stops_short(*args: object, **kwargs: object) -> object:
+        calls.append(str(kwargs.get("method")))
+        results = real(*args, **kwargs)
+        results.success = False
+        results.message = "Iteration limit reached"
+        return results
+
+    monkeypatch.setattr(blocks, "minimize", stops_short)
+
+    fitter = FITTERS["weibull"]()
+    record = fit_interval_censoring_in_blocks(
+        fitter,
+        model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+        formula=FORMULA,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+        polish=True,
+    )
+
+    assert calls == ["SLSQP"], "no other method was needed"
+    assert record.method == "slsqp"
+    assert record.residual_error_se < 1e-3

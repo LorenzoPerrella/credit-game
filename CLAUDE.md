@@ -125,6 +125,15 @@ of magnitude outside anything a credit model can mean, ten inside where the obje
 so it cannot bind at an optimum -- and a fit that ends on it is refused as not identified
 rather than published.
 
+**The polish decides whether a fit worked, not the optimiser's flag.** lifelines caps SLSQP at
+`ftol=1e-10, maxiter=200`, and on the prepayment model a fit reached the cap while stable to
+**nine significant figures for twenty evaluations** -- at the answer, reported `success=False`.
+Discarding it would have thrown away two and a half hours and started another method from
+scratch. The other direction happened too: trust-constr reported `success=True` at a point
+whose next evaluation read -8.97e+69. So a method is accepted when the polish can finish from
+its point and certify the optimum, and rejected when it cannot -- which is the only test that
+matches what the engine promises.
+
 **SLSQP gives up on an ill-conditioned design; another optimiser does not.** It solves a
 quadratic subproblem at each step, and where the curvature is bad it reports *"Rank-deficient
 equality constraint subproblem"* and stops -- the prepayment model did that at step 8 of its

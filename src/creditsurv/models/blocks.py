@@ -512,11 +512,28 @@ def fit_interval_censoring_in_blocks(
             if show_progress:
                 # lifelines prints the optimiser's result under the same flag.
                 print(results)
-            if results.fun < np.inf and results.success:
+            # **The polish decides whether a method worked, not the method's own flag.** Two
+            # cases the flag gets wrong, both met on the production table. lifelines caps SLSQP
+            # at 200 iterations, and a fit that reaches the cap comes back `success=False`
+            # although it is *at* the answer -- this one had been stable to nine significant
+            # figures for twenty evaluations. And trust-constr came back `success=True` at a
+            # point whose next evaluation read -8.97e+69. What settles it is the distance to
+            # the optimum, which only the polish measures.
+            if not _possible(float(results.fun)):
+                log.warning("%s left the likelihood (%s); trying the next", method, results.message)
+                continue
+            try:
                 _check_interior(results.x)
-                method_used = method
-                break
-            log.warning("%s did not converge (%s); trying the next method", method, results.message)
+                solution = _from_optimiser(objective, results, polish=polish)
+            except exceptions.ConvergenceError as error:
+                log.warning("%s could not be polished (%s); trying the next", method, error)
+                continue
+            if not results.success:
+                log.info(
+                    "%s stopped short (%s) and the polish finished it", method, results.message
+                )
+            method_used = method
+            break
         else:
             reports = "\n\n".join(f"minimum_results={attempt}" for attempt in attempts)
             message = (
@@ -527,7 +544,6 @@ def fit_interval_censoring_in_blocks(
             raise exceptions.ConvergenceError(message)
         if method_used != fitter._scipy_fit_method:
             log.info("optimised with %s where %s failed", method_used, fitter._scipy_fit_method)
-        solution = _from_optimiser(objective, results, polish=polish)
         method = str(method_used).lower()
     else:
         method = "newton"
