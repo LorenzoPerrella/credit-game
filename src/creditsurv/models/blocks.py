@@ -72,6 +72,22 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+#: Optimisers tried when lifelines' own stops without converging, in order.
+#:
+#: SLSQP is lifelines' choice and is the fastest here when it works. It solves a quadratic
+#: subproblem at each step, and on an ill-conditioned design it reports **"Rank-deficient
+#: equality constraint subproblem"** and gives up -- which is what the prepayment model did at
+#: step 8 of its selection, from a cold start, at a perfectly finite objective of 56.58 with
+#: 23 iterations behind it. The design is the default model's, which converges; what differs is
+#: the curvature of a likelihood whose event rate is twenty times higher.
+#:
+#: L-BFGS-B builds no subproblem and no explicit curvature, so ill-conditioning costs it
+#: iterations rather than stopping it; trust-constr is slower again and handles worse. **The
+#: estimator is unchanged**: the same likelihood on the same rows has the same optimum, and the
+#: damped Newton polish then certifies the answer is at it to under a thousandth of a standard
+#: error -- which is what makes trying another path safe rather than a different model.
+_FALLBACK_METHODS: Final[tuple[str, ...]] = ("L-BFGS-B", "trust-constr")
+
 #: Rows evaluated at once. One block's autograd tape costs about 700 bytes a row, so a
 #: million rows is 0.7 GB above the stored data: small against the machine, and large
 #: enough that the Python overhead per block is noise against the arithmetic.
@@ -422,31 +438,42 @@ def fit_interval_censoring_in_blocks(
         _newton_from(objective, start) if polish and isinstance(initial_point, pd.Series) else None
     )
     if solution is None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            results = minimize(
-                objective,
-                start,
-                method=fitter._scipy_fit_method,
-                jac=True,
-                options={
-                    "disp": show_progress,
-                    **fitter._scipy_fit_options,
-                    **(fit_options or {}),
-                },
-                callback=fitter._scipy_fit_callback,
-            )
-        if show_progress:
-            # lifelines prints the optimiser's result under the same flag.
-            print(results)
-        if not (results.fun < np.inf and results.success):
+        attempts: list[OptimizeResult] = []
+        for method in (fitter._scipy_fit_method, *_FALLBACK_METHODS):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                results = minimize(
+                    objective,
+                    start,
+                    method=method,
+                    jac=True,
+                    options={
+                        "disp": show_progress,
+                        **(fitter._scipy_fit_options if method == fitter._scipy_fit_method else {}),
+                        **(fit_options or {}),
+                    },
+                    callback=fitter._scipy_fit_callback,
+                )
+            attempts.append(results)
+            if show_progress:
+                # lifelines prints the optimiser's result under the same flag.
+                print(results)
+            if results.fun < np.inf and results.success:
+                method_used = method
+                break
+            log.warning("%s did not converge (%s); trying the next method", method, results.message)
+        else:
+            reports = "\n\n".join(f"minimum_results={attempt}" for attempt in attempts)
             message = (
                 f"Fitting did not converge after {objective.evaluations} evaluations of "
-                f"{scan.rows:,} rows in {len(scan.blocks)} blocks.\n\nminimum_results={results}"
+                f"{scan.rows:,} rows in {len(scan.blocks)} blocks, under "
+                f"{len(attempts)} method(s).\n\n{reports}"
             )
             raise exceptions.ConvergenceError(message)
+        if method_used != fitter._scipy_fit_method:
+            log.info("optimised with %s where %s failed", method_used, fitter._scipy_fit_method)
         solution = _from_slsqp(objective, results, polish=polish)
-        method = "slsqp"
+        method = str(method_used).lower()
     else:
         method = "newton"
 

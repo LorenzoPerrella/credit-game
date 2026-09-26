@@ -116,6 +116,17 @@ errors out to 4e-6: **30 minutes against 76**. On three million rows the same st
 evaluations and 7 Hessians where SLSQP needed 91 evaluations, and ended 3e-5 standard errors
 from the cold optimum.
 
+**SLSQP gives up on an ill-conditioned design; another optimiser does not.** It solves a
+quadratic subproblem at each step, and where the curvature is bad it reports *"Rank-deficient
+equality constraint subproblem"* and stops -- the prepayment model did that at step 8 of its
+selection, from a **cold** start, at a finite objective of 56.58 with 23 iterations behind it,
+on the same design the default model fits happily. What differs is the curvature of a
+likelihood whose event rate is twenty times higher. The engine now tries **L-BFGS-B** and then
+**trust-constr** when lifelines' own method stops, and records which one found the answer. The
+estimator is unchanged -- the same likelihood on the same rows has the same optimum -- and the
+damped Newton polish certifies the result is at it to under a thousandth of a standard error,
+which is what makes trying another path safe rather than a different model.
+
 ## Rules that are silent when broken
 
 **A loan without a debt-to-income is a HARP refinance, and nothing else.** Freddie Mac

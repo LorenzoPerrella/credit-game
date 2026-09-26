@@ -365,3 +365,53 @@ def test_the_slicer_hands_lifelines_the_columns_it_asks_for(macro: pd.DataFrame)
     assert ours.filter(mask) is ours.filter(mask.copy())
     assert ours["lambda_"].flags["F_CONTIGUOUS"]
     assert ours.filter(mask)["lambda_"].flags["F_CONTIGUOUS"]
+
+
+def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
+    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SLSQP solves a quadratic subproblem at each step, and on an ill-conditioned design it
+    reports "Rank-deficient equality constraint subproblem" and gives up -- which is what the
+    prepayment model did at step 8 of its selection, cold, at a finite objective of 56.58.
+
+    The estimator is unchanged by trying another path: the same likelihood on the same rows has
+    the same optimum, and the polish certifies the answer is at it. This holds the mechanism --
+    the fit comes out of the fallback, is a real fit, and says which method found it.
+    """
+    from scipy import optimize
+
+    from creditsurv.models import blocks
+
+    calls: list[str] = []
+    real = optimize.minimize
+
+    def refuses_slsqp(*args: object, **kwargs: object) -> object:
+        method = str(kwargs.get("method"))
+        calls.append(method)
+        if method.lower() == "slsqp":
+            failed = real(*args, **{**kwargs, "options": {"maxiter": 1}})
+            failed.success = False
+            failed.message = "Rank-deficient equality constraint subproblem HFTI"
+            return failed
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(blocks, "minimize", refuses_slsqp)
+
+    fitter = FITTERS["weibull"]()
+    record = fit_interval_censoring_in_blocks(
+        fitter,
+        model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+        formula=FORMULA,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+        polish=True,
+    )
+
+    assert calls[0].lower() == "slsqp"
+    assert calls[1] == "L-BFGS-B", "the first fallback is tried next"
+    assert record.method == "l-bfgs-b"
+    assert fitter.log_likelihood_ < 0, "a real fit came out of the fallback"
+    assert record.residual_error_se < 1e-3, "and the polish certifies it is at the optimum"
