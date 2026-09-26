@@ -38,8 +38,8 @@ them:
 | Monthly episodes | quarterly ones | the covariates move monthly; quarterly episodes only looked as compact because a monthly covariate was still in the key | [Data preparation](data_preparation.md#episodes-are-monthly) |
 | Screening before aggregation | aggregating from a specification chosen in advance | by the time screening ran, mis-binned covariates were baked into millions of cells | [Data preparation](data_preparation.md#the-problem) |
 | Dropping a loan missing a covariate | imputing it | imputing an underwriting characteristic invents the thing being measured; the price is HARP, now declared out of scope | [Data](data.md#what-is-out-of-scope) |
-| `orig_ltv` and `cltv_drift` | the indexed loan-to-value, or the estimated one | the level and the movement are separable; the estimated loan-to-value covers 0.8% of the 1999 vintage and 94% of 2021 | [Data dictionary](data_dictionary.md#why-loan-to-value-is-split-in-two) |
-| `channel` as retail against third party | four levels | a coding change in 2009, not a market one | [Portfolio](portfolio.md#what-was-written) |
+| *loan-to-value at origination* (`original_ltv`, formerly `orig_ltv`) and *loan-to-value change since origination* (`ltv_change`, formerly `cltv_drift`) | the indexed loan-to-value, or the estimated one | the level and the movement are separable; the estimated loan-to-value covers 0.8% of the 1999 vintage and 94% of 2021 | [Data dictionary](data_dictionary.md#why-loan-to-value-is-split-in-two) |
+| *origination channel* (`channel`) as retail against broker or correspondent | four levels | a coding change in 2009, not a market one | [Portfolio](portfolio.md#what-was-written) |
 | Every macro series lagged three months, market quotes included | contemporaneous readings "known in real time" | a loan 90 days delinquent in a month missed its payments in the three before it | [Data dictionary](data_dictionary.md#every-series-is-lagged-three-months-for-one-of-two-reasons) |
 | A count of loan-months as the weight | the balance | PD is per obligor | [Data preparation](data_preparation.md#the-weight-is-a-count-never-an-amount) |
 | `exclude` for moratoria | `censor`; counting them as defaults | forbearance went to borrowers under strain, so censoring removes loans because of their risk | [Moratorium report](reports/moratorium.md) |
@@ -48,10 +48,10 @@ them:
 ## Withdrawn
 
 !!! failure "Two priors revised after the fit, then retracted"
-    `rate_gap` and `policy_rate_gap` came out against their declared signs, and the first run
+    *mortgage rate fall since origination* (`mortgage_rate_decline`, formerly `rate_gap`) and *policy rate change since origination* (`policy_rate_change`, formerly `policy_rate_gap`) came out against their declared signs, and the first run
     kept both with the priors revised, on a mechanism -- a fixed-rate mortgage has no floating
     payment channel -- and on a marginal ordering of default rates by band offered as
-    independent evidence. **Withdrawn**: the conditional effect of `rate_gap` was zero, and the
+    independent evidence. **Withdrawn**: the conditional effect of *mortgage rate fall since origination* was zero, and the
     marginal ordering was the macro cycle. The lesson is now a rule of the project: a marginal
     relationship is evidence that a covariate is correlated with the outcome, never that it
     is identified in a model.
@@ -60,7 +60,7 @@ them:
 
 !!! failure "The selection command did not run the rule its documentation described"
     Its first complete run checked declared signs and p-values and nothing else, so it kept
-    `rate_gap`, `inflation` and `equity_return`, whose signs in the full model contradicted
+    *mortgage rate fall since origination*, *inflation* (`inflation_rate`, formerly `inflation`) and *equity return* (`equity_return`), whose signs in the full model contradicted
     their own. The rule was stated before that run; the omission was found by reading the run,
     and the run was committed as it came out so the order of events can be weighed.
 
@@ -83,6 +83,20 @@ them:
     loans at their smallest terminating age cut the wrong row after a modification and lost
     641 real defaults on 2006Q1. Both were found by tables that did not order risk the way
     the other covariates did.
+
+!!! note "Point-in-time macro series were looked for, and are not available"
+    The validation's observation that every macro series is the *revised* one, and the
+    attempt to answer it. FRED's public graph endpoint accepts a vintage date and **ignores
+    it**: `?id=UNRATE&vintage_date=2019-06-01` and `?id=UNRATE_20190601` both return 200 and
+    both return the current series, running to the latest observation, with April 2019
+    unemployment at today's 3.7. ALFRED's own endpoints answer 404 without a key and the
+    API answers 400. So every backtest here reads revised data.
+
+    What that costs is a backtest fair about the *model* and optimistic about the *data*:
+    the unemployment rate a 2018 model would have been handed differs from the one it is
+    scored with by a revision nobody could have known at the time. The finding is held to
+    the network by a test, so the day the endpoint honours the parameter the suite says so
+    rather than the limitation quietly outliving its reason.
 
 ## Where this goes next
 

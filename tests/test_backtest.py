@@ -29,14 +29,14 @@ from fixtures import DEFAULT_PARAMS, build_panel
 if TYPE_CHECKING:
     from pathlib import Path
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
 FORMULA = " + ".join(COVARIATES)
 AS_OF = pd.Period("2008-12", freq="M")
 
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.9,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=0.14,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -61,7 +61,7 @@ def _cells() -> pd.DataFrame:
             ),
             "age": [0, 6, 12, 24, 36],
             "event": [False, True, False, True, False],
-            "n": [1000, 10, 900, 8, 700],
+            "loan_months": [1000, 10, 900, 8, 700],
         }
     )
 
@@ -215,18 +215,30 @@ def test_time_varying_covariates_are_labelled_not_flagged() -> None:
     not news and must not read as a model defect."""
     rng = np.random.default_rng(3)
     train = pd.DataFrame(
-        {"fico_s": rng.normal(size=3000), "unemp_gap": rng.normal(size=3000), "n": 1.0}
+        {
+            "credit_score": rng.normal(size=3000),
+            "unemployment_change": rng.normal(size=3000),
+            "loan_months": 1.0,
+        }
     )
     test = pd.DataFrame(
-        {"fico_s": rng.normal(size=3000), "unemp_gap": rng.normal(4.0, size=3000), "n": 1.0}
+        {
+            "credit_score": rng.normal(size=3000),
+            "unemployment_change": rng.normal(4.0, size=3000),
+            "loan_months": 1.0,
+        }
     )
 
     table = stability_report(
-        train, test, ["fico_s", "unemp_gap"], time_varying=["unemp_gap"], weights_col="n"
+        train,
+        test,
+        ["credit_score", "unemployment_change"],
+        time_varying=["unemployment_change"],
+        weights_col="loan_months",
     ).set_index("covariate")
 
-    assert table.loc["unemp_gap", "interpretation"] == "expected to move"
-    assert table.loc["fico_s", "interpretation"] == "stable"
+    assert table.loc["unemployment_change", "interpretation"] == "expected to move"
+    assert table.loc["credit_score", "interpretation"] == "stable"
 
 
 # --------------------------------------------------------------------------------------
@@ -238,7 +250,7 @@ def _encoded(panel: pd.DataFrame) -> pd.DataFrame:
     """The fixture book as a weighted, interval-censored panel."""
     from creditsurv.data.panel import to_interval_censored
 
-    return to_interval_censored(panel.assign(n=1))
+    return to_interval_censored(panel.assign(loan_months=1))
 
 
 def test_lookahead_check_catches_a_corrupted_split(panel: pd.DataFrame) -> None:
@@ -260,7 +272,7 @@ def test_the_backtest_fits_once_and_scores_what_follows(panel: pd.DataFrame) -> 
     assert (split.test["period"] > AS_OF).all()
     assert fitted.n_episodes == len(split.train)
     assert result.expected_defaults > 0
-    assert result.loan_months == int(split.test["n"].sum())
+    assert result.loan_months == int(split.test["loan_months"].sum())
 
 
 def test_a_model_from_the_wrong_panel_is_refused(panel: pd.DataFrame) -> None:
@@ -271,7 +283,7 @@ def test_a_model_from_the_wrong_panel_is_refused(panel: pd.DataFrame) -> None:
     than a shortcut.
     """
     encoded = _encoded(panel)
-    everything = fit_aft(encoded, COVARIATES, FORMULA, weights_col="n")
+    everything = fit_aft(encoded, COVARIATES, FORMULA, weights_col="loan_months")
 
     with pytest.raises(ValueError, match="scoring its own training data"):
         run_backtest(encoded, AS_OF, COVARIATES, FORMULA, fitted=everything)
@@ -280,7 +292,7 @@ def test_a_model_from_the_wrong_panel_is_refused(panel: pd.DataFrame) -> None:
 def test_passing_the_fitted_model_in_does_not_refit(panel: pd.DataFrame) -> None:
     encoded = _encoded(panel)
     split = cell_split(encoded, AS_OF)
-    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="n")
+    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="loan_months")
 
     _, returned, _ = run_backtest(encoded, AS_OF, COVARIATES, FORMULA, fitted=fitted)
 
@@ -311,7 +323,7 @@ def test_the_over_time_table_covers_the_whole_test_window(panel: pd.DataFrame) -
 def test_score_refuses_an_empty_test_half(panel: pd.DataFrame) -> None:
     encoded = _encoded(panel)
     split = cell_split(encoded, AS_OF)
-    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="n")
+    fitted = fit_aft(split.train, COVARIATES, FORMULA, weights_col="loan_months")
 
     with pytest.raises(ValueError, match="No exposure after"):
         score(fitted, split.test.iloc[:0], COVARIATES, as_of=AS_OF)
@@ -380,7 +392,7 @@ def test_the_in_sample_years_arrive_beside_the_out_of_time_result(panel: pd.Data
     training_years = set(pd.PeriodIndex(split.train["period"]).year)
 
     assert set(table["group"]) == training_years
-    assert table["exposure"].sum() == pytest.approx(float(split.train["n"].sum()))
+    assert table["exposure"].sum() == pytest.approx(float(split.train["loan_months"].sum()))
     assert (table["group"] <= AS_OF.year).all(), "in-sample must stop at the reporting date"
 
 
@@ -399,13 +411,13 @@ def test_splitting_the_cells_first_gives_the_halves_splitting_the_panel_would(
     vintages = [1997 * 12, 2006 * 12, 2007 * 12]
     cells = pd.DataFrame(
         {
-            "orig_month": [month for month in vintages for _ in range(8)],
-            "purpose": pd.Categorical(["purchase", "refinance_cashout"] * 12),
-            "fico_s": [0.4] * 24,
-            "orig_ltv": [85.0] * 24,
+            "origination_month": [month for month in vintages for _ in range(8)],
+            "purpose": pd.Categorical(["purchase", "cash_out_refinance"] * 12),
+            "credit_score": [0.4] * 24,
+            "original_ltv": [85.0] * 24,
             "age": list(range(8)) * 3,
             "event": ([False] * 7 + [True]) * 3,
-            "n": [50] * 24,
+            "loan_months": [50] * 24,
         }
     )
     as_of = pd.Period("2007-03", freq="M")
@@ -452,3 +464,352 @@ def test_months_the_release_barely_covers_are_set_aside_by_name() -> None:
 
     assert list(covered["group"].astype(str)) == ["2026-01", "2026-02"]
     assert list(thin["group"].astype(str)) == ["2026-03", "2026-04"]
+
+
+# --------------------------------------------------------------------------------------
+# The master scale
+# --------------------------------------------------------------------------------------
+
+
+def test_the_master_scale_doubles_and_covers_the_line() -> None:
+    """Eight grades on geometric thresholds, declared in docs/rules.md before the run: a
+    scale drawn after seeing the distribution is a scale drawn to pass.
+    """
+    from creditsurv.backtest.metrics import GRADES, grade_of, master_scale
+
+    edges = master_scale()
+
+    assert len(edges) == GRADES - 1
+    np.testing.assert_allclose(edges[1:] / edges[:-1], 2.0)
+    assert grade_of(np.array([0.0])) == 1, "the safest grade has no floor"
+    assert grade_of(np.array([1.0])) == GRADES, "the riskiest has no ceiling"
+    assert grade_of(np.array([edges[0]]))[0] == 1, "the edges are closed on the left"
+    assert grade_of(np.array([edges[0] * 1.001]))[0] == 2
+
+
+def test_the_jeffreys_interval_says_something_where_a_normal_one_would_not() -> None:
+    """The top grades hold few defaults and sometimes none, where a normal interval has
+    zero width and no grade can fail. That is the reason the validation asked for this one.
+    """
+    from creditsurv.backtest.metrics import jeffreys_interval
+
+    lower, upper = jeffreys_interval(np.array([0.0, 5.0]), np.array([10_000.0, 10_000.0]))
+
+    # Not zero, as a Clopper-Pearson lower bound would be: Beta(1/2, n + 1/2) puts a little
+    # mass below any rate, which is the prior doing what it is there for.
+    assert 0 < lower[0] < 1e-6
+    assert 0 < upper[0] < 0.001, "no defaults in ten thousand still bounds the rate"
+    assert lower[1] < 5.0 / 10_000.0 < upper[1]
+    # The interval narrows as the exposure grows.
+    wide = jeffreys_interval(5.0, 10_000.0)
+    narrow = jeffreys_interval(500.0, 1_000_000.0)
+    assert (wide[1] - wide[0]) > (narrow[1] - narrow[0])
+
+
+def test_a_grade_passes_when_its_prediction_falls_inside_the_realised_interval() -> None:
+    from creditsurv.backtest.metrics import (
+        annualised,
+        grade_backtest,
+        master_scale_passed,
+    )
+
+    hazard = np.concatenate(
+        [np.full(2_000, 0.00005), np.full(2_000, 0.0005), np.full(2_000, 0.005)]
+    )
+    exposure = pd.Series(np.full(len(hazard), 12_000.0))
+    # Realised defaults exactly at the predicted rate: every populated grade must hold.
+    events = pd.Series(annualised(hazard) * exposure.to_numpy() / 12.0)
+
+    table = grade_backtest(pd.Series(hazard), events, exposure)
+
+    assert master_scale_passed(table)
+    assert table["passed"].all()
+    assert table["grade"].is_monotonic_increasing
+    assert (table["predicted_pd"].diff().dropna() > 0).all()
+
+    # A model predicting a tenth of what happens fails, and says so grade by grade.
+    broken = grade_backtest(pd.Series(hazard), events * 10.0, exposure)
+    assert not master_scale_passed(broken)
+    assert not broken["passed"].any()
+
+
+def test_the_predicted_pd_and_the_realised_rate_are_in_the_same_unit() -> None:
+    """Obligor-years on both sides: the denominator is loan-months over twelve, which is
+    the exposure the defaults were earned on and the unit the annualised hazard is in.
+    """
+    from creditsurv.backtest.metrics import grade_backtest
+
+    hazard = pd.Series(np.full(100, 0.001))
+    exposure = pd.Series(np.full(100, 1_200.0))
+    events = pd.Series(np.full(100, 1.2))
+
+    table = grade_backtest(hazard, events, exposure)
+
+    assert len(table) == 1
+    row = table.iloc[0]
+    assert row["obligor_years"] == pytest.approx(100 * 1_200.0 / 12.0)
+    assert row["actual_pd"] == pytest.approx(120.0 / 10_000.0)
+    assert row["predicted_pd"] == pytest.approx(1.0 - 0.999**12)
+
+
+# --------------------------------------------------------------------------------------
+# Windows with an end
+# --------------------------------------------------------------------------------------
+
+
+def test_the_declared_cuts_each_carry_twenty_four_months() -> None:
+    """Three cuts rather than one, and each closed. The previous model cut once, at
+    2024-12, and was judged on fifteen quiet months; open-ended, the 2018 cut would be
+    judged on the pandemic as well and the three would not be three regimes.
+    """
+    from creditsurv.backtest.runner import (
+        BACKTEST_CUTS,
+        BACKTEST_WINDOW_MONTHS,
+        backtest_windows,
+    )
+
+    windows = backtest_windows()
+
+    assert len(windows) == len(BACKTEST_CUTS) == 3
+    for (cut, until), declared in zip(windows, BACKTEST_CUTS, strict=True):
+        assert str(cut) == declared
+        assert (until - cut).n == BACKTEST_WINDOW_MONTHS
+    assert [str(cut) for cut, _ in windows] == ["2018-12", "2020-12", "2022-12"]
+
+
+def test_a_closed_window_scores_only_the_months_it_covers() -> None:
+    from creditsurv.backtest.splits import cell_split
+
+    months = pd.period_range("2018-01", "2022-12", freq="M")
+    cells = pd.DataFrame(
+        {
+            "period": months,
+            "event": False,
+            "loan_months": 10,
+        }
+    )
+
+    closed = cell_split(cells, pd.Period("2018-12", freq="M"), until=pd.Period("2020-12", freq="M"))
+    open_ended = cell_split(cells, pd.Period("2018-12", freq="M"))
+
+    assert closed.until == pd.Period("2020-12", freq="M")
+    assert list(closed.test["period"]) == list(pd.period_range("2019-01", "2020-12", freq="M"))
+    assert len(open_ended.test) > len(closed.test)
+    assert closed.describe()["until"] == "2020-12"
+    # The training half is the same either way: an end bounds what is scored, never what
+    # the model saw.
+    assert len(closed.train) == len(open_ended.train)
+
+
+def test_the_split_taken_from_cells_honours_the_same_end(
+    macro: pd.DataFrame,
+) -> None:
+    """The halves are taken before either is expanded, so the end has to be applied there
+    too -- expanding first and trimming after is what put the moratorium comparison at a
+    17.3 GB footprint.
+    """
+    from creditsurv.backtest.splits import split_cells
+
+    months = pd.PeriodIndex(macro.index[-30:])
+    cells = pd.DataFrame(
+        {
+            "credit_score": 720.0,
+            "original_ltv": 80.0,
+            "origination_month": [month.year * 12 + month.month - 1 for month in months],
+            "age": 0,
+            "outcome": "none",
+            "loan_months": 5,
+        }
+    )
+    as_of = months[9]
+    until = months[19]
+
+    split = split_cells(cells, macro, as_of, covariates=["credit_score"], until=until)
+
+    assert split.until == until
+    assert split.test["period"].max() == until
+    assert split.test["period"].min() == as_of + 1
+    assert len(split.test) == 10
+
+
+# --------------------------------------------------------------------------------------
+# Anchoring the level
+# --------------------------------------------------------------------------------------
+
+
+def _anchoring_frame() -> tuple[np.ndarray, np.ndarray, np.ndarray, pd.PeriodIndex]:
+    """Four years of loan-months at a known hazard, defaulting at twice the rate."""
+    months = pd.period_range("2021-01", "2025-12", freq="M")
+    hazard = np.full(len(months), 0.001)
+    weight = np.full(len(months), 100_000.0)
+    events = np.where(pd.PeriodIndex(months).year >= 2022, 0.002, 0.004)
+    return hazard, events, weight, pd.PeriodIndex(months)
+
+
+def test_the_anchor_reads_the_anchoring_window_and_nothing_else() -> None:
+    """The development window ends in 2021-12 and the test window begins in 2025-01, so a
+    multiplier that read either would be re-fitting the intercept or marking its own
+    homework. The 2021 months here default at four times the expected rate and must not
+    move the answer.
+    """
+    from creditsurv.models.anchoring import ANCHOR_WINDOW, anchor_on_window
+
+    hazard, events, weight, months = _anchoring_frame()
+
+    anchor = anchor_on_window(hazard, events, weight, months)
+
+    assert anchor.window == ANCHOR_WINDOW
+    assert anchor.multiplier == pytest.approx(2.0)
+    assert anchor.loan_months == pytest.approx(36 * 100_000.0), "36 months, not 60"
+
+
+def test_anchoring_puts_actual_over_expected_at_one_on_its_own_window() -> None:
+    from creditsurv.models.anchoring import anchor_on_window
+
+    hazard, events, weight, months = _anchoring_frame()
+    inside = (months >= pd.Period("2022-01", freq="M")) & (months <= pd.Period("2024-12", freq="M"))
+
+    anchor = anchor_on_window(hazard, events, weight, months)
+    anchored = anchor.apply(hazard)
+
+    expected = (anchored[inside] * weight[inside]).sum()
+    actual = (events[inside] * weight[inside]).sum()
+    assert actual / expected == pytest.approx(1.0)
+
+
+def test_anchoring_changes_the_level_and_leaves_the_ranking_alone() -> None:
+    """One multiplier on every hazard: the order of loans is exactly what it was, which is
+    why discrimination cannot change and why the segment views still mean something. A
+    per-segment adjustment would fix every segment's level by absorbing the model's errors
+    into the cuts the model is examined through.
+    """
+    from creditsurv.models.anchoring import Anchor
+
+    hazard = np.array([0.0001, 0.002, 0.0005, 0.01])
+    anchor = Anchor(1.7, ("2022-01", "2024-12"), 17.0, 10.0, 1_000.0)
+
+    anchored = anchor.apply(hazard)
+
+    np.testing.assert_allclose(anchored, hazard * 1.7)
+    assert list(np.argsort(anchored)) == list(np.argsort(hazard))
+    assert anchor.apply(np.array([0.9])) == pytest.approx(1.0), "a hazard stays a probability"
+
+
+def test_a_level_too_far_out_to_be_a_level_is_refused() -> None:
+    """Out by more than four times, the specification is what is wrong, and multiplying
+    would hide that behind a number that then looks calibrated.
+    """
+    from creditsurv.models.anchoring import anchor_on_window
+
+    hazard, events, weight, months = _anchoring_frame()
+
+    with pytest.raises(ValueError, match="not a level to be scaled"):
+        anchor_on_window(hazard, events * 6.0, weight, months)
+    with pytest.raises(ValueError, match="No exposure in the anchoring window"):
+        anchor_on_window(hazard[:6], events[:6], weight[:6], months[:6])
+
+
+# --------------------------------------------------------------------------------------
+# The prepayment backtest
+# --------------------------------------------------------------------------------------
+
+
+def test_a_monthly_prepayment_rate_is_quoted_as_the_market_quotes_it() -> None:
+    from creditsurv.backtest.metrics import conditional_prepayment_rate
+
+    # 0.5% a month is the 5.84% CPR every prepayment table in the world would print.
+    assert conditional_prepayment_rate(np.array([0.005]))[0] == pytest.approx(
+        1.0 - 0.995**12, rel=1e-12
+    )
+    assert conditional_prepayment_rate(np.array([0.0]))[0] == 0.0
+    assert conditional_prepayment_rate(np.array([0.02]))[0] == pytest.approx(0.2153, abs=1e-4)
+
+
+def test_prepayment_is_scored_month_by_month_rather_than_over_a_window() -> None:
+    """A rate cut can double prepayment in a quarter, so a model can hit the average of a
+    period it has exactly backwards within it. The monthly path is what says which.
+    """
+    from creditsurv.backtest.metrics import prepayment_by_month
+
+    months = pd.period_range("2022-01", "2022-06", freq="M")
+    predicted = pd.Series(np.full(6, 0.01))
+    # Realised: half the predicted rate for three months, then double it.
+    observed = pd.Series([0.005, 0.005, 0.005, 0.02, 0.02, 0.02])
+    exposure = pd.Series(np.full(6, 50_000.0))
+
+    table = prepayment_by_month(predicted, observed, exposure, pd.Series(months))
+
+    assert len(table) == 6
+    assert table["predicted_cpr"].iloc[0] == pytest.approx(1.0 - 0.99**12)
+    assert list(table["ratio"].round(3)) == [0.5, 0.5, 0.5, 2.0, 2.0, 2.0]
+    # Over the window as a whole the model looks unbiased, which is the point.
+    overall = table["prepayments"].sum() / table["expected_prepayments"].sum()
+    assert overall == pytest.approx(1.25)
+
+
+def test_prepayment_calibration_by_decile_reads_the_same_table_as_default_does() -> None:
+    """The decile machinery is the same, and deliberately: two versions of one bucketing
+    would put the same loan-month in different deciles.
+    """
+    from creditsurv.backtest.metrics import weighted_calibration
+
+    rng = np.random.default_rng(44)
+    predicted = pd.Series(rng.uniform(0.001, 0.03, size=2_000))
+    exposure = pd.Series(rng.integers(50, 5_000, size=2_000).astype(float))
+    observed = pd.Series(predicted.to_numpy() * 1.1)
+
+    table = weighted_calibration(predicted, observed * exposure, exposure)
+
+    assert len(table) == 10
+    np.testing.assert_allclose(table["ratio"].to_numpy(), 1.1, rtol=1e-9)
+
+
+def test_the_windows_command_cuts_anchors_and_grades_end_to_end(
+    tmp_path: Path, macro_module: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole of rule 1, 4, 5 and 7 on a book small enough for the suite.
+
+    The command's own numbers belong to the population, not to seven hundred loans; what
+    this holds is that every stage runs and that the report says which windows it used --
+    the failure mode of a command like this is dying at minute twenty of a four-hour run.
+    """
+    from typer.testing import CliRunner
+
+    from creditsurv.cli import app
+    from creditsurv.data.aggregate import build_cells
+    from creditsurv.data.ingest import ingest
+    from creditsurv.data.store import save_cells
+    from fixtures import write_book_archives
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CREDITSURV_REPORTS_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(
+        "creditsurv.data.fred.load_macro_panel", lambda *_args, **_kwargs: macro_module
+    )
+    write_book_archives(tmp_path / "FREDDIE MAC", macro_module, n_loans=700, seed=45)
+    ingest()
+    save_cells(build_cells())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "windows",
+            "--cuts",
+            "2012-06",
+            "--as-of",
+            "2013-06",
+            "--anchor-window",
+            "2013-07,2014-06",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    body = (tmp_path / "reports" / "windows.md").read_text()
+    assert "2012-06" in body, "the report states the cut it used"
+    # The criteria of the published model are those of the model as published, so the
+    # anchored row is there beside the unanchored one.
+    assert "anchored" in body and "unanchored" in body
+    assert "2013-07 to 2014-06" in body, "and the window the level was anchored on"
+    assert "multiplier" in body
+    assert "Twelve-month PD by grade" in body
+    assert "The cycle, in sample" in body

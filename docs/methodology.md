@@ -96,9 +96,9 @@ originated in even and in odd years, round by round.
 <!-- figure: selection_stability -->
 
 ??? info "What `nmds` would have done differently"
-    It too would have removed `vix` and `vix_gap` on their signs. It would have kept
-    `rate_gap`, `inflation` and `equity_return`, which have no declared prior and meet no rule
-    of its, and `term_spread` and `hpi_growth`, since it has no stability step. The reversal
+    It too would have removed *equity volatility* (`equity_volatility`) and *volatility change since origination* (`volatility_change`) on their signs. It would have kept
+    *mortgage rate fall since origination* (`mortgage_rate_decline`), *inflation* (`inflation_rate`) and *equity return* (`equity_return`), which have no declared prior and meet no rule
+    of its, and *yield curve slope* (`yield_curve_slope`) and *house price growth* (`house_price_growth`), since it has no stability step. The reversal
     and stability rules are this project's additions, argued in
     [variable selection](variable_selection.md).
 
@@ -112,12 +112,12 @@ Greenwood band. The band is a hundredth of a percentage point wide on 48 million
 every smooth curve lies outside it: what carries information is the size of the gap.
 
 On the selected specification the log-logistic has the better likelihood and sits slightly
-closer to Kaplan-Meier, but turns `nfci_lagged` against its declared prior. **The Weibull is
-kept for now**: changing the family is a new selection, not a swap, because every rule in
-steps 8 and 9 reads the family's coefficients; the gain against Kaplan-Meier is small; and the
-log-logistic's falling hazard at long ages is an extrapolation choice that should be made for
-its own sake. The reasoning, with the numbers, is in
-[variable selection](variable_selection.md#the-distribution-family-and-why-the-weibull-was-kept-against-a-better-likelihood).
+closer to Kaplan-Meier, but turns *financial conditions* (`financial_conditions`) against its declared prior. **The Weibull is kept for now**: changing the
+family is a new selection, not a swap, because every rule in steps 8 and 9 reads the
+family's coefficients; the gain against Kaplan-Meier is small; and the log-logistic's
+falling hazard at long ages is an extrapolation choice that should be made for its own sake.
+The reasoning, with the numbers, is in [variable
+selection](variable_selection.md#the-distribution-family-and-why-the-weibull-was-kept-against-a-better-likelihood).
 
 !!! warning "Identification"
     `period = cohort + age` holds identically, so no two of calendar time, vintage and loan
@@ -154,6 +154,12 @@ flowchart TD
 - **The polish is damped.** lifelines clips the interval probability, so far from the data
   the objective goes negative and flat, and an undamped step once landed there. A step is
   taken only to a value a likelihood can have, damped until it lowers the objective.
+
+## The rules this model is judged by
+
+Windows, the family rule, the materiality threshold, the anchoring, the acceptance criteria
+and how far the cell key may grow are fixed in [rules written first](rules.md), before the
+runs that produce the numbers they judge.
 
 ## Where to read more
 

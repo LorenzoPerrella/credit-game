@@ -11,12 +11,13 @@ Commands that need a model fit one.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, cast
+from typing import TYPE_CHECKING, Annotated, Final, cast
 
 import typer
 
 from creditsurv.config import (
     CATEGORICAL_REFERENCE,
+    DISTRIBUTION,
     MACRO_SERIES,
     ORDINAL,
     STATIC_CONTINUOUS,
@@ -24,6 +25,12 @@ from creditsurv.config import (
     default_formula,
     reports_dir,
 )
+
+#: The exit a fit is of unless another is asked for, spelled here rather than imported
+#: from ``creditsurv.data.panel``: that module pulls pandas in, and importing it at the top
+#: of the CLI put **0.85 s on every ``creditsurv --help``**. ``tests/test_smoke.py`` holds the
+#: two to each other.
+DEFAULT_CAUSE: Final = "default"
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -33,11 +40,17 @@ if TYPE_CHECKING:
     from creditsurv.backtest.splits import Split
     from creditsurv.models.aft import FitResult, Likelihood
 
-#: The reporting date every command cuts at, unless one is given. Late on purpose: a
-#: credit model wants every loan-month it can get in training, and the test window only
-#: has to be long enough to judge it. Shared by `fit`, `backtest` and `report` so that
-#: all three mean the same model by the same name.
-DEFAULT_AS_OF = "2024-12"
+#: The reporting date every command cuts at, unless one is given: the end of the
+#: **development window** of `docs/rules.md`. Shared by `fit`, `backtest` and `report` so
+#: that all three mean the same model by the same name.
+#:
+#: It was 2024-12 until September 2026, chosen late because a credit model wants every
+#: loan-month it can get. That left no room between estimation and the test window, so the
+#: level could only be anchored on data the coefficients had already seen or on the window
+#: being judged. Three years now sit between them: estimation to 2021-12, anchoring on
+#: 2022-01 to 2024-12, and the test window from 2025-01, each seeing only what the ones
+#: before it did.
+DEFAULT_AS_OF = "2021-12"
 
 #: Where `fit --save` and `report` leave the coefficient table, and where the notebooks
 #: read it.
@@ -56,7 +69,9 @@ def default_covariates() -> list[str]:
 
 
 def _echo_table(frame: pd.DataFrame, *, index: bool = False) -> None:
-    typer.echo(frame.to_string(index=index))
+    from creditsurv.names import readable
+
+    typer.echo(readable(frame.reset_index() if index else frame).to_string(index=False))
 
 
 @app.command("fetch-macro")
@@ -177,12 +192,10 @@ def portfolio() -> None:
     import json
     import logging
 
-    import pandas as pd
-
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.ingest import load_manifest
     from creditsurv.data.panel import AGE, EVENT, WEIGHT, default_rate_by_observation_month
-    from creditsurv.data.store import DEFAULT_POLICY, cells_path
+    from creditsurv.data.store import DEFAULT_POLICY, cells_path, load_cells
     from creditsurv.portfolio import (
         book_summary,
         covariate_evolution,
@@ -211,6 +224,7 @@ def portfolio() -> None:
         origination_mix("purpose"),
         figures / "mix_purpose.png",
         title="New lending by purpose",
+        variable="purpose",
     )
 
     typer.echo("Underwriting drift...")
@@ -225,10 +239,9 @@ def portfolio() -> None:
 
     # Every number docs/portfolio.md quotes (S7). The modelled figures are the cells' own,
     # once the book has been aggregated, so they are the ones every report works from.
-    cells_file = cells_path(DEFAULT_POLICY)
     cells = (
-        pd.read_parquet(cells_file, columns=["orig_month", AGE, WEIGHT, EVENT])
-        if cells_file.exists()
+        load_cells(DEFAULT_POLICY, columns=["origination_month", AGE, WEIGHT, EVENT])
+        if cells_path(DEFAULT_POLICY).exists()
         else None
     )
     performance_rows = sum(int(entry["perf"]) for entry in load_manifest().values())
@@ -249,6 +262,9 @@ def portfolio() -> None:
 @app.command()
 def profile(
     covariate: Annotated[str | None, typer.Option(help="Profile one covariate in detail.")] = None,
+    extensions: Annotated[
+        bool, typer.Option(help="Price each extension of the cell key, on nine quarters.")
+    ] = False,
 ) -> None:
     """Screen the covariates before aggregating.
 
@@ -269,6 +285,19 @@ def profile(
     )
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if extensions:
+        # What a covariate in the key actually costs, against the ceiling declared in
+        # docs/rules.md. A ceiling from the product of the level counts is not a cost.
+        from creditsurv.profiling import extension_cost
+
+        table = extension_cost()
+        destination = reports_dir() / "key_extensions.csv"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(destination, index=False)
+        _echo_table(table.round(3))
+        typer.echo(f"Written to {destination}")
+        return
 
     if covariate in _CATEGORICAL:
         _echo_table(profile_categorical(covariate).round(5))
@@ -356,7 +385,7 @@ def aggregate(
     policy = MoratoriumPolicy(moratorium)
     cells = build_cells(policy=policy)
     path = save_cells(cells, policy.value)
-    typer.echo(f"{len(cells):,} cells covering {int(cells['n'].sum()):,} loan-months")
+    typer.echo(f"{len(cells):,} cells covering {int(cells['loan_months'].sum()):,} loan-months")
     typer.echo(f"Moratorium policy: {policy.value}. Saved to {path}")
 
 
@@ -406,7 +435,7 @@ def _split(moratorium: str, as_of: pd.Period) -> tuple[Split, pd.DataFrame]:
 
 @app.command()
 def fit(
-    dist: Annotated[str, typer.Option(help="weibull or loglogistic.")] = "weibull",
+    dist: Annotated[str, typer.Option(help="weibull or loglogistic.")] = DISTRIBUTION,
     likelihood: Annotated[
         str, typer.Option(help="interval_censored or right_censored.")
     ] = "interval_censored",
@@ -415,6 +444,16 @@ def fit(
     ] = DEFAULT_AS_OF,
     save: Annotated[bool, typer.Option(help="Write the coefficients under docs/reports.")] = True,
     moratorium: MoratoriumOption = "exclude",
+    streamed: Annotated[
+        bool, typer.Option(help="Read the rows from the cell file instead of holding them.")
+    ] = False,
+    workers: Annotated[
+        int, typer.Option(help="Processes the likelihood is evaluated in, when streamed.")
+    ] = 1,
+    block_rows: Annotated[int, typer.Option(help="Cells read at a time, when streamed.")] = 250_000,
+    cause: Annotated[
+        str, typer.Option(help="default or prepayment: which exit the model is of.")
+    ] = DEFAULT_CAUSE,
 ) -> None:
     """Fit the model and print its coefficients.
 
@@ -436,22 +475,32 @@ def fit(
     from creditsurv.models.aft import Likelihood, coefficient_table, fit_aft
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    # Already encoded: cells_to_episodes writes the interval bounds as it expands,
-    # because the bounds are a function of the cell's age band and its event flag.
-    if as_of:
-        encoded = _split(moratorium, pd.Period(as_of, freq="M"))[0].train
-        typer.echo(f"Training on {int(encoded[WEIGHT].sum()):,} loan-months up to {as_of}.")
+    if streamed:
+        result = _fit_streamed(
+            as_of=as_of,
+            moratorium=moratorium,
+            distribution=dist,
+            workers=workers,
+            block_rows=block_rows,
+            cause=cause,
+        )
     else:
-        encoded, _ = _episodes(moratorium)
+        # Already encoded: cells_to_episodes writes the interval bounds as it expands,
+        # because the bounds are a function of the cell's age band and its event flag.
+        if as_of:
+            encoded = _split(moratorium, pd.Period(as_of, freq="M"))[0].train
+            typer.echo(f"Training on {int(encoded[WEIGHT].sum()):,} loan-months up to {as_of}.")
+        else:
+            encoded, _ = _episodes(moratorium)
 
-    result = fit_aft(
-        encoded,
-        default_covariates(),
-        default_formula(),
-        distribution=dist,
-        likelihood=Likelihood(likelihood),
-        weights_col=WEIGHT,
-    )
+        result = fit_aft(
+            encoded,
+            default_covariates(),
+            default_formula(),
+            distribution=dist,
+            likelihood=Likelihood(likelihood),
+            weights_col=WEIGHT,
+        )
     typer.echo(
         f"{result.distribution} / {result.likelihood.value}: "
         f"{result.n_episodes:,} cells, {result.n_events:,} defaults, "
@@ -503,7 +552,7 @@ def compare(moratorium: MoratoriumOption = "exclude") -> None:
 
 @app.command()
 def backtest(
-    as_of: Annotated[str, typer.Option(help="Reporting date, e.g. 2024-12.")] = DEFAULT_AS_OF,
+    as_of: Annotated[str, typer.Option(help="Reporting date, e.g. 2021-12.")] = DEFAULT_AS_OF,
     moratorium: MoratoriumOption = "exclude",
 ) -> None:
     """Fit once on everything up to the reporting date, then predict against realised.
@@ -528,6 +577,376 @@ def backtest(
     _echo_table(pd.DataFrame([result.summary()]))
     typer.echo("\nBy decile of predicted risk:")
     _echo_table(result.calibration.round(6))
+
+
+@app.command()
+def windows(
+    moratorium: MoratoriumOption = "exclude",
+    workers: Annotated[int, typer.Option(help="Processes each window's fit is evaluated in.")] = 1,
+    block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
+    cuts: Annotated[
+        str,
+        typer.Option(help="Reporting dates to cut at, comma-separated. The rule's, by default."),
+    ] = "",
+    as_of: Annotated[
+        str, typer.Option(help="End of the development window the level is anchored for.")
+    ] = DEFAULT_AS_OF,
+    anchor_window: Annotated[
+        str, typer.Option(help="First and last month the level is anchored on, comma-separated.")
+    ] = "",
+) -> None:
+    """Backtest the model at three cuts, anchor its level on 2022-24, and grade it.
+
+    Every threshold is declared in ``docs/rules.md`` before this runs, and those are the
+    defaults of every option here: the cuts at the end of 2018, 2020 and 2022 with 24 months
+    after each, the anchoring window of 2022-01 to 2024-12, the master scale of eight grades
+    and the criteria. The options exist so the command can be exercised on a fixture book,
+    and the report states the windows it actually used.
+
+    One fit per cut, streamed from the cell file and warm-started from the cut before, each
+    estimated on everything up to its own cut so that no window is scored by a model that saw
+    it. Nothing large is ever held: a window is read out of the parquet by its observation
+    months, which is about 3% of the table, and the in-sample cycle is taken a calendar year
+    at a time for the same reason.
+    """
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.backtest.metrics import grade_backtest
+    from creditsurv.backtest.runner import ACCEPTANCE, backtest_windows, predicted_hazard, score
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.panel import WEIGHT, CellBlocks, cells_to_episodes, ended_in
+    from creditsurv.data.store import cells_path, fit_fingerprint, load_cells_window, save_fit
+    from creditsurv.models.aft import fit_streamed
+    from creditsurv.models.anchoring import ANCHOR_WINDOW, anchor_on_window
+    from creditsurv.reporting import windows as windows_report
+    from creditsurv.views.competing import cycle_in_band
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    covariates, formula = default_covariates(), default_formula()
+    macro = load_macro_panel()
+    development_cut = pd.Period(as_of, freq="M")
+    first, last = ANCHOR_WINDOW if not anchor_window else anchor_window.split(",", 1)
+    declared = backtest_windows() if not cuts else backtest_windows(cuts.split(","))
+
+    def ordinal(period: pd.Period) -> int:
+        return int(period.year) * 12 + int(period.month) - 1
+
+    def fitted_to(cut: pd.Period, start: FitResult | None) -> FitResult:
+        """The model estimated on everything up to ``cut``, read from the cell file."""
+        source = CellBlocks(
+            str(cells_path(moratorium)),
+            macro,
+            tuple(covariates),
+            rows=block_rows,
+            months=(None, ordinal(cut)),
+        ).prepared()
+        result = fit_streamed(
+            source,
+            covariates,
+            formula,
+            distribution=DISTRIBUTION,
+            weights_col=WEIGHT,
+            initial_point=None if start is None else start.fitter.params_,
+            workers=workers,
+        )
+        record = result.blocks
+        assert record is not None
+        described = _fit_description(
+            (result.n_episodes, int(record.loan_months)),
+            formula,
+            as_of=str(cut),
+            moratorium=moratorium,
+            distribution=DISTRIBUTION,
+        )
+        save_fit(result, fit_fingerprint(**described), described)
+        return result
+
+    def episodes(opens: int | None, closes: int | None) -> pd.DataFrame | None:
+        """The episodes of one window, and nothing else from the table.
+
+        ``None`` where the window holds no cells, which for the in-sample cycle is every
+        calendar year before the book opens, and for a scoring window is a mistake that
+        deserves a message rather than a traceback.
+        """
+        cells = load_cells_window(moratorium, first=opens, last=closes)
+        if cells.empty:
+            return None
+        return cells_to_episodes(cells, macro, covariates=covariates)
+
+    def scored(opens: int | None, closes: int | None, what: str) -> pd.DataFrame:
+        """The same, where an empty window is an error: nothing to score is not a result."""
+        frame = episodes(opens, closes)
+        if frame is None:
+            message = f"No exposure in {what}; there is nothing to score there."
+            raise typer.BadParameter(message)
+        return frame
+
+    # 1. The three cuts, each judged on the months after it.
+    rows: list[dict[str, object]] = []
+    criteria: list[pd.DataFrame] = []
+    previous: FitResult | None = None
+    for cut, until in declared:
+        typer.echo(f"\nWindow {cut} to {until}: fitting on everything up to the cut...")
+        model = fitted_to(cut, previous)
+        previous = model
+        window = scored(ordinal(cut) + 1, ordinal(until), f"{cut} to {until}")
+        result = score(model, window, covariates, as_of=cut)
+        summary = result.summary()
+        rows.append(
+            {
+                "cut": str(cut),
+                "until": str(until),
+                "loan_months": summary["loan_months"],
+                "actual_defaults": summary["actual_defaults"],
+                "expected_defaults": summary["expected_defaults"],
+                "actual_over_expected": summary["actual_over_expected"],
+                "gini": summary["gini"],
+                "minutes": round(model.elapsed_seconds / 60, 1),
+            }
+        )
+        criteria.append(ACCEPTANCE.assess(result).assign(window=f"{cut} to {until}"))
+        typer.echo(
+            f"  actual over expected {result.actual_over_expected:.4f}, Gini {result.gini:.4f}"
+        )
+        del window
+
+    # 2. The development model, which the anchoring and the grades are of.
+    typer.echo(f"\nThe development model, on everything up to {development_cut}...")
+    development = fitted_to(development_cut, previous)
+
+    # 3. The level, on the anchoring window alone. Not the development window, whose months
+    #    the coefficients have already seen, and not the test window, which would be marking
+    #    its own homework.
+    anchoring = scored(
+        ordinal(pd.Period(first, freq="M")),
+        ordinal(pd.Period(last, freq="M")),
+        f"the anchoring window {first} to {last}",
+    )
+    anchor = anchor_on_window(
+        predicted_hazard(development, anchoring, covariates),
+        ended_in(anchoring),
+        anchoring[WEIGHT],
+        anchoring["period"],
+        window=(first, last),
+    )
+    typer.echo(f"  multiplier {anchor.multiplier:.4f} on {anchor.window[0]} to {anchor.window[1]}")
+    del anchoring
+
+    # 4. The test window, scored twice: the same ranking at two levels.
+    test = scored(ordinal(pd.Period(last, freq="M")) + 1, None, f"the months after {last}")
+    unanchored = score(development, test, covariates, as_of=development_cut)
+    exposure = test[WEIGHT].astype(float)
+    events = exposure * ended_in(test)
+    scaled = pd.Series(
+        anchor.apply(predicted_hazard(development, test, covariates)), index=test.index
+    )
+    anchored = score(development, test, covariates, as_of=development_cut, hazard=scaled)
+    level = pd.DataFrame(
+        [
+            {"model": "unanchored", **unanchored.summary()},
+            {"model": "anchored", **anchored.summary()},
+        ]
+    ).drop(columns="as_of")
+    grades = grade_backtest(scaled, pd.Series(events.to_numpy()), exposure)
+    # The criteria of the published model are the criteria of the model **as published**: the
+    # multiplier is part of it. The Gini is the same on both rows because one multiplier on
+    # every hazard cannot change an order, which is the point of anchoring that way.
+    criteria.append(ACCEPTANCE.assess(unanchored).assign(window=f"after {last}, unanchored"))
+    criteria.append(ACCEPTANCE.assess(anchored).assign(window=f"after {last}, anchored"))
+    del test
+
+    # 5. The cycle, in sample, a calendar year at a time -- the dispersion a single
+    #    out-of-time ratio hides, and the reason it cannot be read alone.
+    typer.echo("\nThe cycle, year by year in sample...")
+    years: list[dict[str, object]] = []
+    for year in range(int(macro.index.min().year), development_cut.year + 1):
+        opens = ordinal(pd.Period(f"{year}-01", freq="M"))
+        closes = min(ordinal(pd.Period(f"{year}-12", freq="M")), ordinal(development_cut))
+        rows_of_year = episodes(opens, closes)
+        if rows_of_year is None:
+            continue
+        weight = rows_of_year[WEIGHT].astype(float)
+        actual = float((weight * ended_in(rows_of_year)).sum())
+        predicted = float((predicted_hazard(development, rows_of_year, covariates) * weight).sum())
+        years.append(
+            {
+                "year": year,
+                "loan_months": int(weight.sum()),
+                "actual_defaults": round(actual, 1),
+                "expected_defaults": round(predicted, 1),
+                "actual_over_expected": actual / predicted if predicted > 0 else float("nan"),
+            }
+        )
+        del rows_of_year
+    by_year = pd.DataFrame(years)
+    cycle = cycle_in_band(by_year)
+
+    written = windows_report.generate(
+        pd.DataFrame(rows),
+        cycle=pd.concat(
+            [cycle, by_year.assign(year=by_year["year"].astype(str))], ignore_index=True
+        ),
+        anchor=anchor,
+        level=level,
+        grades=grades,
+        acceptance=criteria,
+        reports_dir=reports_dir(),
+    )
+    _echo_table(pd.DataFrame(rows))
+    _echo_table(cycle)
+    typer.echo(f"Written: {written}")
+
+
+@app.command()
+def family(
+    moratorium: MoratoriumOption = "exclude",
+    as_of: Annotated[
+        str, typer.Option(help="End of the development window both families were selected on.")
+    ] = DEFAULT_AS_OF,
+    block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
+) -> None:
+    """Apply rule 2 of ``docs/rules.md``: which distribution family the model keeps.
+
+    Each family's **selected** model is compared with the Aalen-Johansen cumulative incidence
+    of default, which accounts for prepayment as a competing risk, over the loan ages carrying
+    at least the exposure floor. A family whose selected model turns a declared sign is
+    excluded whatever its fit; inside a tenth of a percentage point the Weibull is kept.
+
+    Nothing is fitted here. Each selection cached the fit of the model it chose and this reads
+    them, so a family whose selection has not been run is named and skipped. The prepayment
+    hazard is the one the Weibull selection chose, held fixed across the comparison: a
+    cumulative incidence needs both hazards, and what the rule is about is the default model.
+    """
+    import json
+    import logging
+
+    import pandas as pd
+
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.panel import PREPAYMENT_CAUSE, WEIGHT, CellBlocks
+    from creditsurv.data.store import cells_identity, cells_path, outcomes_by_age
+    from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
+    from creditsurv.models.nonparametric import (
+        cumulative_incidence,
+        hazard_by_age,
+        incidence_from_hazards,
+        incidence_gap,
+    )
+    from creditsurv.models.procedure import selected_fit
+    from creditsurv.models.selection import signs_against_prior
+    from creditsurv.reporting import family as family_report
+    from creditsurv.reporting.selection import record_name
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    macro = load_macro_panel()
+    identity = cells_identity(moratorium)
+    reporting_date = pd.Period(as_of, freq="M")
+    cut = reporting_date.year * 12 + reporting_date.month - 1
+
+    def record(distribution: str, cause: str = DEFAULT_CAUSE) -> dict[str, object] | None:
+        """One selection's record, read from the JSON it wrote beside its report."""
+        name = record_name(distribution=distribution, cause=cause, published=DISTRIBUTION)
+        path = reports_dir() / f"{name}.json"
+        if not path.exists():
+            return None
+        return cast("dict[str, object]", json.loads(path.read_text()))
+
+    def covariates_of(described: dict[str, object]) -> list[str]:
+        """What the selected model reads, from the record rather than from its formula."""
+        listed = [
+            *cast("list[str]", described["static_continuous"]),
+            *cast("list[str]", described["ordinal"]),
+            *cast("list[str]", described["time_varying_continuous"]),
+            *cast("dict[str, str]", described["categorical"]),
+        ]
+        return listed
+
+    def hazards(described: dict[str, object], cause: str) -> pd.DataFrame:
+        """The selected model's mean hazard by age, over the development window."""
+        distribution = str(described["distribution"])
+        fitted = selected_fit(
+            identity=identity,
+            as_of=as_of,
+            moratorium=moratorium,
+            formula=str(described["formula"]),
+            distribution=distribution,
+            cause=cause,
+        )
+        if fitted is None:
+            flags = f"--dist {distribution}" + (
+                f" --cause {cause}" if cause != DEFAULT_CAUSE else ""
+            )
+            message = (
+                f"No cached fit of the {distribution} {cause} model on these cells. "
+                f"Run `creditsurv select {flags}`."
+            )
+            raise typer.BadParameter(message)
+        covariates = covariates_of(described)
+        source = CellBlocks(
+            str(cells_path(moratorium)),
+            macro,
+            tuple(covariates),
+            rows=block_rows,
+            months=(None, cut),
+            cause=cause,
+        ).prepared()
+        typer.echo(f"  reading the {distribution} {cause} hazards by age...")
+        return hazard_by_age(source(), fitted, covariates, weights_col=WEIGHT)
+
+    # The observed side is a statement about sums, so it is taken inside the parquet reader:
+    # a few hundred rows out of 91.6 million cells, with nothing expanded.
+    typer.echo("The observed cumulative incidence, from the cells...")
+    observed = cumulative_incidence(outcomes_by_age(moratorium, last=cut))
+
+    prepayment = record(DISTRIBUTION, PREPAYMENT_CAUSE)
+    if prepayment is None:
+        message = (
+            "The prepayment model has not been selected on these cells, and a cumulative "
+            "incidence needs both hazards. Run `creditsurv select --cause prepayment`."
+        )
+        raise typer.BadParameter(message)
+    prepaid = hazards(prepayment, PREPAYMENT_CAUSE)
+
+    gaps: dict[str, pd.DataFrame] = {}
+    signs: dict[str, list[str]] = {}
+    formulas: dict[str, str] = {}
+    for distribution in CONVERGENT_DISTRIBUTIONS:
+        described = record(distribution)
+        if described is None:
+            typer.echo(f"{distribution}: no selection record on these cells; skipped.")
+            continue
+        formulas[distribution] = str(described["formula"])
+        predicted = incidence_from_hazards(
+            {DEFAULT_CAUSE: hazards(described, DEFAULT_CAUSE), PREPAYMENT_CAUSE: prepaid}
+        )
+        gaps[distribution] = incidence_gap(predicted, observed)
+        fitted = selected_fit(
+            identity=identity,
+            as_of=as_of,
+            moratorium=moratorium,
+            formula=formulas[distribution],
+            distribution=distribution,
+        )
+        assert fitted is not None
+        signs[distribution] = signs_against_prior(fitted)
+
+    if not gaps:
+        message = "No selection has been run on these cells; there is nothing to compare."
+        raise typer.BadParameter(message)
+
+    chosen, written = family_report.generate(
+        gaps, signs, formulas=formulas, reports_dir=reports_dir()
+    )
+    typer.echo(f"\nThe rule chooses: {chosen}")
+    if chosen != DISTRIBUTION:
+        typer.echo(
+            f"config.DISTRIBUTION is {DISTRIBUTION}. Set it to {chosen} and re-run "
+            "`creditsurv select` -- every fit of it is cached, so it costs minutes -- so that "
+            "selection.json is the record of the published model."
+        )
+    typer.echo(f"Written: {written}")
 
 
 @app.command()
@@ -647,6 +1066,7 @@ def views(
     horizon: Annotated[int, typer.Option(help="Months for the term structure.")] = 60,
     model: Annotated[bool, typer.Option(help="The views that need the fitted model.")] = True,
     portfolio: Annotated[bool, typer.Option(help="The views of the book itself.")] = True,
+    block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
 ) -> None:
     """Compute the tables behind the documentation site, and write them to ``docs/tables``.
 
@@ -667,20 +1087,31 @@ def views(
     from creditsurv.config import tables_dir
     from creditsurv.data.aggregate import MoratoriumPolicy
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import AGE, EVENT, WEIGHT
-    from creditsurv.data.store import cells_path, fit_fingerprint, load_fit
+    from creditsurv.data.panel import AGE, EVENT, WEIGHT, CellBlocks, cells_to_episodes
+    from creditsurv.data.store import (
+        cells_path,
+        find_fits,
+        load_cells,
+        load_cells_window,
+        load_fit,
+        load_largest_cells,
+    )
     from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
     from creditsurv.models.aft import FitResult as Fitted
     from creditsurv.models.lifetime_pd import origination_book
+    from creditsurv.models.selection import weighted_moments
     from creditsurv.views.model import (
-        calibration_views,
+        backtest_views,
         coefficient_view,
-        covariates_over_time,
+        covariate_means_recipe,
+        in_sample_recipes,
+        in_sample_views,
         projection_views,
     )
     from creditsurv.views.portfolio import portfolio_views
     from creditsurv.views.selection import selection_views
-    from creditsurv.views.tables import write_views
+    from creditsurv.views.streamed import accumulate, decile_boundaries
+    from creditsurv.views.tables import View, write_views
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     destination = tables_dir()
@@ -688,53 +1119,114 @@ def views(
 
     if model:
         covariates, formula = default_covariates(), default_formula()
-        typer.echo("Splitting the cells...")
-        split, macro = _split(moratorium, reporting_date)
-        fingerprint = fit_fingerprint(
-            **_fit_description(split.train, formula, as_of=as_of, moratorium=moratorium)
+        # **The training half is never an object.** These tables used to be computed from the
+        # expanded split, which put the footprint near 15 GB on 59.7 million cells; the table
+        # is now 72.7 million. Two passes over the cell file do it instead: the first takes the
+        # decile boundaries, which need the whole distribution, and the second accumulates
+        # every table -- each segment, each family -- from the same read.
+        found = find_fits(
+            as_of=as_of,
+            moratorium=moratorium,
+            formula=formula,
+            distribution=DISTRIBUTION,
+            purpose=None,
         )
-        fitted = load_fit(fingerprint)
-        if not isinstance(fitted, Fitted):
+        if not found:
             typer.echo(
-                f"No cached fit {fingerprint} of this specification. Run `creditsurv report` "
-                "first: views never fit."
+                f"No cached fit of this specification at {as_of}. Run `creditsurv report` "
+                "or `creditsurv fit --streamed` first: views never fit."
             )
             raise typer.Exit(1)
+        fingerprint, described = found[0]
+        fitted = load_fit(fingerprint)
+        if not isinstance(fitted, Fitted):
+            typer.echo(f"The cached fit {fingerprint} cannot be read; views never fit.")
+            raise typer.Exit(1)
+        typer.echo(f"Scoring with fit {fingerprint} ({described.get('rows'):,} cells)...")
 
-        typer.echo("Scoring the training half and the test window...")
-        train_hazard = predicted_hazard(fitted, split.train, covariates).to_numpy()
-        test_hazard = predicted_hazard(fitted, split.test, covariates).to_numpy()
-        families = {fitted.distribution: train_hazard}
+        macro = load_macro_panel()
+        cut = reporting_date.year * 12 + reporting_date.month - 1
+        source = CellBlocks(
+            str(cells_path(moratorium)),
+            macro,
+            tuple(covariates),
+            rows=block_rows,
+            months=(None, cut),
+            model_only=False,
+        ).prepared()
+
+        models: dict[str, tuple[Fitted, list[str]]] = {DISTRIBUTION: (fitted, covariates)}
         for distribution in CONVERGENT_DISTRIBUTIONS:
-            if distribution == fitted.distribution:
+            if distribution == DISTRIBUTION:
                 continue
-            other = load_fit(
-                fit_fingerprint(
-                    **_fit_description(
-                        split.train,
-                        formula,
-                        as_of=as_of,
-                        moratorium=moratorium,
-                        distribution=distribution,
-                    )
-                )
+            other = find_fits(
+                as_of=as_of, moratorium=moratorium, distribution=distribution, purpose=None
             )
-            if isinstance(other, Fitted):
-                typer.echo(f"  and the cached {distribution} fit")
-                families[distribution] = predicted_hazard(other, split.train, covariates).to_numpy()
+            if not other:
+                continue
+            candidate = load_fit(other[0][0])
+            if isinstance(candidate, Fitted):
+                typer.echo(f"  and the cached {distribution} fit {other[0][0]}")
+                models[distribution] = (candidate, covariates)
 
-        typer.echo("Calibration, backtest, coefficients and projections by segment...")
+        typer.echo("Pass one: the decile boundaries...")
+        boundaries = decile_boundaries(source(), fitted, covariates)
+        typer.echo("Pass two: survival, calibration and the covariate means by segment...")
+        accumulated = accumulate(
+            source(),
+            models,
+            [
+                *in_sample_recipes(
+                    primary=DISTRIBUTION,
+                    families=[name for name in models if name != DISTRIBUTION],
+                    boundaries=boundaries,
+                ),
+                covariate_means_recipe(TIME_VARYING_CONTINUOUS),
+            ],
+        )
+
         tables = [
-            *calibration_views(
-                split, train_hazard=train_hazard, test_hazard=test_hazard, families=families
+            *in_sample_views(accumulated, as_of=as_of),
+            View(
+                "covariates_over_time",
+                "Macro covariates over time",
+                "The exposure-weighted mean of each time-varying covariate across the loans "
+                "observed in each month, up to the reporting date.",
+                accumulated["covariates_over_time"],
+                source="fit",
             ),
             coefficient_view(
-                fitted, split.train, [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL]
+                fitted,
+                None,
+                [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL],
+                deviations=weighted_moments(
+                    source(),
+                    [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL],
+                    weight=WEIGHT,
+                ).deviations,
             ),
-            covariates_over_time(split, TIME_VARYING_CONTINUOUS),
+        ]
+
+        # The test window and the projections read only what they need: the months after the
+        # reporting date, and the origination profiles at age zero.
+        typer.echo("The test window, and the projections from the book written today...")
+        test = cells_to_episodes(
+            load_cells_window(moratorium, first=cut + 1), macro, covariates=covariates
+        )
+        test_hazard = predicted_hazard(fitted, test, covariates).to_numpy()
+        tables += [
+            *backtest_views(test, test_hazard, as_of=as_of),
             *projection_views(
                 fitted,
-                origination_book(split.train, macro, loans),
+                origination_book(
+                    cells_to_episodes(
+                        load_largest_cells(moratorium, age=0, limit=loans),
+                        macro,
+                        covariates=covariates,
+                    ),
+                    macro,
+                    loans,
+                ),
                 macro,
                 covariates,
                 horizon_months=horizon,
@@ -742,11 +1234,11 @@ def views(
         ]
         write_views(tables, destination, fit=fingerprint)
         typer.echo(f"  {len(tables)} views of fit {fingerprint}")
-        del split, train_hazard, test_hazard, families, tables
+        del test, test_hazard, tables, accumulated
 
     if portfolio:
         typer.echo("The book by segment, the lending, the vintage curves and the macro series...")
-        cells = pd.read_parquet(cells_path(moratorium), columns=["orig_month", AGE, WEIGHT, EVENT])
+        cells = load_cells(moratorium, columns=["origination_month", AGE, WEIGHT, EVENT])
         write_views(
             portfolio_views(cells, load_macro_panel(), policy=MoratoriumPolicy(moratorium)),
             destination,
@@ -763,36 +1255,46 @@ def select(
         str, typer.Option(help="Select on everything up to this month.")
     ] = DEFAULT_AS_OF,
     moratorium: MoratoriumOption = "exclude",
+    dist: Annotated[
+        str, typer.Option(help="weibull or loglogistic: the family the whole run uses.")
+    ] = DISTRIBUTION,
+    cause: Annotated[
+        str, typer.Option(help="default or prepayment: which exit is being modelled.")
+    ] = DEFAULT_CAUSE,
+    workers: Annotated[
+        int, typer.Option(help="Processes each fit's likelihood is evaluated in.")
+    ] = 1,
+    block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
 ) -> None:
     """Run the variable selection on the training half, and write what it chose.
 
-    Steps 5 to 9 of ``docs/variable_selection.md`` on the whole population up to
+    Steps 5 to 10 of ``docs/variable_selection.md`` on the whole population up to
     ``--as-of``: correlation, variance inflation, univariate screening, backward
-    elimination and stability. On the whole population that is days, and it resumes --
-    every fit is saved as it lands -- so a run that stops picks up where it was.
+    elimination, stability and materiality. On the whole population that is days, and it
+    resumes -- every fit is saved as it lands -- so a run that stops picks up where it was.
+
+    ``--dist`` takes the whole procedure through one family. Rule 2 of ``docs/rules.md``
+    compares the two *selected* models rather than two fits of one specification, which is
+    only possible because every rule of steps 8, 9 and 10 reads the family's own
+    coefficients.
+
+    ``--cause prepayment`` selects the competing model instead, on the same cells: a
+    default becomes censoring, and the declared priors are rule 6's rather than the default
+    model's. They are not the same priors and cannot be -- a credit score that lengthens
+    survival shortens the time to repayment -- so a run with one map and the other cause
+    would eliminate covariates for disagreeing with the wrong economics.
 
     The report goes to ``docs/reports/selection.md`` with ``selection.json`` beside it, the
     record the configuration is tested against. See ``creditsurv.models.procedure``.
     """
     import logging
 
-    import numpy as np
     import pandas as pd
 
     from creditsurv.config import MACRO_CANDIDATES
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import (
-        AGE_START,
-        EVENT,
-        EXACT_OBSERVATION,
-        LOWER_BOUND,
-        UPPER_BOUND,
-        WEIGHT,
-        cells_to_episodes,
-        episode_step,
-        observation_months,
-    )
-    from creditsurv.data.store import cells_identity, load_cells
+    from creditsurv.data.panel import WEIGHT, CellBlocks
+    from creditsurv.data.store import cells_identity, cells_path
     from creditsurv.models.procedure import (
         BASE_CATEGORICAL,
         CANDIDATE_CATEGORICAL,
@@ -801,6 +1303,7 @@ def select(
         Fits,
         run_selection,
     )
+    from creditsurv.models.selection import EXPECTED_SIGNS, PREPAYMENT_SIGNS, weighted_moments
     from creditsurv.reporting import selection
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -813,30 +1316,53 @@ def select(
         *CANDIDATE_CATEGORICAL,
     ]
 
-    # The training half only, and nothing of the test half is ever built: selection runs
-    # on the months the model may see. The half is taken out and the whole table let go
-    # before the expansion, which adds fifteen macro columns and peaks at several GB more.
-    cells = load_cells(moratorium)
+    # **The training half is never an object.** It used to be expanded whole -- 91.6 million
+    # cells, fifteen macro columns, a frame of many gigabytes -- and every one of the twenty-odd
+    # fits then held its stored design beside it. Here the cell file is described instead, and
+    # each fit reads its own share of the parquet in `workers` processes: the same
+    # specification the two ways agrees to 9.4e-07 standard errors, at 4.7 GB against 15.
+    #
+    # Nothing of the test half is read either way: the window stops at the reporting date.
     cut = reporting_date.year * 12 + reporting_date.month - 1
-    step = episode_step(cells)
-    selected = cells.iloc[np.flatnonzero(observation_months(cells).to_numpy() <= cut)]
-    del cells
-    train = cells_to_episodes(selected, load_macro_panel(), covariates=candidates, step=step)
-    del selected
-    halves = (train["orig_month"].to_numpy() // 12) % 2 == 0
+    source = CellBlocks(
+        str(cells_path(moratorium)),
+        load_macro_panel(),
+        tuple(candidates),
+        rows=block_rows,
+        months=(None, cut),
+        cause=cause,
+    ).prepared()
 
-    # Only what a fit or a covariance reads. The calendar columns, the episode end and the
-    # vintage label are a quarter of the frame on ~60 million rows, and every fit in the
-    # selection holds its stored design beside it.
-    keep = {*candidates, AGE_START, LOWER_BOUND, UPPER_BOUND, EXACT_OBSERVATION, WEIGHT, EVENT}
-    for column in [name for name in train.columns if name not in keep]:
-        del train[column]
-
+    # One pass for steps 5 and 6, which need a weighted covariance of the **continuous**
+    # candidates and nothing else -- a covariance of a treatment-coded level is not a thing
+    # this procedure has a use for. It also counts the rows and the exposure, so the record
+    # has them without a second pass; the selection used to take that pass twice.
+    continuous = [*LOAN_CONTINUOUS, *LOAN_ORDINAL, *MACRO_CANDIDATES]
+    typer.echo(f"Reading {source.source} for the correlation of {len(continuous)} candidates...")
+    moments = weighted_moments(source(), continuous, weight=WEIGHT)
     identity = cells_identity(moratorium)
-    typer.echo(f"Selecting on {len(train):,} cells, {int(train[WEIGHT].sum()):,} loan-months.")
+    typer.echo(
+        f"Selecting {cause} on {moments.rows:,} cells, {int(moments.loan_months):,} "
+        f"loan-months, with the {dist} family in {workers} process(es)."
+    )
 
-    fits = Fits(train, identity=identity, as_of=as_of, moratorium=moratorium)
-    record = run_selection(train, fits, halves=halves)
+    fits = Fits(
+        None,
+        identity=identity,
+        as_of=as_of,
+        moratorium=moratorium,
+        distribution=dist,
+        cause=cause,
+        blocks=source,
+        workers=workers,
+    )
+    record = run_selection(
+        None,
+        fits,
+        stability=True,
+        moments=moments,
+        signs=EXPECTED_SIGNS if cause == DEFAULT_CAUSE else PREPAYMENT_SIGNS,
+    )
     written = selection.generate(record, reports_dir=reports_dir())
 
     time_varying = tuple(name for name in record.selected.continuous if name in MACRO_CANDIDATES)
@@ -920,35 +1446,113 @@ def check_calendar(moratorium: MoratoriumOption = "exclude") -> None:
     typer.echo(f"Written: {destination}")
 
 
+def _fit_streamed(
+    *,
+    as_of: str,
+    moratorium: str,
+    distribution: str,
+    workers: int,
+    block_rows: int,
+    cause: str = DEFAULT_CAUSE,
+) -> FitResult:
+    """Fit from the cell file, in ``workers`` processes, and save it under its fingerprint.
+
+    The rows are never held: each process reads its share of the cells, expands it, and keeps
+    it compactly. The fit is cached under the same description a fit made in memory is, so
+    `report` and `views` find it by the specification rather than by how it was made.
+    """
+    import pandas as pd
+
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.panel import WEIGHT, CellBlocks
+    from creditsurv.data.store import cells_path, fit_fingerprint, save_fit
+    from creditsurv.models.aft import fit_streamed
+
+    formula = default_formula()
+    cut = None
+    if as_of:
+        reporting_date = pd.Period(as_of, freq="M")
+        cut = reporting_date.year * 12 + reporting_date.month - 1
+    source = CellBlocks(
+        str(cells_path(moratorium)),
+        load_macro_panel(),
+        tuple(default_covariates()),
+        rows=block_rows,
+        months=(None, cut),
+        cause=cause,
+    )
+    source = source.prepared()
+    typer.echo(f"Reading {source.source} in {workers} process(es)...")
+    result = fit_streamed(
+        source,
+        default_covariates(),
+        formula,
+        distribution=distribution,
+        weights_col=WEIGHT,
+        workers=workers,
+    )
+    record = result.blocks
+    assert record is not None
+    described = _fit_description(
+        (result.n_episodes, int(record.loan_months)),
+        formula,
+        as_of=as_of,
+        moratorium=moratorium,
+        distribution=distribution,
+        cause=cause,
+    )
+    fingerprint = fit_fingerprint(**described)
+    path = save_fit(result, fingerprint, {**described, "minutes": result.elapsed_seconds / 60})
+    typer.echo(
+        f"  {record.rows:,} cells in {record.blocks} blocks, {record.stored_bytes / 1e9:.2f} GB "
+        f"stored, {record.evaluations} evaluations, {result.elapsed_seconds / 60:.1f} minutes"
+    )
+    typer.echo(f"  saved as {fingerprint} to {path}")
+    return result
+
+
 def _fit_description(
-    encoded: pd.DataFrame,
+    counted: pd.DataFrame | tuple[int, int],
     formula: str,
     *,
     as_of: str,
     moratorium: str,
-    distribution: str = "weibull",
-    weights_col: str | None = "n",
+    distribution: str = DISTRIBUTION,
+    weights_col: str | None = "loan_months",
     ancillary: str | None = None,
     likelihood: Likelihood | None = None,
+    cause: str = DEFAULT_CAUSE,
 ) -> dict[str, object]:
     """What a report's fit is cached under, and so how any command finds it again.
 
+    ``counted`` is the panel, or its row and loan-month counts when the rows were never held
+    as a frame -- a fit streamed from the cell file counts them as it reads.
+
     The moratorium policy is in it because the two treatments can produce panels of similar
     size, and a censor fit silently reused for exclude would compare a model with itself.
-    The ancillary formula and the likelihood enter only when they are not the defaults, so
-    the report's own Weibull keeps the name it has always had.
+    The ancillary formula, the likelihood and the cause enter only when they are not the
+    defaults, so the report's own Weibull keeps the name it has always had -- and a
+    prepayment fit, which reads the same cells and the same formula and would otherwise
+    collide with the default fit's fingerprint, does not.
     """
     from creditsurv.models.aft import Likelihood as Likelihoods
 
+    if isinstance(counted, tuple):
+        rows, loan_months = counted
+    else:
+        rows = len(counted)
+        loan_months = int(counted[weights_col].sum()) if weights_col else rows
     described: dict[str, object] = {
         "as_of": as_of,
         "moratorium": moratorium,
         "formula": formula,
         "distribution": distribution,
         "weights_col": weights_col,
-        "rows": len(encoded),
-        "loan_months": int(encoded[weights_col].sum()) if weights_col else len(encoded),
+        "rows": rows,
+        "loan_months": loan_months,
     }
+    if cause != DEFAULT_CAUSE:
+        described["cause"] = cause
     if ancillary is not None:
         described["ancillary"] = ancillary
     if likelihood is not None and likelihood is not Likelihoods.INTERVAL_CENSORED:
@@ -1017,7 +1621,7 @@ def _cached_fit(*, as_of: str, moratorium: str) -> Callable[..., FitResult]:
         covariates: Sequence[str],
         formula: str,
         *,
-        distribution: str = "weibull",
+        distribution: str = DISTRIBUTION,
         likelihood: Likelihood | None = None,
         weights_col: str | None = None,
         ancillary: str | None = None,

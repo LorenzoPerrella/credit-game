@@ -64,10 +64,10 @@ been written:
 | Field | Observed | What the assumption got wrong |
 |---|---|---|
 | `loan_purpose` | P 28.9%, N 44.8%, C 26.3%, **`9` 0.0%** | `9` is "not available". An `ELSE` branch folded it into `refinance_rate_term`. |
-| `channel` | R 55.0%, **T 24.8%**, C 14.4%, B 5.8%, `9` 0.0% | `T` is a quarter of the book. It had been merged into `correspondent`, which is smaller. |
+| *origination channel* (`channel`) | R 55.0%, **T 24.8%**, C 14.4%, B 5.8%, `9` 0.0% | `T` is a quarter of the book. It had been merged into `correspondent`, which is smaller. |
 | `amortization_type` | **FRM 100%** | Modelled as a covariate. It has one value. |
 | `interest_only_indicator` | **N 100%** | Same. |
-| `property_type` | SF 75.7%, PU 17.2%, CO 6.4%, MH 0.5%, CP 0.2%, `99` | Tail below 5% left as its own levels. |
+| *property type* (`property_type`) | SF 75.7%, PU 17.2%, CO 6.4%, MH 0.5%, CP 0.2%, `99` | Tail below 5% left as its own levels. |
 | `number_of_units` | 1 98.1%, 2 1.4%, 3 0.3%, 4 0.2%, `99` | Same. |
 | `occupancy_status` | P 92.0%, I 4.8%, S 3.3% | Below the 5% rule, but kept — see below. |
 
@@ -77,13 +77,13 @@ Decisions taken, and why:
   not categories. Every `CASE` in `_CATEGORICAL` now lists its branches explicitly and
   has **no `ELSE`**, so an unmapped code becomes NULL rather than being absorbed into
   whichever level the author happened to put last.
-- **`channel`: `T` kept separate.** Third-party origination, not otherwise specified,
+- ***Origination channel*: `T` kept separate.** Third-party origination, not otherwise specified,
   is 24.8% of exposure. Merging it into `correspondent` at 14.4% would have hidden a
   quarter of the portfolio inside a smaller category.
 - **`amortization_type` and `interest_only_indicator` dropped.** One value each. They
   are listed in `DEGENERATE_FIELDS` rather than silently omitted, so the next reader
   does not spend an afternoon adding them back.
-- **`property_type`: MH and CP merged into `other`**; `number_of_units`: 2, 3 and 4
+- ***Property type*: MH and CP merged into `other`**; `number_of_units`: 2, 3 and 4
   merged into `2-4`. Both tails are below 5%, which is the `nmds` rule.
 - **`occupancy_status`: all three levels kept**, although investor (4.8%) and second
   home (3.3%) sit below the 5% rule. With 49.2 million loans that is 2.4 million and
@@ -178,24 +178,24 @@ coefficient lengthens survival and therefore *lowers* risk:
 
 | Covariate | Expected | Reasoning |
 |---|---|---|
-| `fico_s` | **+** | Better credit survives longer |
-| `orig_ltv`, `orig_cltv` | **−** | More leverage fails sooner |
-| `dti` | **−** | Heavier debt burden fails sooner |
-| `cltv_drift` | **−** | Leverage rising after origination fails sooner |
-| `unemp_gap` | **−** | Unemployment above its origination level fails sooner |
-| `nfci_lagged` | **−** | Tighter financial conditions fail sooner |
-| `mi_percent` | **+** | Insured loans are underwritten to a stricter standard |
+| *credit score* (`credit_score`, formerly `fico_s`) | **+** | Better credit survives longer |
+| *loan-to-value at origination* (`original_ltv`, formerly `orig_ltv`), *combined loan-to-value at origination* (`original_cltv`, formerly `orig_cltv`) | **−** | More leverage fails sooner |
+| *debt-to-income at origination* (`debt_to_income`, formerly `dti`) | **−** | Heavier debt burden fails sooner |
+| *loan-to-value change since origination* (`ltv_change`, formerly `cltv_drift`) | **−** | Leverage rising after origination fails sooner |
+| *unemployment change since origination* (`unemployment_change`, formerly `unemp_gap`) | **−** | Unemployment above its origination level fails sooner |
+| *financial conditions* (`financial_conditions`, formerly `nfci_lagged`) | **−** | Tighter financial conditions fail sooner |
+| *mortgage insurance coverage* (`insurance_coverage`, formerly `mi_percent`) | **+** | Insured loans are underwritten to a stricter standard |
 
 A covariate with **no** declared prior answers to its own sign instead: the sign of its
 coefficient beside the loan block at step 7. If the full model turns it around, it is
-removed. This is the marginal/conditional reversal rule the first run used on
-`credit_spread` and `term_spread`, set out under
-[the covariates given up](#credit_spread-and-term_spread-collinearity-the-textbook-case):
-a covariate whose conditional effect contradicts its own is carrying something other than
-what its name says. The executable version measures "its own" as the step-7 coefficient,
-fitted on the training half beside the loan block, rather than by reading a table of
-marginal default rates by band, which conditions on nothing and was computed on every
-month including the test window.
+removed. This is the marginal/conditional reversal rule the first run used on *corporate
+bond spread* (`corporate_bond_spread`, formerly `credit_spread`) and *yield curve slope*
+(`yield_curve_slope`, formerly `term_spread`), set out under [the covariates given
+up](#corporate-bond-spread-and-yield-curve-slope-collinearity-the-textbook-case): a covariate whose
+conditional effect contradicts its own is carrying something other than what its name says.
+The executable version measures "its own" as the step-7 coefficient, fitted on the training
+half beside the loan block, rather than by reading a table of marginal default rates by
+band, which conditions on nothing and was computed on every month including the test window.
 
 One covariate is removed per step, the model refitted, and the test repeated. A
 backwards sign outranks a reversal, and a reversal outranks any p-value: both say the
@@ -224,22 +224,27 @@ What changed on the way, each for a stated reason:
   before any fit, because the stability rule below only removes a covariate beside a
   larger one of the same dimension. Decided afterwards, the rule would drop whatever came
   out inconvenient.
-- **`has_mi` and `first_time_buyer` are candidates.** They were kept out of the cell key
-  on a claim that loan characteristics cost sixteen times the table; measured, the two
-  together cost 1.19×. They go through the screen beside the loan block, whatever it
+- ***Mortgage insurance* (`mortgage_insurance`, formerly `has_mi`) and *buyer type*
+  (`buyer_type`, formerly `first_time_buyer`) are candidates.** They were kept out of the
+  cell key on a claim that loan characteristics cost sixteen times the table; measured, the
+  two together cost 1.19×. They go through the screen beside the loan block, whatever it
   says (M3).
-- **`vix_gap` and `inflation_gap` sit beside `vix` and `inflation`.** A level at the
-  observation date is the same for every loan in a month, so its coefficient is a
-  calendar effect by construction; its move since origination is not (S5). In the
-  elimination priority a level gives way before its own gap form.
-- **The reversal rule is run, not only described.** The first version of the command
-  checked declared priors and p-values and nothing else, so its first complete run --
-  committed as it came out -- kept `rate_gap`, `inflation` and `equity_return`, three
-  covariates with no prior whose signs in the full model contradicted their own: `rate_gap`
-  −0.190 alone and +0.018 together, `inflation` +10.0 and −8.0, `equity_return` +0.43 and
-  −0.08. The rule was stated in this document before that run and applied by hand in the
-  first one; the omission was found by reading the run, and it is recorded here so the
-  reader can weigh that order of events.
+- ***Volatility change since origination* (`volatility_change`, formerly `vix_gap`) and
+  *inflation change since origination* (`inflation_change`, formerly `inflation_gap`) sit
+  beside *equity volatility* (`equity_volatility`, formerly `vix`) and *inflation*
+  (`inflation_rate`, formerly `inflation`).** A level at the observation date is the same
+  for every loan in a month, so its coefficient is a calendar effect by construction; its
+  move since origination is not (S5). In the elimination priority a level gives way before
+  its own gap form.
+- **The reversal rule is run, not only described.** The first version of the command checked
+  declared priors and p-values and nothing else, so its first complete run -- committed as
+  it came out -- kept *mortgage rate fall since origination* (`mortgage_rate_decline`,
+  formerly `rate_gap`), *inflation* and *equity return* (`equity_return`), three covariates
+  with no prior whose signs in the full model contradicted their own: *mortgage rate fall
+  since origination* −0.190 alone and +0.018 together, *inflation* +10.0 and −8.0, *equity
+  return* +0.43 and −0.08. The rule was stated in this document before that run and applied
+  by hand in the first one; the omission was found by reading the run, and it is recorded
+  here so the reader can weigh that order of events.
 - **Every fit is polished to the optimum.** lifelines' optimiser stops on a change in the
   mean log-likelihood, and on four quarters of the book it stopped up to 5.9 standard
   errors short. A sign read off a fit that far from its optimum is not the fit's sign.
@@ -254,70 +259,73 @@ are superseded.
 `creditsurv select` under `exclude`, on **59,663,961 cells covering 2,345,846,897
 loan-months** up to 2024-12, with no sampling: the [report](reports/selection.md) and the
 [record](reports/selection.json) the configuration is tested against. Nineteen continuous
-candidates -- the loan block and fifteen macro series, `vix_gap` and `inflation_gap` among
-them beside their levels -- with `purpose` and `occupancy` in the base and `has_mi` and
-`first_time_buyer` screened beside it.
+candidates -- the loan block and fifteen macro series, *volatility change since origination*
+and *inflation change since origination* among them beside their levels -- with *loan
+purpose* (`purpose`) and *occupancy* (`occupancy`) in the base and *mortgage insurance* and
+*buyer type* screened beside it.
 
 | Step | Removed | Why |
 |---|---|---|
-| 5. Correlation | nothing | one pair at the threshold, `rate_gap` and `policy_rate_gap` at −0.800, reported |
-| 6. Variance inflation | `credit_spread` | 11.9 |
+| 5. Correlation | nothing | one pair at the threshold, `mortgage_rate_decline` and `policy_rate_change` at −0.800, reported |
+| 6. Variance inflation | `corporate_bond_spread` | 11.9 |
 | 7. Screen | nothing | every candidate at p = 0 beside the loan block |
-| 8. Backwards sign | `vix_gap`, then `vix` | +0.00254 and +0.00935, where negative is expected |
-| 8. Reversed sign | `rate_gap`, `equity_return`, `inflation` | −0.190 alone to +0.018 together, +0.431 to −0.086, +10.04 to −8.33 |
-| 9. Stability | `term_spread`, `hpi_growth` | sign changes between the halves, beside `policy_rate_gap` and `cltv_drift` |
+| 8. Backwards sign | `volatility_change`, then `equity_volatility` | +0.00254 and +0.00935, where negative is expected |
+| 8. Reversed sign | `mortgage_rate_decline`, `equity_return`, `inflation_rate` | −0.190 alone to +0.018 together, +0.431 to −0.086, +10.04 to −8.33 |
+| 9. Stability | `yield_curve_slope`, `house_price_growth` | sign changes between the halves, beside `policy_rate_change` and `ltv_change` |
 
 What remains, with the effect of one standard deviation on log survival time on the whole
 training half and on loans originated in even and in odd years, from the last round:
 
 | Covariate | Dimension | Whole | Even years | Odd years |
 |---|---|---|---|---|
-| `fico_s` | credit quality | +0.434 | +0.442 | +0.425 |
-| `orig_ltv` | leverage at origination | −0.203 | −0.193 | −0.211 |
-| `dti` | debt burden | −0.176 | −0.176 | −0.172 |
-| `term_years` | term | −0.241 | −0.246 | −0.234 |
-| `cltv_drift` | housing | −0.182 | −0.168 | −0.186 |
-| `unemp_gap` | labour | −0.094 | −0.108 | −0.083 |
-| `nfci_lagged` | financial stress | −0.004 | −0.005 | −0.005 |
-| `policy_rate_gap` | interest rates | +0.125 | +0.112 | +0.144 |
-| `sentiment` | confidence | +0.090 | +0.096 | +0.074 |
-| `starts_growth` | housing | +0.077 | +0.068 | +0.088 |
-| `inflation_gap` | prices | +0.056 | +0.083 | +0.020 |
+| *credit score* | credit quality | +0.434 | +0.442 | +0.425 |
+| *loan-to-value at origination* | leverage at origination | −0.203 | −0.193 | −0.211 |
+| *debt-to-income at origination* | debt burden | −0.176 | −0.176 | −0.172 |
+| *original term* (`term_years`) | term | −0.241 | −0.246 | −0.234 |
+| *loan-to-value change since origination* | housing | −0.182 | −0.168 | −0.186 |
+| *unemployment change since origination* | labour | −0.094 | −0.108 | −0.083 |
+| *financial conditions* | financial stress | −0.004 | −0.005 | −0.005 |
+| *policy rate change since origination* (`policy_rate_change`, formerly `policy_rate_gap`) | interest rates | +0.125 | +0.112 | +0.144 |
+| *consumer sentiment* (`consumer_sentiment`, formerly `sentiment`) | confidence | +0.090 | +0.096 | +0.074 |
+| *housing starts growth* (`housing_starts_growth`, formerly `starts_growth`) | housing | +0.077 | +0.068 | +0.088 |
+| *inflation change since origination* | prices | +0.056 | +0.083 | +0.020 |
 
-Plus `purpose`, `occupancy`, `has_mi` and `first_time_buyer`.
+Plus *loan purpose*, *occupancy*, *mortgage insurance* and *buyer type*.
 
-**`vix` is out, and not by hand.** Beside the loan block alone it has the expected sign,
-−0.0198; in the full model it turns positive. With moratoria no longer counted as defaults,
-part of what made it the first run's largest effect has gone -- the validation suspected
-as much (S5) -- and what is left is shared with `nfci_lagged` and the macro block. Its gap
-form fared no better.
+***Equity volatility* is out, and not by hand.** Beside the loan block alone it has the
+expected sign, −0.0198; in the full model it turns positive. With moratoria no longer
+counted as defaults, part of what made it the first run's largest effect has gone -- the
+validation suspected as much (S5) -- and what is left is shared with *financial conditions*
+and the macro block. Its gap form fared no better.
 
-**Where a level and its gap were both offered, the gap survived.** `inflation` reversed
-against its own sign while `inflation_gap` kept its: side by side, the level and the move
-since origination were between them reading mostly inflation at origination, a cohort
-effect. The level was the calendar effect the validation named; the gap varies across
-loans observed in the same month.
+**Where a level and its gap were both offered, the gap survived.** *Inflation* reversed
+against its own sign while *inflation change since origination* kept its: side by side, the
+level and the move since origination were between them reading mostly inflation at
+origination, a cohort effect. The level was the calendar effect the validation named; the
+gap varies across loans observed in the same month.
 
-**Three readings to hold loosely.** `nfci_lagged` is kept at an effect of −0.004 a standard
-deviation: stable and right-signed, and nearly nothing, so in a stress scenario it
-contributes its sign and little else. `policy_rate_gap` has no declared prior, and its
-positive sign -- a policy rate below where the loan was written shortens survival -- reads as
-the central bank cutting into recessions rather than as a payment channel a fixed-rate
-mortgage does not have. And housing carries two covariates, the position (`cltv_drift`)
-and the construction cycle (`starts_growth`); step 9 separates a pair only when the smaller
-changes sign, and neither did.
+**Three readings to hold loosely.** *Financial conditions* is kept at an effect of −0.004 a
+standard deviation: stable and right-signed, and nearly nothing, so in a stress scenario it
+contributes its sign and little else. *Policy rate change since origination* has no declared
+prior, and its positive sign -- a policy rate below where the loan was written shortens
+survival -- reads as the central bank cutting into recessions rather than as a payment
+channel a fixed-rate mortgage does not have. And housing carries two covariates, the
+position (*loan-to-value change since origination*) and the construction cycle (*housing
+starts growth*); step 9 separates a pair only when the smaller changes sign, and neither
+did.
 
-**The first run's other eliminations were judgments, not rules.** `sentiment` was given up
-for having no marginal signal and `starts_growth` for a U-shaped marginal profile. Neither
+**The first run's other eliminations were judgments, not rules.** *Consumer sentiment* was given up
+for having no marginal signal and *housing starts growth* for a U-shaped marginal profile. Neither
 judgment has a threshold that could have been fixed in advance, so neither is part of the
-executable procedure, and both covariates are back. The U in `starts_growth` is still a
+executable procedure, and both covariates are back. The U in *housing starts growth* is still a
 reason to band it; that would be a new candidate, not a different reading of this one.
 
-**What `nmds` would have done differently.** It too would have removed `vix` and `vix_gap`
-on their signs. It would have kept `rate_gap`, `inflation` and `equity_return`, which have
-no prior and meet no rule of its, and `term_spread` and `hpi_growth`, since it has no
-stability step. The reversal and stability rules are this project's additions, argued in
-the sections that follow.
+**What `nmds` would have done differently.** It too would have removed *equity volatility*
+and *volatility change since origination* on their signs. It would have kept *mortgage rate
+fall since origination*, *inflation* and *equity return*, which have no prior and meet no
+rule of its, and *yield curve slope* and *house price growth* (`house_price_growth`,
+formerly `hpi_growth`), since it has no stability step. The reversal and stability rules are
+this project's additions, argued in the sections that follow.
 
 ### The distribution family, and why the Weibull was kept against a better likelihood
 
@@ -327,7 +335,7 @@ they part ([methodology, section 3](reports/methodology.md)):
 | | Weibull | Log-logistic |
 |---|---|---|
 | AIC, episode scale | 83,961 points behind | **ahead** |
-| Declared priors turned around | none | `nfci_lagged` |
+| Declared priors turned around | none | `financial_conditions` |
 | Mean distance from Kaplan-Meier | 1.26 points of survival | **1.21** |
 | Largest distance | 3.26 | **2.90** |
 | At 312 months | −3.20 | **−2.74** |
@@ -341,7 +349,7 @@ The Weibull is kept, for now, for three reasons, none of which is that the likel
 not matter.
 
 * **Changing the family is a new selection, not a swap.** Every rule in steps 8 and 9 reads
-  coefficients, and the coefficients are the family's. Under the log-logistic `nfci_lagged`
+  coefficients, and the coefficients are the family's. Under the log-logistic *financial conditions*
   points the wrong way and step 8 would remove it; what that does to the rest cannot be
   read off this run.
 * **Against Kaplan-Meier the log-logistic is closer, but not much.** 0.05 points of survival
@@ -368,24 +376,24 @@ Seventeen, after the screening and remapping above:
 
 | Group | Covariates |
 |---|---|
-| Origination | `fico_s`, `orig_ltv`, `dti`, `term_years` |
-| Mark-to-market | `cltv_drift` |
-| Macro, gap since origination | `unemp_gap`, `policy_rate_gap`, `rate_gap` |
-| Macro, level now | `nfci_lagged`, `term_spread`, `credit_spread`, `vix`, `sentiment` |
-| Macro, year-on-year | `hpi_growth`, `inflation`, `equity_return`, `starts_growth` |
+| Origination | `credit_score`, `original_ltv`, `debt_to_income`, `term_years` |
+| Mark-to-market | `ltv_change` |
+| Macro, gap since origination | `unemployment_change`, `policy_rate_change`, `mortgage_rate_decline` |
+| Macro, level now | `financial_conditions`, `yield_curve_slope`, `corporate_bond_spread`, `equity_volatility`, `consumer_sentiment` |
+| Macro, year-on-year | `house_price_growth`, `inflation_rate`, `equity_return`, `housing_starts_growth` |
 | Categorical | `purpose`, `occupancy` |
 
 ### 5. Weighted correlation — nothing reaches 0.8
 
 | Pair | ρ (exposure-weighted) |
 |---|---|
-| `rate_gap` ↔ `policy_rate_gap` | **−0.793** |
-| `credit_spread` ↔ `vix` | +0.701 |
-| `policy_rate_gap` ↔ `term_spread` | −0.686 |
-| `nfci_lagged` ↔ `credit_spread` | +0.670 |
-| `nfci_lagged` ↔ `hpi_growth` | −0.622 |
-| `nfci_lagged` ↔ `starts_growth` | −0.616 |
-| `rate_gap` ↔ `term_spread` | +0.617 |
+| *mortgage rate fall since origination* ↔ *policy rate change since origination* | **−0.793** |
+| *corporate bond spread* ↔ *equity volatility* | +0.701 |
+| *policy rate change since origination* ↔ *yield curve slope* | −0.686 |
+| *financial conditions* ↔ *corporate bond spread* | +0.670 |
+| *financial conditions* ↔ *house price growth* | −0.622 |
+| *financial conditions* ↔ *housing starts growth* | −0.616 |
+| *mortgage rate fall since origination* ↔ *yield curve slope* | +0.617 |
 
 **Not one pair crosses the threshold**, and the closest is a hair under it. The
 priority ladder was fixed in advance precisely for this case and did not have to be
@@ -396,15 +404,15 @@ is never needed looks like wasted work until the one time it is.
 
 | Covariate | VIF | | Covariate | VIF |
 |---|---|---|---|---|
-| `credit_spread` | **8.41** | | `starts_growth` | 2.36 |
-| `policy_rate_gap` | 4.89 | | `sentiment` | 2.27 |
-| `nfci_lagged` | 4.45 | | `equity_return` | 2.25 |
-| `rate_gap` | 4.17 | | `unemp_gap` | 2.01 |
-| `hpi_growth` | 3.37 | | `cltv_drift` | 1.82 |
-| `term_spread` | 3.37 | | `orig_ltv` | 1.18 |
-| `inflation` | 2.99 | | `term_years` | 1.14 |
-| `vix` | 2.71 | | `fico_s` | 1.08 |
-| | | | `dti` | 1.06 |
+| *corporate bond spread* | **8.41** | | `housing_starts_growth` | 2.36 |
+| *policy rate change since origination* | 4.89 | | `consumer_sentiment` | 2.27 |
+| *financial conditions* | 4.45 | | `equity_return` | 2.25 |
+| *mortgage rate fall since origination* | 4.17 | | `unemployment_change` | 2.01 |
+| *house price growth* | 3.37 | | `ltv_change` | 1.82 |
+| *yield curve slope* | 3.37 | | `original_ltv` | 1.18 |
+| *inflation* | 2.99 | | `term_years` | 1.14 |
+| *equity volatility* | 2.71 | | `credit_score` | 1.08 |
+| | | | `debt_to_income` | 1.06 |
 
 The stepwise pass eliminated nothing. **All seventeen candidates survive both
 collinearity screens.**
@@ -418,23 +426,25 @@ over 1999–2026 the Fed funds rate, the ten-year yield, the term spread and bot
 mortgage rates move as one thing. A pure time-series regression on them would be
 unusable.
 
-**But the covariates are not the series.** The design matrix is indexed by *vintage
-and age*, not by calendar time, and three of the covariates are **gaps since
-origination** rather than levels. Two loans observed in the same month — identical
-`credit_spread`, identical `vix`, identical `hpi_growth` — have entirely different
-`rate_gap` and `unemp_gap` if one was written in 2004 and the other in 2019.
+**But the covariates are not the series.** The design matrix is indexed by *vintage and
+age*, not by calendar time, and three of the covariates are **gaps since origination**
+rather than levels. Two loans observed in the same month — identical *corporate bond
+spread*, identical *equity volatility*, identical *house price growth* — have entirely
+different *mortgage rate fall since origination* and *unemployment change since origination*
+if one was written in 2004 and the other in 2019.
 
-So the panel spans two dimensions where a time series spans one, and the gap
-construction is what projects the covariates onto the second. `rate_gap` has a VIF of
-4.17 against its own underlying rate series being almost perfectly collinear with
-three others. That is not a trick: it is the identifying variation a vintage panel
-actually has, and it is the same reason the macro covariates can be estimated at all
-rather than being absorbed by the baseline hazard.
+So the panel spans two dimensions where a time series spans one, and the gap construction is
+what projects the covariates onto the second. *Mortgage rate fall since origination* has a
+VIF of 4.17 against its own underlying rate series being almost perfectly collinear with
+three others. That is not a trick: it is the identifying variation a vintage panel actually
+has, and it is the same reason the macro covariates can be estimated at all rather than
+being absorbed by the baseline hazard.
 
-The corollary is a warning. If the gaps were replaced by levels — `policy_rate` now
-instead of its move since origination — the covariates would collapse onto calendar
-time and the collinearity would return at full strength. The decomposition into level
-and movement is doing load-bearing work in more than one place.
+The corollary is a warning. If the gaps were replaced by levels — *federal funds rate*
+(`fed_funds_rate`, formerly `policy_rate`) now instead of its move since origination — the
+covariates would collapse onto calendar time and the collinearity would return at full
+strength. The decomposition into level and movement is doing load-bearing work in more than
+one place.
 
 ### 7-8. The fit, and what the signs said
 
@@ -465,26 +475,26 @@ on the whole population. The ratio is first band to last:
 
 | Covariate | First band | Last band | Ratio | Sign |
 |---|---|---|---|---|
-| `fico_s` | 28.11 bp | 3.23 bp | **8.7×** | + |
-| `cltv_drift` | 6.12 bp | 49.65 bp | **8.1×** | − |
-| `unemp_gap` | 3.89 bp | 28.52 bp | **7.3×** | − |
-| `vix` | 4.40 bp | 32.23 bp | **7.3×** | − |
-| `policy_rate_gap` | 26.99 bp | 4.13 bp | **6.5×** | + |
-| `hpi_growth` | 20.61 bp | 3.86 bp | **5.3×** | + |
-| `rate_gap` | 3.62 bp | 17.51 bp | **4.8×** | − |
-| `inflation` | 17.56 bp | 4.83 bp | 3.6× | none |
-| `dti` | 3.93 bp | 13.70 bp | 3.5× | − |
-| `nfci_lagged` | 6.42 bp | 19.99 bp | 3.1× | − |
-| `term_years` | 3.10 bp | 9.37 bp | 3.0× | none |
-| `orig_ltv` | 4.75 bp | 14.35 bp | 3.0× | − |
+| *credit score* | 28.11 bp | 3.23 bp | **8.7×** | + |
+| *loan-to-value change since origination* | 6.12 bp | 49.65 bp | **8.1×** | − |
+| *unemployment change since origination* | 3.89 bp | 28.52 bp | **7.3×** | − |
+| *equity volatility* | 4.40 bp | 32.23 bp | **7.3×** | − |
+| *policy rate change since origination* | 26.99 bp | 4.13 bp | **6.5×** | + |
+| *house price growth* | 20.61 bp | 3.86 bp | **5.3×** | + |
+| *mortgage rate fall since origination* | 3.62 bp | 17.51 bp | **4.8×** | − |
+| *inflation* | 17.56 bp | 4.83 bp | 3.6× | none |
+| *debt-to-income at origination* | 3.93 bp | 13.70 bp | 3.5× | − |
+| *financial conditions* | 6.42 bp | 19.99 bp | 3.1× | − |
+| *original term* | 3.10 bp | 9.37 bp | 3.0× | none |
+| *loan-to-value at origination* | 4.75 bp | 14.35 bp | 3.0× | − |
 
-Twelve covariates, plus `purpose` and `occupancy`.
+Twelve covariates, plus *loan purpose* and *occupancy*.
 
 ### Two priors that were wrong, and the revision
 
-`rate_gap` and `policy_rate_gap` came out against the signs written for them, and both
-are kept with the prior **revised** rather than eliminated. This is the one place the
-procedure was overruled, so it is set out in full.
+*Mortgage rate fall since origination* and *policy rate change since origination* came out
+against the signs written for them, and both are kept with the prior **revised** rather than
+eliminated. This is the one place the procedure was overruled, so it is set out in full.
 
 Revising an expected sign after seeing the fit is precisely what the sign constraint
 exists to prevent, and doing it on the strength of the fit would make the constraint
@@ -497,15 +507,15 @@ fixed-rate mortgage does not have.** The borrower's payment does not move when t
 policy rate moves. Strip that channel out and the remaining sign is the opposite one in
 each case.
 
-`policy_rate_gap` — the Fed cuts in crises and tightens into strength, so a policy rate
-far *below* the one the loan was written at means 2009 or 2020, not relief. The band
-5.5pp below origination carries **26.99 bp** of monthly default, the highest of any
+*Policy rate change since origination* — the Fed cuts in crises and tightens into strength,
+so a policy rate far *below* the one the loan was written at means 2009 or 2020, not relief.
+The band 5.5pp below origination carries **26.99 bp** of monthly default, the highest of any
 band of any covariate in this model; the band 5.5pp above carries 4.13 bp.
 
-`rate_gap` — market rates below the note rate mean refinancing is open, and whoever can
-refinance does, leaving the book as a prepayment, which this model treats as censoring.
-Who stays is who *cannot*: impaired credit, no equity. The coefficient measures that
-adverse selection, not the payment burden:
+*Mortgage rate fall since origination* — market rates below the note rate mean refinancing
+is open, and whoever can refinance does, leaving the book as a prepayment, which this model
+treats as censoring. Who stays is who *cannot*: impaired credit, no equity. The coefficient
+measures that adverse selection, not the payment burden:
 
 ```
 rate_gap   -4.00 → 3.62 bp    +0.25 →  6.20 bp
@@ -533,7 +543,7 @@ Recorded in `config.ELIMINATED`, with a test asserting none of them reappears in
 formula — a covariate that quietly comes back is a silent reversal of a documented
 decision, and nothing else in the suite would notice.
 
-### `credit_spread` and `term_spread` — collinearity, the textbook case
+### *Corporate bond spread* and *yield curve slope* — collinearity, the textbook case
 
 Both order default correctly **on their own** and flip once the others are present.
 
@@ -544,22 +554,23 @@ credit_spread  0.75 → 4.55 bp    2.75 → 10.73 bp       (4.1×, monotone)
 ```
 
 Conditional coefficient **+0.123**: wider spreads, longer survival. The cause is not
-mysterious. `nfci_lagged` is in the model, and the Chicago Fed's index is built from 105
-indicators of risk, liquidity and leverage — **including Baa-Treasury spreads**. With
-NFCI present, `credit_spread` is a residual, and ρ(`credit_spread`, `vix`) = +0.70
-finishes the job. `term_spread` is the same story against `policy_rate_gap`
-(ρ = −0.69), its other view of the same monetary cycle.
+mysterious. *Financial conditions* is in the model, and the Chicago Fed's index is built
+from 105 indicators of risk, liquidity and leverage — **including Baa-Treasury spreads**.
+With NFCI present, *corporate bond spread* is a residual, and ρ(*corporate bond spread*,
+*equity volatility*) = +0.70 finishes the job. *Yield curve slope* is the same story against
+*policy rate change since origination* (ρ = −0.69), its other view of the same monetary
+cycle.
 
 A wrong sign is not a weak result — it is a symptom, and this is what of.
 
 **This rule is an addition to the `nmds` procedure, not a borrowing from it.** `nmds`
-eliminates on a violated *prior*; `term_spread` never had one, so a prior-based rule
+eliminates on a violated *prior*; *yield curve slope* never had one, so a prior-based rule
 would have kept it. The rule applied here is a **marginal/conditional sign reversal**:
 a covariate whose conditional coefficient contradicts its own unconditional
 relationship with the outcome is carrying something other than what its name says. It
 is stated so it can be applied consistently rather than invoked when convenient.
 
-### `equity_return` and `sentiment` — no content
+### *Equity return* and *consumer sentiment* — no content
 
 ```
 equity_return   -0.45 → 9.45 bp   +0.05 → 7.99 bp   +0.30 → 6.63 bp
@@ -570,16 +581,16 @@ sentiment        57.5 → 7.76 bp    80.0 → 6.47 bp   105.0 → 8.74 bp
 ```
 
 Flat and unordered across their entire range: 1.4× and 2.0×, against 8.7× for
-`fico_s`. Every band holds between 8% and 32% of exposure, so this is not a small-band
+*credit score*. Every band holds between 8% and 32% of exposure, so this is not a small-band
 artefact. **Neither covariate carries any univariate information about mortgage
 default.**
 
-And both are hugely significant. `equity_return` receives a coefficient of −0.44 at
+And both are hugely significant. *Equity return* receives a coefficient of −0.44 at
 p = 0.0000, on 2.5 billion loan-months, having no relationship with the outcome at all.
 
 If this document makes one argument worth taking away, it is that one.
 
-### `starts_growth` — real information, wrong functional form
+### *Housing starts growth* — real information, wrong functional form
 
 ```
 starts_growth  -0.50 → 16.81 bp    +0.05 →  6.12 bp
@@ -603,9 +614,10 @@ better than this one — see below.
 ### 9. Stability — does the coefficient survive a change of sample?
 
 The twelve survivors were fitted, and three of them came out with the **wrong sign**:
-`nfci_lagged`, `policy_rate_gap` and `hpi_growth`. The last is the alarming one, because
-its marginal relationship is among the cleanest in the dataset — 20.61 bp to 3.86 bp,
-monotone, 5.3× — and the fitted model now said rising house prices *shorten* survival.
+*financial conditions*, *policy rate change since origination* and *house price growth*. The
+last is the alarming one, because its marginal relationship is among the cleanest in the
+dataset — 20.61 bp to 3.86 bp, monotone, 5.3× — and the fitted model now said rising house
+prices *shorten* survival.
 
 The obvious suspect was the elimination itself: five covariates had been removed, and
 perhaps the survivors were now carrying what those had absorbed. **That was tested and
@@ -613,9 +625,9 @@ it is not the cause.** On identical rows, the two specifications agree:
 
 | | 17 covariates | 12 covariates |
 |---|---|---|
-| `nfci_lagged` | +0.0139 | +0.0839 |
-| `policy_rate_gap` | +0.0796 | +0.0849 |
-| `hpi_growth` | +3.3200 | +3.4021 |
+| *financial conditions* | +0.0139 | +0.0839 |
+| *policy rate change since origination* | +0.0796 | +0.0849 |
+| *house price growth* | +3.3200 | +3.4021 |
 
 The only other difference between the two runs was the **sample**: one was fitted on
 everything, the other on everything up to 2024-12 — 6.3% less exposure. And when 6% of
@@ -624,32 +636,32 @@ a sample flips three signs, the problem is not the 6%.
 #### What the effect sizes show
 
 Raw coefficients hide this, because the covariates are on wildly different scales:
-`inflation` has a standard deviation of 0.017 and `cltv_drift` one of 15.2. Ranked by
-**effect of one standard deviation on log survival time**:
+*Inflation* has a standard deviation of 0.017 and *loan-to-value change since origination*
+one of 15.2. Ranked by **effect of one standard deviation on log survival time**:
 
 | Covariate | 1 sd effect | Under a change of sample |
 |---|---|---|
-| `vix` | **−0.3216** | stable |
-| `cltv_drift` | **−0.2938** | stable |
-| `inflation` | **+0.1305** | stable |
-| `unemp_gap` | **−0.0943** | stable |
-| `hpi_growth` | −0.0917 | **flipped** |
-| `nfci_lagged` | +0.0526 | **flipped** |
-| `policy_rate_gap` | −0.0406 | **flipped** |
-| `rate_gap` | −0.0066 | effectively zero |
+| *equity volatility* | **−0.3216** | stable |
+| *loan-to-value change since origination* | **−0.2938** | stable |
+| *inflation* | **+0.1305** | stable |
+| *unemployment change since origination* | **−0.0943** | stable |
+| *house price growth* | −0.0917 | **flipped** |
+| *financial conditions* | +0.0526 | **flipped** |
+| *policy rate change since origination* | −0.0406 | **flipped** |
+| *mortgage rate fall since origination* | −0.0066 | effectively zero |
 
 **The three that flip are three of the four smallest effects**, and each sits beside a
 larger correlated covariate carrying the same economic information:
 
 | Dimension | Kept | ρ | Flipped |
 |---|---|---|---|
-| Financial stress | `vix` (−0.32) | +0.55 | `nfci_lagged` (+0.05) |
-| House prices | `cltv_drift` (−0.29) | −0.31 | `hpi_growth` (−0.09) |
-| Interest rates | `rate_gap` (−0.007) | −0.79 | `policy_rate_gap` (−0.04) |
+| Financial stress | `equity_volatility` (−0.32) | +0.55 | `financial_conditions` (+0.05) |
+| House prices | `ltv_change` (−0.29) | −0.31 | `house_price_growth` (−0.09) |
+| Interest rates | `mortgage_rate_decline` (−0.007) | −0.79 | `policy_rate_change` (−0.04) |
 
-On the house-price pair this is literal rather than statistical: **`cltv_drift` is
-constructed from the house price index.** The information enters the model twice, and
-the second entry is a residual whose sign is noise.
+On the house-price pair this is literal rather than statistical: ***loan-to-value change
+since origination* is constructed from the house price index.** The information enters the
+model twice, and the second entry is a residual whose sign is noise.
 
 #### The rule
 
@@ -663,30 +675,31 @@ all. Applied here it *explains* the earlier sign failures rather than chasing th
 covariate-by-covariate elimination on a jointly identified block keeps rotating the
 basis, and each refit produces a different set of wrong signs.
 
-Neither correlation at 0.8 nor VIF at 10 catches it. `nfci_lagged` against `vix` is
-ρ = 0.55, well inside both thresholds, and the covariate is still not identified —
-because identification depends on the effect size relative to the shared variation, not
-on the shared variation alone.
+Neither correlation at 0.8 nor VIF at 10 catches it. *Financial conditions* against *equity
+volatility* is ρ = 0.55, well inside both thresholds, and the covariate is still not
+identified — because identification depends on the effect size relative to the shared
+variation, not on the shared variation alone.
 
 #### The specification this leaves
 
-**One covariate per economic dimension**: housing (`cltv_drift`), labour (`unemp_gap`),
-financial stress (`vix`), prices (`inflation`). Four, from the thirteen that were built.
+**One covariate per economic dimension**: housing (*loan-to-value change since
+origination*), labour (*unemployment change since origination*), financial stress (*equity
+volatility*), prices (*inflation*). Four, from the thirteen that were built.
 
 Fitted on both samples, it holds:
 
 | Covariate | Training (≤2024-12) | Whole population | Change |
 |---|---|---|---|
-| `fico_s` | +0.3838 | +0.3899 | 1.6% |
-| `orig_ltv` | −0.0155 | −0.0157 | 1.3% |
-| `dti` | −0.0186 | −0.0186 | **0%** |
-| `term_years` | −0.0383 | −0.0378 | 1.3% |
-| `cltv_drift` | −0.0154 | −0.0161 | 4.5% |
-| `unemp_gap` | −0.0377 | −0.0386 | 2.4% |
-| `vix` | −0.0288 | −0.0287 | **0.3%** |
-| `inflation` | +5.0810 | +5.0072 | 1.5% |
+| *credit score* | +0.3838 | +0.3899 | 1.6% |
+| *loan-to-value at origination* | −0.0155 | −0.0157 | 1.3% |
+| *debt-to-income at origination* | −0.0186 | −0.0186 | **0%** |
+| *original term* | −0.0383 | −0.0378 | 1.3% |
+| *loan-to-value change since origination* | −0.0154 | −0.0161 | 4.5% |
+| *unemployment change since origination* | −0.0377 | −0.0386 | 2.4% |
+| *equity volatility* | −0.0288 | −0.0287 | **0.3%** |
+| *inflation* | +5.0810 | +5.0072 | 1.5% |
 
-No sign changes and nothing moving more than 4.5%, against `hpi_growth` going from
+No sign changes and nothing moving more than 4.5%, against *house price growth* going from
 +0.75 to −1.31 on the same two samples one specification earlier. Every standardised
 effect now sits between 0.09 and 0.47: there is no residual covariate left whose sign
 could be noise.
@@ -694,11 +707,11 @@ could be noise.
 #### The retraction
 
 The argument made in *"Two priors that were wrong, and the revision"* above is
-**withdrawn**. `rate_gap`'s conditional effect is −0.0066 per standard deviation, which
-is zero; the 4.8× marginal ordering that was offered as independent evidence is the
-macro cycle, the same thing that produced the spurious hump in the marginal hazard. The
-mechanism — that a fixed-rate book has no payment channel — may well be true and is not
-what the data was showing.
+**withdrawn**. *Mortgage rate fall since origination*'s conditional effect is −0.0066 per
+standard deviation, which is zero; the 4.8× marginal ordering that was offered as
+independent evidence is the macro cycle, the same thing that produced the spurious hump in
+the marginal hazard. The mechanism — that a fixed-rate book has no payment channel — may
+well be true and is not what the data was showing.
 
 Recorded rather than edited away, and mirrored in the code beside where the revision
 used to live. The lesson generalises: **a marginal relationship is evidence that a
@@ -707,7 +720,7 @@ covariate is correlated with the outcome, never that it is identified in a model
 ### The one stratum whose curves do cross
 
 The crossing check exists to be able to refuse the project's commitment to a single
-survival function, and on `purpose` and `term_years` it does not. On **`occupancy` it
+survival function, and on *loan purpose* and *original term* it does not. On ***occupancy* it
 does**, and the crossing is substantive rather than an artefact:
 
 ```
@@ -723,7 +736,7 @@ side keeps accumulating job losses, divorces and illnesses.
 
 **No scale factor maps one curve onto the other**, which is precisely what an
 accelerated failure time model assumes when a covariate enters only through the scale.
-For `occupancy` that assumption is violated.
+For *occupancy* that assumption is violated.
 
 The remedy is available and is not segmentation: `ancillary` lets the *shape* parameter
 depend on the covariate, so a single parametric model represents both curves.
@@ -752,12 +765,12 @@ which.
 
 | Decision | `nmds` | Here |
 |---|---|---|
-| `credit_spread` eliminated on a violated sign | **Yes** — `elimination_type="invalid_coefficient"` | Same |
-| `hpi_growth`, `nfci_lagged`, `policy_rate_gap` eliminated on stability | **No** — it has no stability step; it would have eliminated them on sign and then refit into the next set of wrong signs | Eliminated on the standardised-effect rule |
-| `term_spread` eliminated | **No** — it has no expected sign, so nothing catches it | Marginal/conditional reversal |
-| `equity_return`, `sentiment` eliminated | **On sign**, if it had a prior for equity indices — its univariate screen is p > 0.05, which they pass at p = 0 | On absent marginal content |
-| `starts_growth` as a linear term | **Would not arise** — `nmds` coarse-classes into bands, so the U is representable | Eliminated; banding is the way back |
-| `rate_gap`, `policy_rate_gap` priors revised | **No** — it would have eliminated both | Revised, with the mechanism stated |
+| *corporate bond spread* eliminated on a violated sign | **Yes** — `elimination_type="invalid_coefficient"` | Same |
+| *house price growth*, *financial conditions*, *policy rate change since origination* eliminated on stability | **No** — it has no stability step; it would have eliminated them on sign and then refit into the next set of wrong signs | Eliminated on the standardised-effect rule |
+| *yield curve slope* eliminated | **No** — it has no expected sign, so nothing catches it | Marginal/conditional reversal |
+| *equity return*, *consumer sentiment* eliminated | **On sign**, if it had a prior for equity indices — its univariate screen is p > 0.05, which they pass at p = 0 | On absent marginal content |
+| *housing starts growth* as a linear term | **Would not arise** — `nmds` coarse-classes into bands, so the U is representable | Eliminated; banding is the way back |
+| *mortgage rate fall since origination*, *policy rate change since origination* priors revised | **No** — it would have eliminated both | Revised, with the mechanism stated |
 
 Two of these deserve more than a row.
 
@@ -766,17 +779,17 @@ classes, which is why a U-shaped relationship is not a problem there and is one 
 a class-based specification represents any shape, at the cost of parameters and of a
 binning decision per covariate. This pipeline bins the origination covariates and
 enters the macro-derived ones as linear terms, which is cheaper and assumes monotonicity
-— an assumption `starts_growth` violates and the others do not. **On this point `nmds`
+— an assumption *housing starts growth* violates and the others do not. **On this point `nmds`
 is simply better**, and the fix is known rather than hypothetical.
 
-**Revising the two priors is a departure, and the weaker of the two arguments here.**
-`nmds` would have dropped `rate_gap` and `policy_rate_gap` and kept its discipline
-intact, and a reader who thinks that is the right call would be applying the reference
-procedure correctly. The case for keeping them rests on the marginal tables being
-computed independently of the fit, on both mechanisms being checkable without it, and on
-what would be lost: `rate_gap` is the only covariate in the model that exposes the
-competing-risk limitation, and eliminating it would remove the evidence of a known
-weakness rather than the weakness.
+**Revising the two priors is a departure, and the weaker of the two arguments here.** `nmds`
+would have dropped *mortgage rate fall since origination* and *policy rate change since
+origination* and kept its discipline intact, and a reader who thinks that is the right call
+would be applying the reference procedure correctly. The case for keeping them rests on the
+marginal tables being computed independently of the fit, on both mechanisms being checkable
+without it, and on what would be lost: *mortgage rate fall since origination* is the only
+covariate in the model that exposes the competing-risk limitation, and eliminating it would
+remove the evidence of a known weakness rather than the weakness.
 
 Both are recorded as revisions. Neither is presented as a prior.
 

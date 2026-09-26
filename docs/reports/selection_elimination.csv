@@ -1,6 +1,6 @@
 step,removed,coef,p,reason,remaining
-1,vix_gap,0.002540402839057752,5.7115057397750135e-207,wrong sign: +0.00254 where - is expected,21
-2,vix,0.009348955794142607,0.0,wrong sign: +0.009349 where - is expected,20
-3,rate_gap,0.01811950915540706,2.1160792943498293e-109,"reversed sign: +0.01812 in the full model, -0.1903 beside the loan block alone",19
-4,equity_return,-0.08562643474180216,2.343432861966972e-132,"reversed sign: -0.08563 in the full model, +0.4305 beside the loan block alone",18
-5,inflation,-8.332543711575676,0.0,"reversed sign: -8.333 in the full model, +10.04 beside the loan block alone",17
+1,house_price_growth,-0.1456420588778045,1.0583149040142023e-17,wrong sign: -0.1456 where + is expected,22
+2,volatility_change,0.0017211620123860896,1.1307900497873738e-84,wrong sign: +0.001721 where - is expected,21
+3,equity_volatility,0.009577572534184068,0.0,wrong sign: +0.009578 where - is expected,20
+4,inflation_rate,-8.92896627760335,0.0,"reversed sign: -8.929 in the full model, +7.972 beside the loan block alone",19
+5,equity_return,-0.004448249795520541,0.23140185069906902,"reversed sign: -0.004448 in the full model, +0.5614 beside the loan block alone",18

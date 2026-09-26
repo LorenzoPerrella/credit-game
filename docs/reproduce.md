@@ -8,7 +8,8 @@ on it.
 ```mermaid
 flowchart TD
     A["fetch-macro"] --> B["ingest"] --> C["portfolio"] --> D["profile"] --> E["aggregate"]
-    E --> F["select"] --> G["report"] --> H["views"] --> I["mkdocs build"]
+    E --> F["select"] --> G["family"] --> H["report"] --> I["windows"] --> J["views"]
+    J --> K["mkdocs build"]
 ```
 
 | Command | What it does | Cost |
@@ -18,10 +19,15 @@ flowchart TD
 | `uv run creditsurv ingest` | 40 GB of archives to 17 GB of parquet, idempotent | ~30 min |
 | `uv run creditsurv portfolio` | describes the book: static figures and `portfolio_summary.json` | minutes |
 | `uv run creditsurv profile` | screens the covariates before aggregating | minutes |
+| `uv run creditsurv profile --extensions` | prices each extension of the cell key on nine quarters | ~3.5 h |
 | `uv run creditsurv aggregate --moratorium exclude` | collapses the book into weighted cells | ~40 min, 11.3 GB peak |
-| `uv run creditsurv select` | steps 5 to 9 on the training half; resumes from its cache | ~4.5 h from cached screening fits |
+| `uv run creditsurv select --workers 4` | steps 5 to 10 on the training half; resumes from its cache | hours; **2.75 GB**, streamed |
+| `uv run creditsurv select --dist loglogistic` | the same procedure through the other family | hours |
+| `uv run creditsurv select --cause prepayment` | the competing model, under rule 6's priors | hours |
+| `uv run creditsurv family` | applies rule 2 and writes the verdict; fits nothing | ~1 h |
 | `uv run creditsurv report --extra-fits` | one fit and the three reports | ~2.5 h with the family and shape fits |
-| `uv run creditsurv views` | scores the cached fit and writes `docs/tables`; never fits | ~80 min, footprint near 15 GB |
+| `uv run creditsurv windows` | three cuts, the anchoring and the grades | hours; one fit per cut |
+| `uv run creditsurv views` | scores the cached fit and writes `docs/tables`; never fits | two passes over the cell file |
 | `uv run mkdocs serve` | this site, locally | seconds |
 
 The dataset cannot be downloaded programmatically: registration is free but manual, at
@@ -71,11 +77,16 @@ A placeholder that names nothing, or a view the manifest does not list, fails th
     never appended to the ingest, and verifies per quarter that the manifest records the
     ingest finished, both parquet files exist, and their row counts still match.
 
-- **Memory decides what can be fitted.** The training half is 59.7 million cells. A cold
-  Weibull fit on it took 91 minutes; warm-started from the selection, 9.4. Never hold the
-  panel beside its halves: they are built from the cells one at a time.
-- **One heavy job at a time.** Aggregation peaks at 11.3 GB, scoring the training half near
-  the machine's limit.
+- **Nothing holds the panel any more.** The training half is 72.7 million cells, and every
+  command that used to expand it now reads the cell file a batch at a time: the fits (the
+  block engine), the selection, the views and the backtest windows. A whole selection was
+  measured at **2.75 GB** across its parent and three workers, where holding the half had put
+  a single fit at 15 GB. A cold Weibull fit took 45 minutes at four workers.
+- **A window is read, not filtered.** `load_cells_window` selects on the observation month --
+  origination plus age, so not a column parquet can be asked about by name -- inside DuckDB.
+  Two years of observation are about 3% of the table.
+- **One heavy job at a time.** Aggregation still peaks at 11.3 GB, and it is now the largest
+  thing in the pipeline.
 - **Measure memory as the physical footprint**, not the resident set size, which misses
   compressed pages and understated a fit about 2.5 times.
 - **A fit is saved the moment it succeeds.** One run completed a 154-minute fit and was

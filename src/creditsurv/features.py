@@ -12,12 +12,12 @@ quote published weekly and never revised, so a borrower and a lender both know
 it in real time. Applying a blanket lag to everything would be simpler but
 would misstate what was actually knowable.
 
-**Loan-to-value is decomposed rather than replaced.** ``orig_ltv`` and
+**Loan-to-value is decomposed rather than replaced.** ``original_ltv`` and
 ``indexed_cltv`` are equal at origination and remain strongly correlated
 afterwards, so putting both in a model invites unstable coefficients. They are
-split into a level and a movement instead: ``orig_ltv`` measures underwriting
-at origination, and ``cltv_drift`` measures how far house prices have carried
-the position since. ``cltv_drift`` is zero at origination by construction, so
+split into a level and a movement instead: ``original_ltv`` measures underwriting
+at origination, and ``ltv_change`` measures how far house prices have carried
+the position since. ``ltv_change`` is zero at origination by construction, so
 the two carry almost independent information.
 """
 
@@ -38,10 +38,10 @@ if TYPE_CHECKING:
 #: is not known in month t.
 PUBLICATION_LAGGED: tuple[str, ...] = (
     "unemployment_rate",
-    "hpi",
-    "nfci",
-    "cpi",
-    "sentiment",
+    "house_price_index",
+    "financial_conditions_index",
+    "consumer_price_index",
+    "consumer_sentiment_index",
     "housing_starts",
 )
 
@@ -49,25 +49,25 @@ PUBLICATION_LAGGED: tuple[str, ...] = (
 #: **transmission lag** does, and it applies to every series rather than to the one that
 #: was noticed.
 #:
-#: A loan is 90+ days delinquent in month t because payments were missed in t-3, t-2 and
-#: t-1. A market reading from month t cannot be what caused that. ``vix`` used to be read
-#: contemporaneously, justified by the data being available in real time -- an argument
-#: about *availability*, not *transmission* -- and the backtest showed the result:
-#: predicted default spiked in April 2025 and March 2026, the two VIX peaks of the test
-#: window, at actual-over-expected 0.47 and 0.59, while realised default did not move.
+#: A loan is 90+ days delinquent in month t because payments were missed in t-3, t-2 and t-1. A
+#: market reading from month t cannot be what caused that. ``equity_volatility`` used to be read
+#: contemporaneously, justified by the data being available in real time -- an argument about
+#: *availability*, not *transmission* -- and the backtest showed the result: predicted default
+#: spiked in April 2025 and March 2026, the two VIX peaks of the test window, at
+#: actual-over-expected 0.47 and 0.59, while realised default did not move.
 #:
-#: Correcting only ``vix`` would repeat the pattern the validation criticised in the
+#: Correcting only ``equity_volatility`` would repeat the pattern the validation criticised in the
 #: marginal-effects table, a fix applied to the covariate that happened to be found, so
 #: the lag reaches every market series the macro family can read.
 TRANSMISSION_LAGGED: tuple[str, ...] = (
     "mortgage_rate_30y",
     "mortgage_rate_15y",
     "treasury_10y",
-    "term_spread",
-    "credit_spread",
-    "equity_index",
-    "vix",
-    "policy_rate",
+    "treasury_10y_2y_spread",
+    "baa_treasury_spread",
+    "nasdaq_composite",
+    "vix_index",
+    "fed_funds_rate",
 )
 
 #: Every series is lagged. The two lists above record why, and it is not the same reason.
@@ -85,22 +85,37 @@ CONTEMPORANEOUS_SERIES: tuple[str, ...] = ()
 #: the scenario to the formula; and a second test holds this map to what the builder
 #: actually does, so it cannot drift from the code it describes.
 MACRO_SOURCES: Final[dict[str, tuple[str, ...]]] = {
-    "cltv_drift": ("hpi",),
-    "hpi_growth": ("hpi",),
-    "unemp_gap": ("unemployment_rate",),
-    "policy_rate_gap": ("policy_rate",),
-    "rate_gap": ("mortgage_rate_30y", "mortgage_rate_15y"),
-    "nfci_lagged": ("nfci",),
-    "term_spread": ("term_spread",),
-    "credit_spread": ("credit_spread",),
-    "vix": ("vix",),
-    "vix_gap": ("vix",),
-    "sentiment": ("sentiment",),
-    "inflation": ("cpi",),
-    "inflation_gap": ("cpi",),
-    "equity_return": ("equity_index",),
-    "starts_growth": ("housing_starts",),
+    "ltv_change": ("house_price_index",),
+    "house_price_growth": ("house_price_index",),
+    "unemployment_change": ("unemployment_rate",),
+    "policy_rate_change": ("fed_funds_rate",),
+    "mortgage_rate_decline": ("mortgage_rate_30y", "mortgage_rate_15y"),
+    "financial_conditions": ("financial_conditions_index",),
+    "yield_curve_slope": ("treasury_10y_2y_spread",),
+    "corporate_bond_spread": ("baa_treasury_spread",),
+    "equity_volatility": ("vix_index",),
+    "volatility_change": ("vix_index",),
+    "consumer_sentiment": ("consumer_sentiment_index",),
+    "inflation_rate": ("consumer_price_index",),
+    "inflation_change": ("consumer_price_index",),
+    "equity_return": ("nasdaq_composite",),
+    "housing_starts_growth": ("housing_starts",),
+    "origination_spread": ("mortgage_rate_30y", "mortgage_rate_15y"),
+    "refinance_incentive": ("mortgage_rate_30y", "mortgage_rate_15y"),
 }
+
+#: Exact linear identities among the derived covariates. A design holding every member of
+#: one of these is singular by construction, not nearly so, and the fit either fails or
+#: returns whatever the pseudo-inverse chose.
+#:
+#: The note rate against the market rate is the only one: the incentive to refinance now is
+#: the spread the loan was written at plus the fall in the market rate since. Which two of the
+#: three a specification carries is a modelling decision, declared in docs/rules.md; the
+#: correlation pass would not catch it, since two of the three are already in the model
+#: before the third arrives.
+MACRO_IDENTITIES: Final[tuple[tuple[str, ...], ...]] = (
+    ("refinance_incentive", "origination_spread", "mortgage_rate_decline"),
+)
 
 
 def lag_macro(macro: pd.DataFrame, *, lag_months: int = MACRO_LAG_MONTHS) -> pd.DataFrame:
@@ -130,7 +145,7 @@ def add_macro_covariates(
 ) -> pd.DataFrame:
     """Attach macro-derived covariates to a loan-month panel.
 
-    ``panel`` must carry ``period`` and ``orig_period``; each derived covariate is
+    ``panel`` must carry ``period`` and ``origination_period``; each derived covariate is
     built only if the columns it reads are there. That matters because a book
     reconstructed from aggregated cells carries the covariates in the cell key and
     nothing else -- ``note_rate`` is per loan, so it is not among them, and demanding
@@ -147,25 +162,25 @@ def add_macro_covariates(
     the backtest is exactly where that would go unnoticed.
     """
     enriched = panel.copy()
-    orig_month = _month_ordinal(panel["orig_period"])
+    origination_month = _month_ordinal(panel["origination_period"])
     observation = _month_ordinal(panel["period"])
-    add_macro_family(enriched, macro, orig_month, observation, lag_months)
+    add_macro_family(enriched, macro, origination_month, observation, lag_months)
 
-    if "orig_ltv" in panel.columns:
+    if "original_ltv" in panel.columns:
         # Kept for inspection rather than modelling: the level and the movement are
         # what the model reads, and this is their sum.
-        enriched["indexed_cltv"] = panel["orig_ltv"] + enriched["cltv_drift"]
+        enriched["indexed_cltv"] = panel["original_ltv"] + enriched["ltv_change"]
     if "note_rate" in panel.columns:
         # The full refinancing incentive, available only where the note rate is --
-        # which is the loan-level path. The aggregated one carries rate_gap, the part
+        # which is the loan-level path. The aggregated one carries mortgage_rate_decline, the part
         # of this that varies over the life of the loan.
-        enriched["refi_incentive"] = panel["note_rate"] - _lookup(
+        enriched["refinance_incentive"] = panel["note_rate"] - _lookup(
             panel["period"], macro["mortgage_rate_30y"]
         )
 
     # Every macro covariate built, as the aggregated path checks. The list used here had
     # been frozen at the specification before the selection, so a missing sentiment or
-    # inflation_gap passed through a projection to become a missing PD.
+    # inflation_change passed through a projection to become a missing PD.
     built = [name for name in MACRO_DERIVED if name in enriched.columns]
     return enriched.dropna(subset=built).reset_index(drop=True)
 
@@ -222,36 +237,101 @@ def assert_no_lookahead(
 #: Bands are closed on the right, matching ``pd.cut`` defaults. Values outside the
 #: outer edges are clipped into the end bands rather than dropped.
 BIN_EDGES: dict[str, tuple[float, ...]] = {
-    # (score - 700) / 50, so -2.4 is a score of 580 and +2.0 is 800.
-    "fico_s": (-2.4, -1.6, -0.8, -0.4, 0.0, 0.4, 0.8, 1.2, 2.4),
-    "orig_ltv": (30.0, 60.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0, 100.0),
-    "dti": (10.0, 20.0, 28.0, 36.0, 43.0, 50.0, 55.0),
-    "log_orig_upb": (10.0, 11.3, 11.8, 12.1, 12.4, 12.7, 13.2, 14.5),
-    "orig_spread": (-2.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 4.0),
+    # Credit score points.
+    "credit_score": (580.0, 620.0, 660.0, 680.0, 700.0, 720.0, 740.0, 760.0, 820.0),
+    "original_ltv": (30.0, 60.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0, 100.0),
+    "debt_to_income": (10.0, 20.0, 28.0, 36.0, 43.0, 50.0, 55.0),
+    "log_original_balance": (10.0, 11.3, 11.8, 12.1, 12.4, 12.7, 13.2, 14.5),
+    "origination_spread": (-2.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 4.0),
+    # The note rate itself is banded only because it is in the cell key, where it buys the
+    # spread and the refinancing incentive, and a band of the rate is a band of both. Half a
+    # point, which is roughly the width of the pricing grid the loans were written on and is
+    # coarse enough that the origination month -- already in the key -- carries most of the
+    # variation. The outer bands hold the 1999 and 2000 book above 8% and the 2021 book below 3.
+    "note_rate": (2.0, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 8.0, 12.0),
     # Percentage points of loan-to-value gained or lost since origination.
-    "cltv_drift": (-60.0, -20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0, 80.0),
-    "unemp_gap": (-10.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 12.0),
-    "refi_incentive": (-6.0, -1.0, 0.0, 0.5, 1.0, 2.0, 6.0),
-    "nfci_lagged": (-2.0, -0.6, -0.4, -0.2, 0.0, 0.5, 1.0, 5.0),
+    "ltv_change": (-60.0, -20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0, 80.0),
+    "unemployment_change": (-10.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 12.0),
+    "refinance_incentive": (-6.0, -1.0, 0.0, 0.5, 1.0, 2.0, 6.0),
+    "financial_conditions": (-2.0, -0.6, -0.4, -0.2, 0.0, 0.5, 1.0, 5.0),
     # Macro candidates. Edges are on the units the series is quoted in -- percentage
     # points for rates and spreads, fractions for year-on-year changes -- so a band
     # can be read without a conversion table. They are starting points: `profile
     # --covariate <name>` proposes quantile cut points from the data, and where the
     # two disagree the data wins.
-    "rate_gap": (-6.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 6.0),
-    "hpi_growth": (-0.5, -0.10, -0.05, 0.0, 0.05, 0.10, 0.15, 0.5),
-    "policy_rate_gap": (-8.0, -3.0, -1.0, 0.0, 1.0, 3.0, 8.0),
-    "term_spread": (-3.0, -0.5, 0.0, 0.5, 1.0, 2.0, 4.0),
-    "credit_spread": (0.0, 1.5, 2.0, 2.5, 3.0, 4.0, 7.0),
-    "inflation": (-0.05, 0.0, 0.02, 0.03, 0.05, 0.10),
+    "mortgage_rate_decline": (-6.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 6.0),
+    "house_price_growth": (-0.5, -0.10, -0.05, 0.0, 0.05, 0.10, 0.15, 0.5),
+    "policy_rate_change": (-8.0, -3.0, -1.0, 0.0, 1.0, 3.0, 8.0),
+    "yield_curve_slope": (-3.0, -0.5, 0.0, 0.5, 1.0, 2.0, 4.0),
+    "corporate_bond_spread": (0.0, 1.5, 2.0, 2.5, 3.0, 4.0, 7.0),
+    "inflation_rate": (-0.05, 0.0, 0.02, 0.03, 0.05, 0.10),
     # Year-on-year CPI inflation now, less at origination. Whole points either side of zero;
     # the outer bands reach past the exposure's 1st and 99th percentiles, -3.7 and +6.0.
-    "inflation_gap": (-0.10, -0.02, -0.01, 0.0, 0.01, 0.02, 0.04, 0.12),
+    "inflation_change": (-0.10, -0.02, -0.01, 0.0, 0.01, 0.02, 0.04, 0.12),
     "equity_return": (-0.7, -0.2, 0.0, 0.1, 0.2, 0.4, 1.5),
-    "vix": (8.0, 14.0, 18.0, 22.0, 28.0, 40.0, 90.0),
-    "sentiment": (50.0, 65.0, 75.0, 85.0, 95.0, 115.0),
-    "starts_growth": (-0.7, -0.3, -0.1, 0.0, 0.1, 0.3, 1.5),
+    "equity_volatility": (8.0, 14.0, 18.0, 22.0, 28.0, 40.0, 90.0),
+    "consumer_sentiment": (50.0, 65.0, 75.0, 85.0, 95.0, 115.0),
+    "housing_starts_growth": (-0.7, -0.3, -0.1, 0.0, 0.1, 0.3, 1.5),
 }
+
+#: Covariates a loan may legitimately not report: the value standing in for the missing
+#: one, and the level that has to be in the model for it to stand in harmlessly.
+#:
+#: A HARP refinance reports no debt-to-income, and it is the *only* reason one is missing
+#: in the cells: every other loan without the ratio is dropped by the complete-case rule.
+#: So the missing indicator and the HARP level are the same column, and filling those rows
+#: with a constant while the model holds that level is the **dummy-variable adjustment**: the
+#: slope is estimated on the loans that report the ratio, and the constant is absorbed whole
+#: by the level. It is exactly a "not reported" band of its own, written on the scale the
+#: covariate is already on, and the constant is arbitrary for the same reason -- any value
+#: gives the same likelihood and the same slope, moving only the level's own coefficient.
+#:
+#: Nothing is imputed. No HARP loan is given a debt-to-income anyone could read as its own:
+#: the cell table keeps the missing value missing, and this is the model's side of it.
+NOT_REPORTED: Final[dict[str, tuple[str, str, float]]] = {
+    "debt_to_income": ("harp", "harp", 32.0),
+}
+
+
+def absorb_not_reported(episodes: pd.DataFrame, requested: Sequence[str] | None = None) -> None:
+    """Fill what a loan does not report, where a level of the model absorbs the fill.
+
+    In place, and refusing rather than guessing: a missing value whose indicator is not in
+    the frame, or which the indicator does not explain, is a gap nobody has looked at.
+
+    ``requested`` is the covariate list the caller will fit on, and the fill is only harmless
+    while the indicator is in it. A model reading a filled debt-to-income without the HARP
+    level would read a constant of 32 as a real ratio for 18% of a decade of vintages, which
+    is the imputation this whole arrangement exists to avoid, so it raises instead. ``None``
+    means the caller has not decided yet and the check belongs to whoever does.
+    """
+    for name, (indicator, level, fill) in NOT_REPORTED.items():
+        if name not in episodes.columns:
+            continue
+        missing = episodes[name].isna().to_numpy()
+        if not missing.any():
+            continue
+        if requested is not None and name in requested and indicator not in requested:
+            message = (
+                f"{name} is fitted without {indicator}, and is missing on "
+                f"{missing.sum():,} rows. The level that absorbs the fill has to be in the model."
+            )
+            raise ValueError(message)
+        if indicator not in episodes.columns:
+            message = (
+                f"{name} is missing on {missing.sum():,} rows and the frame does not carry "
+                f"{indicator}, the level that would absorb the fill."
+            )
+            raise ValueError(message)
+        unexplained = missing & (episodes[indicator].astype(str) != level).to_numpy()
+        if unexplained.any():
+            message = (
+                f"{unexplained.sum():,} rows do not report {name} and are not {indicator} "
+                f"= {level}. Only a {level} loan is allowed to be missing it."
+            )
+            raise ValueError(message)
+        episodes[name] = episodes[name].fillna(fill)
+
 
 #: Suffix for the representative value of a covariate's band.
 BINNED_SUFFIX: str = "_binned"
@@ -324,28 +404,33 @@ CONTEMPORANEOUS_MACRO: Final[tuple[str, ...]] = CONTEMPORANEOUS_SERIES
 #: vintage quarter and the loan age, so none of them enters the aggregation key and
 #: none of them costs a single cell.
 MACRO_DERIVED: Final[tuple[str, ...]] = (
-    "cltv_drift",
-    "unemp_gap",
-    "nfci_lagged",
-    "rate_gap",
-    "hpi_growth",
-    "policy_rate_gap",
-    "term_spread",
-    "credit_spread",
-    "inflation",
+    "ltv_change",
+    "unemployment_change",
+    "financial_conditions",
+    "mortgage_rate_decline",
+    "house_price_growth",
+    "policy_rate_change",
+    "yield_curve_slope",
+    "corporate_bond_spread",
+    "inflation_rate",
     "equity_return",
-    "vix",
-    "sentiment",
-    "starts_growth",
-    "vix_gap",
-    "inflation_gap",
+    "equity_volatility",
+    "consumer_sentiment",
+    "housing_starts_growth",
+    "volatility_change",
+    "inflation_change",
+    # The two that need the loan's own note rate, which is why the cell key carries it:
+    # with the rate in the key they are functions of the key like every other member here,
+    # and cost no cells of their own.
+    "origination_spread",
+    "refinance_incentive",
 )
 
 
 def add_macro_family(
     episodes: pd.DataFrame,
     macro: pd.DataFrame,
-    orig_month: pd.Series,
+    origination_month: pd.Series,
     observation: pd.Series,
     lag_months: int,
     names: Sequence[str] | None = None,
@@ -415,7 +500,7 @@ def add_macro_family(
 
     def gap(column: str) -> np.ndarray:
         """How far a series has moved since the loan was written."""
-        moved: np.ndarray = at(column, observation) - at(column, orig_month)
+        moved: np.ndarray = at(column, observation) - at(column, origination_month)
         return moved
 
     def growth_at(column: str, when: pd.Series) -> np.ndarray:
@@ -429,29 +514,29 @@ def add_macro_family(
 
     def growth_gap(column: str) -> np.ndarray:
         """How far the year-on-year change has moved since the loan was written."""
-        moved: np.ndarray = growth_at(column, observation) - growth_at(column, orig_month)
+        moved: np.ndarray = growth_at(column, observation) - growth_at(column, origination_month)
         return moved
 
     # Built only where the series exists, so a panel assembled from a partial cache
     # yields the covariates it can rather than raising on the first one it cannot.
     for name, source, build in (
-        ("unemp_gap", "unemployment_rate", gap),
-        ("policy_rate_gap", "policy_rate", gap),
-        ("nfci_lagged", "nfci", level),
-        ("term_spread", "term_spread", level),
-        ("credit_spread", "credit_spread", level),
-        ("vix", "vix", level),
+        ("unemployment_change", "unemployment_rate", gap),
+        ("policy_rate_change", "fed_funds_rate", gap),
+        ("financial_conditions", "financial_conditions_index", level),
+        ("yield_curve_slope", "treasury_10y_2y_spread", level),
+        ("corporate_bond_spread", "baa_treasury_spread", level),
+        ("equity_volatility", "vix_index", level),
         # The gap forms of the two levels the validation called calendar effects (S5).
         # A level is the same number for every loan in a month; its move since
         # origination is not, so it is identified from loans living through the same
         # month on different terms as well as from the calendar.
-        ("vix_gap", "vix", gap),
-        ("sentiment", "sentiment", level),
-        ("hpi_growth", "hpi", growth),
-        ("inflation", "cpi", growth),
-        ("inflation_gap", "cpi", growth_gap),
-        ("equity_return", "equity_index", growth),
-        ("starts_growth", "housing_starts", growth),
+        ("volatility_change", "vix_index", gap),
+        ("consumer_sentiment", "consumer_sentiment_index", level),
+        ("house_price_growth", "house_price_index", growth),
+        ("inflation_rate", "consumer_price_index", growth),
+        ("inflation_change", "consumer_price_index", growth_gap),
+        ("equity_return", "nasdaq_composite", growth),
+        ("housing_starts_growth", "housing_starts", growth),
     ):
         if source in available and requested(name):
             store(name, build(source))
@@ -465,22 +550,57 @@ def add_macro_family(
     # This is the movement in the market rate since origination, not the full
     # refinancing incentive: the latter needs the loan's own note rate, which the key
     # does not carry. The constant part is missing; the part that varies is here.
-    if "mortgage_rate_30y" in available and requested("rate_gap"):
+    if "mortgage_rate_30y" in available and requested("mortgage_rate_decline"):
         thirty = -gap("mortgage_rate_30y")
         if "term_years" in episodes.columns and "mortgage_rate_15y" in available:
             short = episodes["term_years"].to_numpy(dtype=float) <= 20.0
-            store("rate_gap", np.where(short, -gap("mortgage_rate_15y"), thirty))
+            store("mortgage_rate_decline", np.where(short, -gap("mortgage_rate_15y"), thirty))
         else:
-            store("rate_gap", thirty)
+            store("mortgage_rate_decline", thirty)
+
+    # The loan's own rate against the market's. Until the note rate entered the cell key
+    # this was out of reach after the collapse, and mortgage_rate_decline -- the movement
+    # without the constant -- was as close as the panel could get.
+    #
+    # Same benchmark switch by term, for the same reason: a fifteen-year loan is refinanced
+    # against the fifteen-year rate.
+    #
+    # Only two of the three may enter a model: see MACRO_IDENTITIES.
+    if "note_rate" in episodes.columns and "mortgage_rate_30y" in available:
+        note = episodes["note_rate"].to_numpy(dtype=float)
+
+        def market(when: pd.Series) -> np.ndarray:
+            """The market mortgage rate the loan would be refinanced at."""
+            thirty = at("mortgage_rate_30y", when)
+            if "term_years" not in episodes.columns or "mortgage_rate_15y" not in available:
+                return thirty
+            short = episodes["term_years"].to_numpy(dtype=float) <= 20.0
+            switched: np.ndarray = np.where(short, at("mortgage_rate_15y", when), thirty)
+            return switched
+
+        if requested("origination_spread"):
+            store("origination_spread", note - market(origination_month))
+        if requested("refinance_incentive"):
+            store("refinance_incentive", note - market(observation))
 
     # Mark-to-market leverage, from the national house price index. Derived here
-    # rather than carried in the grouping key because it is a function of orig_ltv
+    # rather than carried in the grouping key because it is a function of original_ltv
     # and the macro path, both of which the key already holds -- carrying it was
     # doubling the cell count for information already there.
     #
     # The index rather than Freddie's own per-loan ELTV, which would be better if it
     # were usable: its coverage runs from 0.8% of the 1999 vintage to 94% of 2021, so
     # a model built on it would estimate a different quantity in every decade.
-    if "orig_ltv" in episodes.columns and "hpi" in available and requested("cltv_drift"):
-        original = episodes["orig_ltv"].to_numpy(dtype=float)
-        store("cltv_drift", original * at("hpi", orig_month) / at("hpi", observation) - original)
+    if (
+        "original_ltv" in episodes.columns
+        and "house_price_index" in available
+        and requested("ltv_change")
+    ):
+        original = episodes["original_ltv"].to_numpy(dtype=float)
+        store(
+            "ltv_change",
+            original
+            * at("house_price_index", origination_month)
+            / at("house_price_index", observation)
+            - original,
+        )

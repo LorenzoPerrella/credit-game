@@ -22,7 +22,7 @@ from creditsurv.data.aggregate import PRODUCTION_EDGES
 from creditsurv.data.panel import AGE
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
 
 @dataclass(frozen=True)
@@ -38,14 +38,13 @@ class Segment:
         return all(column in frame.columns for column in self.columns)
 
 
-def _categorical(column: str, names: Mapping[str, str] | None = None) -> Callable[..., pd.Series]:
+def _categorical(column: str) -> Callable[..., pd.Series]:
+    """The column's own codes. A page shows their labels, from :mod:`creditsurv.names`."""
+
     def label(frame: pd.DataFrame) -> pd.Series:
         values = frame[column]
         if not isinstance(values.dtype, pd.CategoricalDtype):
             values = values.astype("category")
-        if names:
-            present = {old: names.get(str(old), str(old)) for old in values.cat.categories}
-            values = values.cat.rename_categories(present)
         return values.rename(column)
 
     return label
@@ -91,11 +90,6 @@ def _term(frame: pd.DataFrame) -> pd.Series:
     return pd.Series(labelled, index=frame.index, name="term_years")
 
 
-#: Credit score bands, shown as scores rather than as the standardised ``fico_s``.
-def _score(value: float) -> str:
-    return f"{700 + 50 * value:.0f}"
-
-
 def _number(value: float) -> str:
     return f"{value:.0f}"
 
@@ -106,41 +100,36 @@ SEGMENTS: Final[dict[str, Segment]] = {
         Segment("purpose", "Loan purpose", ("purpose",), _categorical("purpose")),
         Segment("occupancy", "Occupancy", ("occupancy",), _categorical("occupancy")),
         Segment(
-            "has_mi",
+            "mortgage_insurance",
             "Mortgage insurance",
-            ("has_mi",),
-            _categorical("has_mi", {"N": "no insurance", "Y": "insured"}),
+            ("mortgage_insurance",),
+            _categorical("mortgage_insurance"),
         ),
-        Segment(
-            "first_time_buyer",
-            "First-time buyer",
-            ("first_time_buyer",),
-            _categorical("first_time_buyer", {"N": "repeat buyer", "Y": "first-time buyer"}),
-        ),
+        Segment("buyer_type", "Buyer type", ("buyer_type",), _categorical("buyer_type")),
         Segment("term", "Original term", ("term_years",), _term),
         Segment(
             "fico",
             "Credit score band",
-            ("fico_s",),
-            _banded("fico_s", PRODUCTION_EDGES["fico_s"], _score),
+            ("credit_score",),
+            _banded("credit_score", PRODUCTION_EDGES["credit_score"], _number),
         ),
         Segment(
             "ltv",
             "Loan-to-value band",
-            ("orig_ltv",),
-            _banded("orig_ltv", PRODUCTION_EDGES["orig_ltv"], _number),
+            ("original_ltv",),
+            _banded("original_ltv", PRODUCTION_EDGES["original_ltv"], _number),
         ),
         Segment(
             "dti",
             "Debt-to-income band",
-            ("dti",),
-            _banded("dti", PRODUCTION_EDGES["dti"], _number),
+            ("debt_to_income",),
+            _banded("debt_to_income", PRODUCTION_EDGES["debt_to_income"], _number),
         ),
         Segment(
             "vintage_era",
             "Vintage era",
-            ("orig_period",),
-            _years("orig_period", (1999, 2004, 2009, 2015, 2020, 2027)),
+            ("origination_period",),
+            _years("origination_period", (1999, 2004, 2009, 2015, 2020, 2027)),
         ),
     )
 }

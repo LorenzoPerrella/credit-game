@@ -37,13 +37,13 @@ if TYPE_CHECKING:
 
     from lifelines.fitters import ParametericAFTRegressionFitter
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap", "purpose"]
-FORMULA = "fico_s + cltv_drift + unemp_gap + C(purpose)"
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change", "purpose"]
+FORMULA = "credit_score + ltv_change + unemployment_change + C(purpose)"
 
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.7,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=-0.06,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -58,8 +58,13 @@ def weighted(book_dir: Path, macro_module: pd.DataFrame) -> pd.DataFrame:
     """
     panel, _ = build_panel(book_dir, macro_module, n_loans=900, seed=23, params=PARAMS)
     encoded = to_interval_censored(panel)
-    encoded["n"] = np.random.default_rng(5).integers(1, 6, len(encoded))
+    encoded["loan_months"] = np.random.default_rng(5).integers(1, 6, len(encoded))
     encoded["purpose"] = encoded["purpose"].astype("category")
+    # Centred and scaled, because what is measured here is the blocks, not the optimiser. On
+    # the score in points SLSQP stops 2.3e-8 apart from lifelines' own run -- the same
+    # objective, a flatter valley along the intercept -- which would hide a block error of
+    # that size; the polish closes it in a real fit.
+    encoded["credit_score"] = (encoded["credit_score"] - 700.0) / 50.0
     return encoded.sort_values(["purpose", "age"], kind="stable").reset_index(drop=True)
 
 
@@ -74,12 +79,12 @@ def stock_fit(
     fitter: ParametericAFTRegressionFitter, frame: pd.DataFrame
 ) -> ParametericAFTRegressionFitter:
     fitter.fit_interval_censoring(
-        model_frame(frame, COVARIATES).assign(n=frame["n"].to_numpy()),
+        model_frame(frame, COVARIATES).assign(loan_months=frame["loan_months"].to_numpy()),
         lower_bound_col=LOWER_BOUND,
         upper_bound_col=UPPER_BOUND,
         event_col=EXACT_OBSERVATION,
         entry_col=AGE_START,
-        weights_col="n",
+        weights_col="loan_months",
         formula=FORMULA,
     )
     return fitter
@@ -95,13 +100,13 @@ def block_fit(
     """The block engine, by default stopping where lifelines stops, to be compared with it."""
     fit_interval_censoring_in_blocks(
         fitter,
-        model_blocks(frame, COVARIATES, rows=rows, weights_col="n"),
+        model_blocks(frame, COVARIATES, rows=rows, weights_col="loan_months"),
         formula=FORMULA,
         lower_bound_col=LOWER_BOUND,
         upper_bound_col=UPPER_BOUND,
         event_col=EXACT_OBSERVATION,
         entry_col=AGE_START,
-        weights_col="n",
+        weights_col="loan_months",
         polish=polish,
     )
     return fitter
@@ -152,18 +157,20 @@ def test_the_answer_does_not_depend_on_the_block_size(weighted: pd.DataFrame) ->
 def test_a_block_fit_reports_what_it_saw(weighted: pd.DataFrame) -> None:
     record = fit_interval_censoring_in_blocks(
         FITTERS["weibull"](),
-        model_blocks(weighted, COVARIATES, rows=single_level_rows(weighted), weights_col="n"),
+        model_blocks(
+            weighted, COVARIATES, rows=single_level_rows(weighted), weights_col="loan_months"
+        ),
         formula=FORMULA,
         lower_bound_col=LOWER_BOUND,
         upper_bound_col=UPPER_BOUND,
         event_col=EXACT_OBSERVATION,
         entry_col=AGE_START,
-        weights_col="n",
+        weights_col="loan_months",
     )
 
     assert record.rows == len(weighted)
-    assert record.loan_months == weighted["n"].sum()
-    assert record.events == weighted.loc[weighted["event"].astype(bool), "n"].sum()
+    assert record.loan_months == weighted["loan_months"].sum()
+    assert record.events == weighted.loc[weighted["event"].astype(bool), "loan_months"].sum()
     assert record.blocks > 3
     # The point of storing compactly: well under the 8 bytes a float64 cell would take.
     assert record.stored_bytes < 8 * record.rows * 4
@@ -179,8 +186,8 @@ def test_a_text_covariate_is_refused(weighted: pd.DataFrame) -> None:
 
 def test_blocks_declaring_different_levels_are_refused(weighted: pd.DataFrame) -> None:
     rows = single_level_rows(weighted)
-    first = model_frame(weighted.iloc[:rows], COVARIATES).assign(n=1)
-    second = model_frame(weighted.iloc[rows:], COVARIATES).assign(n=1)
+    first = model_frame(weighted.iloc[:rows], COVARIATES).assign(loan_months=1)
+    second = model_frame(weighted.iloc[rows:], COVARIATES).assign(loan_months=1)
     first["purpose"] = first["purpose"].cat.remove_unused_categories()
 
     with pytest.raises(ValueError, match="levels"):
@@ -192,7 +199,7 @@ def test_blocks_declaring_different_levels_are_refused(weighted: pd.DataFrame) -
             upper_bound_col=UPPER_BOUND,
             event_col=EXACT_OBSERVATION,
             entry_col=AGE_START,
-            weights_col="n",
+            weights_col="loan_months",
         )
 
 
@@ -230,13 +237,13 @@ def test_a_warm_start_ends_where_a_cold_one_does_in_fewer_steps(weighted: pd.Dat
         fitter = FITTERS["weibull"]()
         record = fit_interval_censoring_in_blocks(
             fitter,
-            model_blocks(weighted, COVARIATES, rows=rows, weights_col="n"),
-            formula="fico_s + cltv_drift + unemp_gap",
+            model_blocks(weighted, COVARIATES, rows=rows, weights_col="loan_months"),
+            formula="credit_score + ltv_change + unemployment_change",
             lower_bound_col=LOWER_BOUND,
             upper_bound_col=UPPER_BOUND,
             event_col=EXACT_OBSERVATION,
             entry_col=AGE_START,
-            weights_col="n",
+            weights_col="loan_months",
             initial_point=initial_point,
             polish=True,
         )
@@ -264,13 +271,15 @@ def test_the_polish_reaches_the_optimum_the_optimiser_stops_short_of(
     fitter = FITTERS["weibull"]()
     record = fit_interval_censoring_in_blocks(
         fitter,
-        model_blocks(weighted, COVARIATES, rows=single_level_rows(weighted), weights_col="n"),
+        model_blocks(
+            weighted, COVARIATES, rows=single_level_rows(weighted), weights_col="loan_months"
+        ),
         formula=FORMULA,
         lower_bound_col=LOWER_BOUND,
         upper_bound_col=UPPER_BOUND,
         event_col=EXACT_OBSERVATION,
         entry_col=AGE_START,
-        weights_col="n",
+        weights_col="loan_months",
         polish=True,
     )
 
@@ -319,3 +328,166 @@ def test_the_polish_never_steps_into_values_no_likelihood_can_take() -> None:
     assert reached >= 0
     assert abs(float(point[0]) - 1.0) < 1e-6
     assert left < POLISH_TOLERANCE_SE
+
+
+def test_the_slicer_hands_lifelines_the_columns_it_asks_for(macro: pd.DataFrame) -> None:
+    """The design is handed to the likelihood through a slicer of our own, and the likelihood
+    is lifelines' -- so the slicer has to answer exactly as lifelines' own does.
+
+    It exists because pandas' answer was measured at 32% of a value-and-gradient, plus the
+    copies it made: a parameter's columns are adjacent in the design, so asking for them is a
+    view, and the masks the likelihood filters by are properties of the data, so a repeated
+    filter is free. Together they made an evaluation 1.9 times faster.
+    """
+    from lifelines.utils import DataframeSlicer
+
+    from creditsurv.models.blocks import _Slicer
+
+    columns = pd.MultiIndex.from_tuples(
+        [("lambda_", "Intercept"), ("lambda_", "credit_score"), ("rho_", "Intercept")]
+    )
+    design = np.asfortranarray(np.arange(30, dtype=float).reshape(10, 3))
+    theirs = DataframeSlicer(pd.DataFrame(design, columns=columns))
+    ours = _Slicer(design, columns)
+    mask = np.zeros(10, dtype=bool)
+    mask[[1, 4, 7]] = True
+
+    for key in ("lambda_", "rho_"):
+        np.testing.assert_array_equal(ours[key], theirs[key])
+        np.testing.assert_array_equal(ours.filter(mask)[key], theirs.filter(mask)[key])
+        np.testing.assert_array_equal(ours.filter(~mask)[key], theirs.filter(~mask)[key])
+    assert ours.size == theirs.size
+    assert ours.filter(mask).size == 3
+
+    # The same mask twice is the same object, and the columns come back contiguous -- the
+    # first version of this returned C-ordered rows and was 60% slower than the pandas it
+    # replaced.
+    assert ours.filter(mask) is ours.filter(mask.copy())
+    assert ours["lambda_"].flags["F_CONTIGUOUS"]
+    assert ours.filter(mask)["lambda_"].flags["F_CONTIGUOUS"]
+
+
+def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
+    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SLSQP solves a quadratic subproblem at each step, and on an ill-conditioned design it
+    reports "Rank-deficient equality constraint subproblem" and gives up -- which is what the
+    prepayment model did at step 8 of its selection, cold, at a finite objective of 56.58.
+
+    The estimator is unchanged by trying another path: the same likelihood on the same rows has
+    the same optimum, and the polish certifies the answer is at it. This holds the mechanism --
+    the fit comes out of the fallback, is a real fit, and says which method found it.
+    """
+    from scipy import optimize
+
+    from creditsurv.models import blocks
+
+    calls: list[str] = []
+    real = optimize.minimize
+
+    def refuses_slsqp(*args: object, **kwargs: object) -> object:
+        method = str(kwargs.get("method"))
+        calls.append(method)
+        if method.lower() == "slsqp":
+            failed = real(*args, **{**kwargs, "options": {"maxiter": 1}})
+            failed.success = False
+            failed.message = "Rank-deficient equality constraint subproblem HFTI"
+            return failed
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(blocks, "minimize", refuses_slsqp)
+
+    fitter = FITTERS["weibull"]()
+    record = fit_interval_censoring_in_blocks(
+        fitter,
+        model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+        formula=FORMULA,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+        polish=True,
+    )
+
+    assert calls[0].lower() == "slsqp"
+    assert calls[1] == "L-BFGS-B", "the first fallback is tried next"
+    assert record.method == "l-bfgs-b"
+    assert record.evaluations > 0
+    assert fitter.log_likelihood_ < 0, "a real fit came out of the fallback"
+    assert record.residual_error_se < 1e-3, "and the polish certifies it is at the optimum"
+
+
+def test_the_optimisers_report_is_used_for_nothing_but_its_point(
+    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each optimiser reports its value and gradient its own way: SLSQP's ``jac`` is the
+    gradient, trust-constr's is shaped for its constraint machinery. Reading that field cost a
+    run -- trust-constr solved a prepayment fit SLSQP had given up on, and the polish died on
+    `LinAlgError: Incompatible dimensions`, an hour of fitting thrown away for a shape.
+
+    So both are recomputed from the objective, and here the optimiser returns nonsense in
+    those fields to prove nothing reads them.
+    """
+    from scipy import optimize
+
+    from creditsurv.models import blocks
+
+    real = optimize.minimize
+
+    def reports_nonsense(*args: object, **kwargs: object) -> object:
+        results = real(*args, **kwargs)
+        results.jac = "not a gradient"
+        results.fun = float(results.fun)  # kept finite: the engine checks convergence on it
+        return results
+
+    monkeypatch.setattr(blocks, "minimize", reports_nonsense)
+
+    fitter = FITTERS["weibull"]()
+    record = fit_interval_censoring_in_blocks(
+        fitter,
+        model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+        formula=FORMULA,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+        polish=True,
+    )
+
+    assert record.residual_error_se < 1e-3, "the polish ran on a recomputed gradient"
+    assert fitter.log_likelihood_ < 0
+
+
+def test_the_optimiser_that_worked_is_tried_first_next_time() -> None:
+    """A design that defeats SLSQP is usually beside another one just like it: the backward
+    elimination refits nearly the same model at every step. Walking the whole chain each time
+    cost over an hour a fit on the prepayment model -- 25 minutes of SLSQP failing, 40 of
+    L-BFGS-B, then an hour of trust-constr answering.
+    """
+    from creditsurv.models.blocks import _methods
+
+    assert _methods("SLSQP", None) == ("SLSQP", "L-BFGS-B", "trust-constr")
+    assert _methods("SLSQP", "slsqp") == ("SLSQP", "L-BFGS-B", "trust-constr")
+    assert _methods("SLSQP", "trust-constr") == ("trust-constr", "SLSQP", "L-BFGS-B")
+    assert _methods("SLSQP", "l-bfgs-b") == ("L-BFGS-B", "SLSQP", "trust-constr")
+    # A method nobody offers is ignored rather than tried.
+    assert _methods("SLSQP", "newton") == ("SLSQP", "L-BFGS-B", "trust-constr")
+
+
+def test_a_coefficient_on_the_bound_is_refused_rather_than_published() -> None:
+    """The bound keeps the optimiser out of the region where lifelines' clipped objective
+    stops being a likelihood -- every failure of the prepayment model ended there, the worst
+    reading -8.97e+69. It is not a constraint on the model, so a fit that ends on it is not a
+    maximum and says so.
+    """
+    from lifelines import exceptions
+
+    from creditsurv.models.blocks import _PARAMETER_BOUND, _check_interior
+
+    _check_interior(np.array([0.5, -2.0, 30.0]))  # interior: nothing happens
+    with pytest.raises(exceptions.ConvergenceError, match="not identified"):
+        _check_interior(np.array([0.5, _PARAMETER_BOUND]))
+    with pytest.raises(exceptions.ConvergenceError, match="Coefficient\\(s\\) \\[0\\]"):
+        _check_interior(np.array([-_PARAMETER_BOUND, 0.1]))

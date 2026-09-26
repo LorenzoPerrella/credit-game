@@ -30,6 +30,7 @@ in-sample.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
@@ -46,7 +47,7 @@ from creditsurv.data.panel import EVENT, duration_view
 from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS, FitResult, Likelihood, fit_aft
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
     from lifelines.fitters import ParametricUnivariateFitter
 
@@ -146,7 +147,7 @@ def distribution_comparison(
     Each family is also held to the expected signs. A family that fits worse *and* points a
     declared prior the wrong way is rejected twice, for independent reasons: the
     validation's log-logistic fit on the specification before it was 623,126 AIC points
-    behind the Weibull and turned ``orig_ltv`` around.
+    behind the Weibull and turned ``original_ltv`` around.
     """
     rows = []
     for distribution in distributions:
@@ -192,6 +193,79 @@ def signs_against_prior(result: FitResult) -> list[str]:
         for name, coefficient in summary["coef"].items()
         if EXPECTED_SIGNS.get(str(name), 0) * float(coefficient) < 0
     ]
+
+
+#: How close two families have to be for the rule to fall back on the Weibull, in
+#: percentage points of cumulative incidence. From `docs/rules.md`, written before the fits.
+FAMILY_TIE: Final = 0.1
+
+#: The family kept when the two are within FAMILY_TIE of each other. Its hazard does not
+#: fall at long ages, and the families differ most exactly where the data ends and the
+#: extrapolation a lifetime PD lives on begins.
+FAMILY_ON_A_TIE: Final = "weibull"
+
+
+def family_comparison(
+    gaps: Mapping[str, pd.DataFrame], signs: Mapping[str, Sequence[str]]
+) -> pd.DataFrame:
+    """One row per family: its distance from the non-parametric curve, and its signs.
+
+    ``gaps`` maps a family to the table :func:`creditsurv.models.nonparametric.incidence_gap`
+    produced for its *selected* model, and ``signs`` to the covariates that model turns
+    against a declared prior.
+    """
+    rows = [
+        {
+            "distribution": family,
+            "mean_abs_gap_pp": float(table["gap_pp"].abs().mean()),
+            "max_abs_gap_pp": float(table["gap_pp"].abs().max()),
+            "ages_compared": len(table),
+            "signs_against_prior": ", ".join(signs.get(family, ())),
+            "excluded": bool(signs.get(family)),
+        }
+        for family, table in gaps.items()
+    ]
+    return pd.DataFrame(rows).sort_values("mean_abs_gap_pp").reset_index(drop=True)
+
+
+def family_by_the_rule(comparison: pd.DataFrame) -> tuple[str, str]:
+    """Apply rule 2 of `docs/rules.md` to the comparison, and say why it chose.
+
+    Three clauses, in order, and each of them fixed before either family was fitted:
+
+    * a family whose selected model turns a **declared sign** is excluded whatever its
+      fit -- a model that says tighter financial conditions lengthen survival is not a
+      better model, it is a broken one;
+    * otherwise the **smaller mean absolute gap** from the Aalen-Johansen cumulative
+      incidence of default, over the ages above the exposure floor;
+    * unless the two are within **0.1 percentage points**, where the Weibull is kept.
+
+    Returns the family and the sentence that decided it, which goes in the report: a rule
+    applied without saying which clause fired is indistinguishable from a preference.
+    """
+    eligible = comparison[~comparison["excluded"]]
+    if eligible.empty:
+        message = "Every family turns a declared sign; none can be published."
+        raise ValueError(message)
+    ranked = eligible.sort_values("mean_abs_gap_pp")
+    best = str(ranked.iloc[0]["distribution"])
+    excluded = ", ".join(comparison.loc[comparison["excluded"], "distribution"].astype(str))
+    note = f"{excluded} excluded on a declared sign; " if excluded else ""
+
+    if len(ranked) == 1:
+        return best, f"{note}{best} is the only family left"
+
+    gap = float(ranked.iloc[1]["mean_abs_gap_pp"]) - float(ranked.iloc[0]["mean_abs_gap_pp"])
+    if gap < FAMILY_TIE and FAMILY_ON_A_TIE in set(ranked["distribution"].astype(str)):
+        return (
+            FAMILY_ON_A_TIE,
+            f"{note}the families are {gap:.3f} pp apart, inside the {FAMILY_TIE:g} pp tie, "
+            f"so the {FAMILY_ON_A_TIE} is kept",
+        )
+    return (
+        best,
+        f"{note}{best} is {gap:.3f} pp closer to the observed cumulative incidence",
+    )
 
 
 def exponential_is_rejected(result: FitResult) -> dict[str, float]:
@@ -248,7 +322,7 @@ def likelihood_ratio_test(
 #: late, 0.9522 against 0.9533 surviving at 60 months and 0.9258 against 0.9246 at 91 --
 #: and no scale factor maps one such curve onto the other, so it is where a shape that
 #: varies has something to find. The report used to relax the first covariate of the
-#: specification, ``fico_s``, and so answered a question nobody had asked.
+#: specification, ``credit_score``, and so answered a question nobody had asked.
 SHAPE_COVARIATE: Final = "occupancy"
 
 
@@ -394,42 +468,63 @@ PVALUE_THRESHOLD: Final = 0.05
 #: eliminated on the sign alone. A model that says higher credit scores default sooner
 #: fits its sample and will not survive the next one.
 EXPECTED_SIGNS: Final[dict[str, int]] = {
-    "fico_s": +1,  # better credit survives longer
-    "orig_ltv": -1,  # more leverage fails sooner
-    "orig_cltv": -1,
-    "dti": -1,  # more debt burden fails sooner
-    "cltv_drift": -1,  # leverage rising after origination fails sooner
-    "unemp_gap": -1,  # unemployment above origination fails sooner
-    "nfci_lagged": -1,  # tighter financial conditions fail sooner
-    "mi_percent": +1,  # insured loans are underwritten against a stricter standard
+    "credit_score": +1,  # better credit survives longer
+    "original_ltv": -1,  # more leverage fails sooner
+    "original_cltv": -1,
+    "debt_to_income": -1,  # more debt burden fails sooner
+    "ltv_change": -1,  # leverage rising after origination fails sooner
+    "unemployment_change": -1,  # unemployment above origination fails sooner
+    "financial_conditions": -1,  # tighter financial conditions fail sooner
+    "insurance_coverage": +1,  # insured loans are underwritten against a stricter standard
     # Macro candidates. Only where theory actually commits to a direction: a
     # covariate listed here with no clear prior would be eliminated for disagreeing
     # with a guess, which is worse than not testing it.
-    "vix": -1,  # high implied volatility is a stressed economy
-    "vix_gap": -1,  # volatility risen since origination is stress the loan was not written in
-    "hpi_growth": +1,  # rising house prices build equity
+    "equity_volatility": -1,  # high implied volatility is a stressed economy
+    # Volatility risen since origination is stress the loan was not written in.
+    "volatility_change": -1,
+    "house_price_growth": +1,  # rising house prices build equity
     #
-    # ``rate_gap`` and ``policy_rate_gap`` were briefly given revised signs here, on
+    # ``mortgage_rate_decline`` and ``policy_rate_change`` were briefly given revised signs here, on
     # the strength of their marginal orderings and a mechanism about fixed-rate books.
     # That revision is **retracted**: conditional on the rest of the specification both
     # effects are inside the noise, and the marginal ordering that justified it was the
     # macro cycle. They are eliminated rather than re-signed -- see ``config.ELIMINATED``.
 }
 
+#: The signs the **prepayment** model's coefficients must take, on the same scale: positive
+#: lengthens the time to prepayment.
+#:
+#: A different model of a different exit, so a different prior on every covariate, and the
+#: two must not be confused -- a credit score that lengthens survival *shortens* the time to
+#: repayment, because the borrowers who can refinance are the ones who qualify. These are
+#: the priors declared in rule 6 of `docs/rules.md`, before the fit.
+#:
+#: The refinancing incidence itself is absent because the key cannot carry the note rate at
+#: this cell count (`docs/reports/key_extensions.csv`); ``mortgage_rate_decline``, the fall in
+#: the market rate since origination, is the same comparison without its constant and takes
+#: the sign the incentive would have.
+PREPAYMENT_SIGNS: Final[dict[str, int]] = {
+    "mortgage_rate_decline": -1,  # rates below the note rate: refinance, and sooner
+    "credit_score": -1,  # better credit can refinance, and does
+    "ltv_change": +1,  # leverage that has risen blocks a refinance
+    "house_price_growth": -1,  # rising prices free equity and enable cash-out
+    "unemployment_change": +1,  # a weaker labour market prepays less
+}
+
 #: Covariates deliberately left out of ``EXPECTED_SIGNS``, with the reason. Listed so
 #: the omission reads as a decision rather than an oversight.
 #:
-#: ``rate_gap`` is the near miss. The sign above is the dominant channel -- rates
+#: ``mortgage_rate_decline`` is the near miss. The sign above is the dominant channel -- rates
 #: below the note rate mean refinancing is available and the payment burden is
 #: easier -- but the opposite channel is real: the borrowers who *cannot* refinance
 #: when everyone else can are adversely selected, and they are the ones left in the
 #: book. The constraint is kept because the first channel dominates in the
 #: literature, and this note is here because it is a prior, not a finding.
 AMBIGUOUS_SIGNS: Final[dict[str, str]] = {
-    "term_spread": "a steep curve is both cheap short funding and an expected slowdown",
-    "inflation": "erodes the real debt, squeezes the real income",
-    "inflation_gap": "the same two channels, measured against the loan's own start",
-    "dti": "kept as negative, but it is measured at origination and never updated",
+    "yield_curve_slope": "a steep curve is both cheap short funding and an expected slowdown",
+    "inflation_rate": "erodes the real debt, squeezes the real income",
+    "inflation_change": "the same two channels, measured against the loan's own start",
+    "debt_to_income": "kept as negative, but it is measured at origination and never updated",
 }
 
 
@@ -458,35 +553,97 @@ def variance_inflation(
 MOMENT_BLOCK_ROWS: Final = 5_000_000
 
 
-def weighted_covariance(
-    frame: pd.DataFrame,
+@dataclass(frozen=True)
+class Moments:
+    """The sums a covariance, a correlation and a VIF are all made of.
+
+    Kept as the sums rather than the matrix so a caller that read the rows once -- at this
+    scale, an hour of parquet and macro rebuilding -- also has the row count and the exposure
+    without reading them again.
+    """
+
+    covariance: pd.DataFrame
+    rows: int
+    loan_months: float
+
+    @property
+    def deviations(self) -> pd.Series:
+        """The weighted standard deviation of each covariate."""
+        return pd.Series(np.sqrt(np.diag(self.covariance.to_numpy())), index=self.covariance.index)
+
+    @property
+    def correlation(self) -> pd.DataFrame:
+        scale = self.deviations.to_numpy()
+        return pd.DataFrame(
+            self.covariance.to_numpy() / np.outer(scale, scale),
+            index=self.covariance.index,
+            columns=self.covariance.columns,
+        )
+
+
+def weighted_moments(
+    source: pd.DataFrame | Iterable[pd.DataFrame],
     columns: Sequence[str],
     *,
     weight: str | None = None,
     rows: int = MOMENT_BLOCK_ROWS,
-) -> pd.DataFrame:
-    """Exposure-weighted covariance of ``columns``, added up a block at a time.
+) -> Moments:
+    """Exposure-weighted moments of ``columns``, added up a block at a time.
 
     A weight total, the weighted sums and the weighted cross-products are everything a
     variance inflation factor or a correlation needs, and all three are sums. The first
     version copied the covariates out whole and then again for every covariate it
     regressed: on the training half of the exact key, tens of gigabytes to produce a
     matrix a dozen entries wide.
+
+    ``source`` is a frame, or **any iterable of frames** -- which is how the selection now
+    reads it: the batches of the cell file, expanded one at a time, so the training half
+    never exists as an object. The sums are the same either way, which is what makes the
+    two paths interchangeable and testable against each other.
     """
     names = list(columns)
     total = 0.0
+    counted = 0
     first = np.zeros(len(names))
     second = np.zeros((len(names), len(names)))
-    for start in range(0, len(frame), rows):
-        block = frame.iloc[start : start + rows]
+    blocks = _blocks(source, rows)
+    for block in blocks:
         values = block.loc[:, names].to_numpy(dtype=float)
         weights = block[weight].to_numpy(dtype=float) if weight else np.ones(len(block))
         total += float(weights.sum())
+        counted += len(block)
         first += weights @ values
         second += values.T @ (values * weights[:, None])
+    if total <= 0:
+        message = "No exposure to take moments over."
+        raise ValueError(message)
     mean = first / total
     covariance = second / total - np.outer(mean, mean)
-    return pd.DataFrame(covariance, index=names, columns=names)
+    return Moments(
+        covariance=pd.DataFrame(covariance, index=names, columns=names),
+        rows=counted,
+        loan_months=total,
+    )
+
+
+def _blocks(source: pd.DataFrame | Iterable[pd.DataFrame], rows: int) -> Iterator[pd.DataFrame]:
+    """Either a frame cut into blocks, or the frames the caller is already producing."""
+    if isinstance(source, pd.DataFrame):
+        for start in range(0, len(source), rows):
+            yield source.iloc[start : start + rows]
+        return
+    yield from source
+
+
+def weighted_covariance(
+    frame: pd.DataFrame | Iterable[pd.DataFrame],
+    columns: Sequence[str],
+    *,
+    weight: str | None = None,
+    rows: int = MOMENT_BLOCK_ROWS,
+) -> pd.DataFrame:
+    """The covariance alone, for callers with no use for the counts beside it."""
+    return weighted_moments(frame, columns, weight=weight, rows=rows).covariance
 
 
 def inflation_from_covariance(covariance: pd.DataFrame) -> pd.DataFrame:
@@ -523,16 +680,20 @@ def _inflation(covariance: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame
 
 
 def stepwise_vif(
-    frame: pd.DataFrame,
+    frame: pd.DataFrame | None,
     columns: Sequence[str],
     *,
     weight: str | None = None,
     threshold: float = VIF_THRESHOLD,
     priority: Sequence[str] = (),
+    covariance: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Drop the most inflated covariate, recompute, repeat.
 
     Returns the elimination log and the surviving covariates.
+
+    ``covariance`` is the matrix of the candidates when the caller has already computed it;
+    ``frame`` may then be ``None``, and nothing here reads a row.
 
     ``priority`` names covariates to protect, most protected last — the convention
     `nmds` uses, and the reason it matters: when two covariates are collinear the
@@ -543,9 +704,15 @@ def stepwise_vif(
     protected = {name: rank for rank, name in enumerate(priority)}
     surviving = list(columns)
     log: list[dict[str, object]] = []
-    # Once: every later step's covariance is a submatrix of this one, so no step reads
-    # the rows again.
-    covariance = weighted_covariance(frame, columns, weight=weight)
+    # Once: every later step's covariance is a submatrix of this one, so no step reads the
+    # rows again -- and ``covariance`` lets a caller that has already taken the moments skip
+    # the pass altogether. The selection had been paying for two identical passes over the
+    # training half, one for its correlation table and one here.
+    if covariance is None:
+        if frame is None:
+            message = "stepwise_vif needs either the rows or a covariance matrix."
+            raise ValueError(message)
+        covariance = weighted_covariance(frame, columns, weight=weight)
 
     while len(surviving) > 1:
         inflation = _inflation(covariance, surviving)

@@ -30,16 +30,20 @@ an infinite upper bound.
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass, replace
 from itertools import pairwise
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 
-from creditsurv.features import MACRO_DERIVED, add_macro_family
+from creditsurv.config import MACRO_LAG_MONTHS
+from creditsurv.features import MACRO_DERIVED, absorb_not_reported, add_macro_family
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
+    from pathlib import Path
 
 LOAN_ID: Final = "loan_id"
 AGE: Final = "age"
@@ -49,7 +53,14 @@ AGE_STOP: Final = "age_stop"
 LOWER_BOUND: Final = "lower_bound"
 UPPER_BOUND: Final = "upper_bound"
 EXACT_OBSERVATION: Final = "exact_observation"
-WEIGHT: Final = "n"
+WEIGHT: Final = "loan_months"
+
+#: How a cell's loan-months ended: in default, in a voluntary repayment, or in neither.
+OUTCOME: Final = "outcome"
+DEFAULT_CAUSE: Final = "default"
+PREPAYMENT_CAUSE: Final = "prepayment"
+CENSORED: Final = "none"
+CAUSES: Final = (DEFAULT_CAUSE, PREPAYMENT_CAUSE)
 
 #: Columns every canonical loan-month panel must carry.
 REQUIRED_COLUMNS: Final[tuple[str, ...]] = (LOAN_ID, AGE, EVENT)
@@ -180,6 +191,154 @@ def model_blocks(
         if weights_col is not None:
             frame[weights_col] = block[weights_col].to_numpy()
         yield frame
+
+
+def cell_shape(source: Path | str) -> tuple[int, dict[str, pd.Index]]:
+    """The episode width and the categorical levels of a cell file, read without expanding it.
+
+    Both are properties of the **whole** table and cannot be taken from one block: a block
+    holding ages 0 and 12 is not a table of year-long episodes, and a block without an
+    investment property would give its design one dummy column fewer than the next block's.
+    """
+    import pyarrow.parquet as pq
+
+    file = pq.ParquetFile(source)
+    ages = pq.read_table(source, columns=[AGE]).column(AGE).unique().to_pylist()
+    distinct = sorted(int(age) for age in ages)
+    step = (
+        min((later - earlier) for earlier, later in pairwise(distinct)) if len(distinct) > 1 else 1
+    )
+    levels: dict[str, pd.Index] = {}
+    for field in file.schema_arrow:
+        if not (pa.types.is_dictionary(field.type) or pa.types.is_string(field.type)):
+            continue
+        stored = pq.read_table(source, columns=[field.name]).column(field.name).unique().to_pylist()
+        levels[field.name] = pd.Index(sorted(str(value) for value in stored))
+    return step, levels
+
+
+@dataclass(frozen=True)
+class CellBlocks:
+    """Where a share of the model's rows comes from, in a form a worker can be sent.
+
+    A description rather than the rows: the path to the cell file, the macro panel and what
+    to select. A worker process is handed one of these and reads its own part, so a parallel
+    fit never sends blocks between processes and never holds a copy of them all.
+    """
+
+    source: str
+    macro: pd.DataFrame
+    covariates: tuple[str, ...]
+    #: Cells expanded at a time. A reader's peak is what one batch costs to expand: 1.53 GB
+    #: at a million cells, 0.97 GB at 250,000, measured on the production table.
+    rows: int = 250_000
+    months: tuple[int | None, int | None] | None = None
+    #: 0 for loans originated in even years, 1 for odd: the selection's stability halves,
+    #: as something that survives being sent to another process.
+    vintage_parity: int | None = None
+    weights_col: str = WEIGHT
+    lag_months: int = MACRO_LAG_MONTHS
+    #: Which exit the episodes are built for. For prepayment a default is censoring exactly
+    #: as a survivor is, which is what makes the two cause-specific hazards separable and
+    #: what lets one cell file serve both models.
+    cause: str = DEFAULT_CAUSE
+    #: What each batch comes back as. ``True`` gives the narrow frame a fit reads -- the
+    #: covariates, the interval bounds and the weight. ``False`` gives the whole episode
+    #: frame, with the calendar columns, the age and the outcome, which is what a view has to
+    #: group by and what a fit has no use for.
+    model_only: bool = True
+    #: The episode width and categorical levels of the file, when they are already known.
+    #: Read once and carried, so six worker processes do not each read the whole of two
+    #: columns of a 63-million-row file to learn the same thing -- which they did, and it
+    #: was 3 GB of the peak.
+    shape: tuple[int, dict[str, pd.Index]] | None = None
+
+    def prepared(self) -> CellBlocks:
+        """This description with the file's width and levels read, ready to be sent."""
+        return self if self.shape is not None else replace(self, shape=cell_shape(self.source))
+
+    def __call__(self, part: int = 0, of: int = 1) -> Iterator[pd.DataFrame]:
+        """The frames of this part: every ``of``-th batch, starting at ``part``."""
+        import pyarrow.parquet as pq
+
+        step, levels = self.shape if self.shape is not None else cell_shape(self.source)
+        batches = pq.ParquetFile(self.source).iter_batches(batch_size=self.rows)
+        for number, batch in enumerate(batches):
+            if number % of != part:
+                continue
+            cells = batch.to_pandas()
+            for name, categories in levels.items():
+                if name in cells.columns:
+                    cells[name] = pd.Categorical(cells[name].astype(str), categories=categories)
+            cells = self._selected(cells)
+            if cells.empty:
+                continue
+            cells.index = pd.RangeIndex(len(cells))
+            episodes = cells_to_episodes(
+                cells,
+                self.macro,
+                covariates=list(self.covariates),
+                step=step,
+                lag_months=self.lag_months,
+                cause=self.cause,
+            )
+            if not self.model_only:
+                yield episodes
+                continue
+            frame = model_frame(episodes, list(self.covariates))
+            frame[self.weights_col] = episodes[self.weights_col].to_numpy()
+            yield frame
+
+    def _selected(self, cells: pd.DataFrame) -> pd.DataFrame:
+        origination = origination_months(cells).to_numpy()
+        keep = np.ones(len(cells), dtype=bool)
+        if self.months is not None:
+            observation = origination + cells[AGE].to_numpy(dtype=int)
+            first, last = self.months
+            if first is not None:
+                keep &= observation >= first
+            if last is not None:
+                keep &= observation <= last
+        if self.vintage_parity is not None:
+            keep &= (origination // 12) % 2 == self.vintage_parity
+        return cells.loc[keep]
+
+
+def cell_blocks(
+    source: Path | str,
+    macro: pd.DataFrame,
+    covariates: Sequence[str],
+    *,
+    rows: int = 250_000,
+    months: tuple[int | None, int | None] | None = None,
+    vintage_parity: int | None = None,
+    weights_col: str = WEIGHT,
+    lag_months: int = MACRO_LAG_MONTHS,
+    cause: str = DEFAULT_CAUSE,
+) -> Iterator[pd.DataFrame]:
+    """Model frames straight from the cell file, a batch of cells at a time.
+
+    The episode frame is the largest object the pipeline holds -- 5.9 GB on the whole table,
+    and the training half beside its test half is what took a fit to a 15 GB footprint. Here
+    it never exists: each batch of cells is expanded, narrowed to what the formula reads,
+    handed to the block engine, which stores it compactly, and dropped.
+
+    ``months`` selects on the **observation** month as an ordinal (``year * 12 + month - 1``),
+    inclusive at both ends, which is how a training half or a backtest window is taken.
+    ``vintage_parity`` takes loans originated in even or in odd years, the selection's
+    stability halves.
+    """
+    yield from CellBlocks(
+        str(source),
+        macro,
+        tuple(covariates),
+        rows=rows,
+        months=months,
+        vintage_parity=vintage_parity,
+        weights_col=weights_col,
+        cause=cause,
+        lag_months=lag_months,
+    )()
 
 
 def aggregate_episodes(
@@ -414,6 +573,7 @@ def cells_to_episodes(
     covariates: Sequence[str] | None = None,
     where: np.ndarray | pd.Series | None = None,
     step: int | None = None,
+    cause: str = DEFAULT_CAUSE,
 ) -> pd.DataFrame:
     """Turn aggregated cells into weighted episodes the fitter can read.
 
@@ -428,7 +588,7 @@ def cells_to_episodes(
     disagree with the width it was built with.
 
     Macro covariates are recomputed here from the origination month and the age, which
-    is why they were kept out of the grouping key: ``period = orig_month + age``, so
+    is why they were kept out of the grouping key: ``period = origination_month + age``, so
     nothing was lost by leaving them out and the cardinality was spared. See
     :func:`creditsurv.features.add_macro_family` for the family and why it is free.
 
@@ -472,24 +632,32 @@ def cells_to_episodes(
         if episodes[column].dtype == object:
             episodes[column] = episodes[column].astype("category")
 
+    # Before anything reads the covariates: a HARP refinance reports no debt-to-income, and
+    # the cells keep that missing. See features.NOT_REPORTED for why a constant is not an
+    # imputation here.
+    absorb_not_reported(episodes, covariates)
+
     start_ages = episodes[AGE].to_numpy(dtype=np.float32)
     episodes[AGE_START] = start_ages
     episodes[AGE_STOP] = start_ages + np.float32(step)
 
-    orig_month = origination_months(episodes)
+    origination_month = origination_months(episodes)
     # A period ordinal in months since year zero, so age can simply be added.
-    observation = orig_month + episodes[AGE].astype(int)
+    observation = origination_month + episodes[AGE].astype(int)
 
-    add_macro_family(episodes, macro, orig_month, observation, lag_months, names=covariates)
+    add_macro_family(episodes, macro, origination_month, observation, lag_months, names=covariates)
 
     # Calendar columns, so a split can be taken on time without recomputing them.
     # The episode is dated at its start: a band spans several months and has to be
     # attributed to one of them, and the start is the only choice that cannot place
     # an episode after a reporting date its loan was still performing at.
-    episodes["orig_period"] = _months_to_periods(orig_month)
+    episodes["origination_period"] = _months_to_periods(origination_month)
     episodes["period"] = _months_to_periods(observation)
 
-    defaulted = episodes[EVENT].to_numpy(dtype=bool)
+    # The bounds are the bounds of *this* cause: for prepayment, a default is censoring
+    # exactly as a survivor is, which is what makes the two cause-specific hazards separable.
+    defaulted = ended_in(episodes, cause)
+    episodes[EVENT] = defaulted
     start = episodes[AGE_START].to_numpy(dtype=np.float32)
     stop = episodes[AGE_STOP].to_numpy(dtype=np.float32)
     episodes[LOWER_BOUND] = np.where(defaulted, start, stop)
@@ -512,6 +680,22 @@ def cells_to_episodes(
     return kept
 
 
+def ended_in(frame: pd.DataFrame, cause: str = DEFAULT_CAUSE) -> np.ndarray:
+    """Which rows ended in ``cause``, whichever way the table records its outcome.
+
+    A cell table carries the three-state ``outcome``; an episode frame carries the boolean
+    ``event`` of the cause it was expanded for, and a table written before the outcome
+    existed carries only a default flag.
+    """
+    if OUTCOME in frame.columns:
+        ended: np.ndarray = (frame[OUTCOME].astype(str) == cause).to_numpy()
+        return ended
+    if cause != DEFAULT_CAUSE:
+        message = f"This table records defaults only; it cannot say which rows ended in {cause}."
+        raise PanelValidationError(message)
+    return frame[EVENT].to_numpy(dtype=bool)
+
+
 def episode_step(cells: pd.DataFrame) -> int:
     """The width of the table's episodes in months: the spacing of its distinct ages.
 
@@ -529,7 +713,7 @@ def origination_months(cells: pd.DataFrame) -> pd.Series:
     Two key shapes are accepted, and which one a table carries is the difference
     between a correct calendar and one two months early:
 
-    * ``orig_month`` -- the month itself, which is what the aggregation now emits;
+    * ``origination_month`` -- the month itself, which is what the aggregation now emits;
     * ``vintage`` -- the origination *quarter*, which it used to. Reconstructing the
       month from it takes the quarter's first month, and loans are not all written in
       it: the mean offset is **+2.15 months**, so every macro covariate is read that
@@ -538,8 +722,8 @@ def origination_months(cells: pd.DataFrame) -> pd.Series:
     The quarterly branch is kept so an older cell table can still be read, and it warns
     rather than pretending the two are equivalent.
     """
-    if "orig_month" in cells.columns:
-        return cells["orig_month"].astype(int)
+    if "origination_month" in cells.columns:
+        return cells["origination_month"].astype(int)
 
     warnings.warn(
         "This cell table is keyed by origination quarter, so the observation month is "
@@ -569,7 +753,7 @@ def defaults_by_observation_month(cells: pd.DataFrame) -> pd.Series:
     the same series. Every month from the first to the last is present, zero or not.
     """
     months = observation_months(cells).to_numpy()
-    defaulted = cells[EVENT].to_numpy(dtype=bool)
+    defaulted = ended_in(cells)
     events = np.where(defaulted, cells[WEIGHT].to_numpy(dtype=float), 0.0)
     first = int(months.min())
     counts = np.bincount(months - first, weights=events)

@@ -20,7 +20,7 @@ import pandas as pd
 
 from creditsurv.backtest.metrics import exposure_buckets, weighted_gini
 from creditsurv.backtest.runner import ACCEPTANCE
-from creditsurv.data.panel import EVENT, LOAN_ID, WEIGHT
+from creditsurv.data.panel import DEFAULT_CAUSE, EVENT, LOAN_ID, WEIGHT
 from creditsurv.models.aft import coefficient_table
 from creditsurv.models.lifetime_pd import (
     conditional_pd,
@@ -29,8 +29,17 @@ from creditsurv.models.lifetime_pd import (
     scenario_lifetime_pd,
     survival_along_path,
 )
-from creditsurv.views.calibration import WHOLE_BOOK, actual_expected, survival_by_age
+from creditsurv.views.calibration import (
+    WHOLE_BOOK,
+    actual_expected,
+    curves_from,
+    exposure_totals,
+    rates_from,
+    risk_sets,
+    survival_by_age,
+)
 from creditsurv.views.segments import age_bands, available, calendar_years
+from creditsurv.views.streamed import Recipe, deciles_of
 from creditsurv.views.tables import View
 
 if TYPE_CHECKING:
@@ -74,7 +83,7 @@ def _actual_expected_by_segment(
 
 
 def _vintage_years(frame: pd.DataFrame) -> np.ndarray:
-    return pd.PeriodIndex(frame["orig_period"]).year.to_numpy()
+    return pd.PeriodIndex(frame["origination_period"]).year.to_numpy()
 
 
 def _months(frame: pd.DataFrame) -> pd.Series:
@@ -233,8 +242,54 @@ def calibration_views(
     return views
 
 
-def coefficient_view(fitted: FitResult, train: pd.DataFrame, continuous: Sequence[str]) -> View:
-    """Coefficients with their intervals, and the effect of one standard deviation."""
+def backtest_views(test: pd.DataFrame, hazard: np.ndarray, *, as_of: str) -> list[View]:
+    """The out-of-time tables: the months after the reporting date, which the model never saw.
+
+    Separate from the in-sample ones because they are read separately and computed
+    differently: the test window is small enough to hold, and its deciles are cut on its own
+    exposure rather than on the training half's.
+    """
+    out_of_time = f"On the months after {as_of}, which the model never saw."
+    return [
+        View(
+            "backtest_by_month",
+            "Backtest by month",
+            f"Defaults against expectation by month of observation. {out_of_time}",
+            _actual_expected_by_segment(test, hazard, "month", _months(test)),
+            source="fit",
+        ),
+        View(
+            "backtest_by_decile",
+            "Backtest by decile of predicted risk",
+            f"Deciles of the test window's exposure. {out_of_time}",
+            _actual_expected_by_segment(test, hazard, "decile", deciles(hazard, test)),
+            source="fit",
+        ),
+        View(
+            "acceptance_by_segment",
+            "Acceptance criteria by segment",
+            f"Actual over expected 0.80 to 1.25 overall and in every decile, Gini above 0.45, "
+            f"for every group. {out_of_time}",
+            acceptance_by_segment(test, hazard),
+            source="fit",
+        ),
+    ]
+
+
+def coefficient_view(
+    fitted: FitResult,
+    train: pd.DataFrame | None,
+    continuous: Sequence[str],
+    *,
+    deviations: pd.Series | None = None,
+) -> View:
+    """Coefficients with their intervals, and the effect of one standard deviation.
+
+    ``deviations`` are the exposure-weighted standard deviations of the covariates when the
+    caller already has them -- the selection takes them in the pass that produces its
+    correlation table -- and ``train`` may then be ``None``. Otherwise they are taken here
+    from the rows.
+    """
     table = coefficient_table(fitted).reset_index()
     table.columns = [
         {
@@ -246,13 +301,19 @@ def coefficient_view(fitted: FitResult, train: pd.DataFrame, continuous: Sequenc
         }.get(str(column), str(column))
         for column in table.columns
     ]
-    weights = train[WEIGHT].to_numpy(dtype=float)
-    steps = {}
-    for name in continuous:
-        if name in train.columns:
-            values = train[name].to_numpy(dtype=float)
-            mean = float(np.average(values, weights=weights))
-            steps[name] = float(np.sqrt(np.average((values - mean) ** 2, weights=weights)))
+    if deviations is not None:
+        steps = {name: float(deviations[name]) for name in continuous if name in deviations.index}
+    elif train is not None:
+        weights = train[WEIGHT].to_numpy(dtype=float)
+        steps = {}
+        for name in continuous:
+            if name in train.columns:
+                values = train[name].to_numpy(dtype=float)
+                mean = float(np.average(values, weights=weights))
+                steps[name] = float(np.sqrt(np.average((values - mean) ** 2, weights=weights)))
+    else:
+        message = "coefficient_view needs either the rows or their standard deviations."
+        raise ValueError(message)
     table["one_sd"] = table["term"].map(steps)
     table["effect_1sd"] = table["coef"] * table["one_sd"]
     return View(
@@ -384,3 +445,225 @@ def projection_views(
             source="fit",
         ),
     ]
+
+
+# --------------------------------------------------------------------------------------
+# The same in-sample tables, accumulated over the cell file
+# --------------------------------------------------------------------------------------
+
+
+def _segments_of(frame: pd.DataFrame) -> list[tuple[str, pd.Series | None]]:
+    """Every segment the frame can be opened by, the whole book first."""
+    return [(ALL, None), *((segment.name, segment.label(frame)) for segment in available(frame))]
+
+
+def _risk_sets_by_segment(
+    frame: pd.DataFrame, hazard: np.ndarray, *, cause: str = DEFAULT_CAUSE
+) -> pd.DataFrame:
+    """The three sums of a survival curve, for every segment of one batch."""
+    pieces = []
+    for name, groups in _segments_of(frame):
+        sums = risk_sets(frame, hazard, groups=groups, cause=cause)
+        pieces.append(sums.assign(segment=name))
+    return pd.concat(pieces, ignore_index=True)
+
+
+def _totals_by_segment(
+    frame: pd.DataFrame,
+    hazard: np.ndarray,
+    name: str,
+    dimension: pd.Series | pd.Categorical | np.ndarray,
+) -> pd.DataFrame:
+    """Exposure, defaults and expected defaults by one dimension, for every segment."""
+    pieces = []
+    for segment, groups in _segments_of(frame):
+        if groups is None:
+            totals = exposure_totals(frame, hazard, {name: dimension}).assign(group=WHOLE_BOOK)
+        else:
+            totals = exposure_totals(frame, hazard, {"group": groups, name: dimension})
+        pieces.append(totals.assign(segment=segment))
+    return pd.concat(pieces, ignore_index=True)
+
+
+def _leading(table: pd.DataFrame) -> pd.DataFrame:
+    """``segment`` and ``group`` first, as every published view has them."""
+    leading = [name for name in ("segment", "group") if name in table.columns]
+    return table[[*leading, *(name for name in table.columns if name not in leading)]]
+
+
+def _curves_by_segment(sums: pd.DataFrame) -> pd.DataFrame:
+    pieces = [
+        curves_from(rows.drop(columns="segment")).assign(segment=segment)
+        for segment, rows in sums.groupby("segment", observed=True, sort=False)
+    ]
+    return _leading(pd.concat(pieces, ignore_index=True))
+
+
+def covariate_means_recipe(names: Sequence[str]) -> Recipe:
+    """The exposure-weighted mean of each time-varying covariate, month by month.
+
+    A mean is two sums, so it accumulates like everything else here: the exposure of each
+    month and the covariate weighted by it, divided once at the end.
+    """
+
+    def build(frame: pd.DataFrame, _hazards: Mapping[str, np.ndarray]) -> pd.DataFrame:
+        months = _months(frame)
+        weight = frame[WEIGHT].to_numpy(dtype=float)
+        pieces = []
+        for name in names:
+            if name not in frame.columns:
+                continue
+            pieces.append(
+                pd.DataFrame(
+                    {
+                        "month": months.to_numpy(),
+                        "covariate": name,
+                        "exposure": weight,
+                        "weighted": weight * frame[name].to_numpy(dtype=float),
+                    }
+                )
+            )
+        return pd.concat(pieces, ignore_index=True)
+
+    def finish(table: pd.DataFrame) -> pd.DataFrame:
+        out = table.copy()
+        out["mean"] = out["weighted"] / out["exposure"]
+        return out.drop(columns=["weighted", "exposure"]).sort_values(["covariate", "month"])
+
+    return Recipe(
+        name="covariates_over_time", keys=("month", "covariate"), build=build, finish=finish
+    )
+
+
+def in_sample_recipes(
+    *,
+    primary: str,
+    families: Sequence[str] = (),
+    boundaries: np.ndarray | None = None,
+) -> list[Recipe]:
+    """What one pass over the training half has to accumulate.
+
+    ``primary`` names the published model among ``models``; ``families`` the others, which the
+    site sets beside it. ``boundaries`` are the decile cut points taken in the pass before
+    this one -- without them the decile table is skipped, since a decile cannot be assigned
+    from a batch.
+    """
+
+    def by(name: str, dimension: Callable[[pd.DataFrame], pd.Series | np.ndarray]) -> Recipe:
+        return Recipe(
+            name=f"ae_by_{name}",
+            keys=("segment", "group", _DIMENSION[name]),
+            build=lambda frame, hazards: _totals_by_segment(
+                frame, hazards[primary], _DIMENSION[name], dimension(frame)
+            ),
+            finish=lambda table: _leading(rates_from(table)),
+        )
+
+    recipes = [
+        Recipe(
+            name="km_vs_model",
+            keys=("segment", "group", "age"),
+            build=lambda frame, hazards: _risk_sets_by_segment(frame, hazards[primary]),
+            finish=_curves_by_segment,
+        ),
+        by("year", lambda frame: calendar_years(frame)),
+        by("vintage", _vintage_years),
+        by("age_band", lambda frame: age_bands(frame)),
+    ]
+    if boundaries is not None:
+        recipes.append(
+            Recipe(
+                name="ae_by_decile",
+                keys=("segment", "group", "decile"),
+                build=lambda frame, hazards: _totals_by_segment(
+                    frame,
+                    hazards[primary],
+                    "decile",
+                    deciles_of(hazards[primary], boundaries) + 1,
+                ),
+                finish=lambda table: _leading(rates_from(table)),
+            )
+        )
+    for family in families:
+        recipes.append(_family_recipe(family))
+    return recipes
+
+
+def _family_recipe(family: str) -> Recipe:
+    """One family's survival curve, over the whole book.
+
+    Not by segment: the published view sets the families beside each other on one curve, and
+    a segment column in it would let a figure draw six curves per family as though they were
+    one. A function rather than a lambda in the loop, so the family it closes over is the one
+    it was made for.
+    """
+    return Recipe(
+        name=f"family_{family}",
+        keys=("group", "age"),
+        build=lambda frame, hazards: risk_sets(frame, hazards[family]),
+        finish=curves_from,
+    )
+
+
+#: The column each dimension is published under, which the site's figures read by name.
+_DIMENSION: Final[dict[str, str]] = {
+    "year": "year",
+    "vintage": "vintage_year",
+    "age_band": "age_band",
+    "decile": "decile",
+}
+
+
+def in_sample_views(accumulated: Mapping[str, pd.DataFrame], *, as_of: str) -> list[View]:
+    """The accumulated tables as the views the site publishes, names and columns unchanged."""
+    in_sample = "On the training half, the data the model was fitted to."
+    described = {
+        "km_vs_model": (
+            "Kaplan-Meier against the model, by segment",
+            "Survival by loan age, observed and predicted along each loan's realised "
+            f"covariate path, with the Greenwood band. {in_sample}",
+        ),
+        "ae_by_year": (
+            "Actual against expected by calendar year",
+            f"Defaults against the model's expectation, year of observation by segment. "
+            f"{in_sample}",
+        ),
+        "ae_by_vintage": (
+            "Actual against expected by vintage year",
+            f"Defaults against expectation by year of origination. {in_sample}",
+        ),
+        "ae_by_age_band": (
+            "Actual against expected by loan age",
+            f"Defaults against expectation by seasoning band. {in_sample}",
+        ),
+        "ae_by_decile": (
+            "Actual against expected by decile of predicted risk",
+            f"Deciles of the whole training half's exposure, cut on the hazards of every "
+            f"loan-month up to {as_of}. {in_sample}",
+        ),
+    }
+    views = [
+        View(name, title, description, accumulated[name], source="fit")
+        for name, (title, description) in described.items()
+        if name in accumulated
+    ]
+    families = {
+        name.removeprefix("family_"): table
+        for name, table in accumulated.items()
+        if name.startswith("family_")
+    }
+    if families:
+        views.append(
+            View(
+                "families_vs_km",
+                "Distribution families against Kaplan-Meier",
+                "Each family's own selected model, chained along the realised covariate "
+                f"paths. {in_sample}",
+                pd.concat(
+                    [table.assign(distribution=name) for name, table in families.items()],
+                    ignore_index=True,
+                ),
+                source="fit",
+            )
+        )
+    return views

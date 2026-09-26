@@ -245,3 +245,34 @@ def test_a_first_observation_after_the_start_is_not_refetched(
     load_series(spec, start="1997-01-01")
 
     assert len(calls) == 1
+
+
+@pytest.mark.network
+def test_a_vintage_cannot_be_had_without_an_api_key() -> None:
+    """The validation's observation that the macro series are revised, held to the network.
+
+    The public graph endpoint **accepts** a vintage date and ignores it: the response is a
+    healthy CSV of the *current* series, running to the latest observation. That is worse
+    than a refusal, because code written against it would look like a point-in-time
+    backtest and be a revised-data backtest with extra steps.
+
+    This test exists to fail the day that changes. A vintage series stops at its vintage
+    date; if either request ever comes back short, the door has opened and the backtest can
+    be given the data a model would actually have had.
+    """
+    import requests
+
+    from creditsurv.data.fred import VINTAGE_ENDPOINT
+
+    vintage = "2019-06-01"
+    for params in (
+        {"id": "UNRATE", "vintage_date": vintage},
+        {"id": f"UNRATE_{vintage.replace('-', '')}"},
+    ):
+        response = requests.get(VINTAGE_ENDPOINT, params=params, timeout=30)
+        response.raise_for_status()
+        last = response.text.strip().splitlines()[-1].split(",")[0]
+        assert last > vintage, (
+            f"{params} came back stopping at {last}: FRED now honours a vintage, and the "
+            "backtest can read point-in-time data"
+        )

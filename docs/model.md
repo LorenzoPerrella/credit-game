@@ -34,13 +34,13 @@ training half. The categorical ones are each level against its reference.
     <!-- table: coefficients -->
 
 ??? warning "Three readings to hold loosely"
-    - `nfci_lagged` is right-signed and stable across samples, and nearly nothing: in a
+    - *Financial conditions* (`financial_conditions`) is right-signed and stable across samples, and nearly nothing: in a
       stress scenario it contributes its sign and little else.
-    - `policy_rate_gap` has no declared prior. A policy rate below where the loan was written
+    - *Policy rate change since origination* (`policy_rate_change`) has no declared prior. A policy rate below where the loan was written
       shortens survival, which reads as the central bank cutting into recessions rather than
       as a payment channel a fixed-rate mortgage does not have.
-    - Housing carries two covariates, the position (`cltv_drift`) and the construction cycle
-      (`starts_growth`). The stability step separates a pair only when the smaller one
+    - Housing carries two covariates, the position, *loan-to-value change since origination*
+      (`ltv_change`), and the construction cycle, *housing starts growth* (`housing_starts_growth`). The stability step separates a pair only when the smaller one
       changes sign, and neither did.
 
 ## The term structure

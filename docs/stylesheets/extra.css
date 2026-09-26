@@ -1,0 +1,5 @@
+/* A variable's name is one word: breaking it across lines makes it unreadable and uncopyable. */
+.md-typeset td code {
+  white-space: nowrap;
+  word-break: keep-all;
+}

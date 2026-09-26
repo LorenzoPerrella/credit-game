@@ -28,6 +28,7 @@ from creditsurv.models.selection import (
     shape_depends_on_covariates,
     shape_formula,
 )
+from creditsurv.names import DISTRIBUTIONS, label
 from creditsurv.reporting import charts
 from creditsurv.reporting.builder import Report, provenance
 
@@ -81,21 +82,26 @@ def _comparison_reading(regression: pd.DataFrame, against_km: pd.DataFrame, repo
     """What the comparison says, in words that follow the numbers rather than precede them."""
     leader = regression.iloc[0]
     reading = [
-        f"On this specification the **{leader['distribution']}** has the better likelihood, "
+        f"On this specification the **{DISTRIBUTIONS.get(str(leader['distribution']))}** "
+        "has the better likelihood, "
         f"by {float(regression['delta_aic'].max()):,.0f} AIC points."
     ]
     for row in regression.itertuples():
         if row.signs_against_prior:
-            names = ", ".join(f"`{name}`" for name in str(row.signs_against_prior).split(", "))
-            reading.append(f"The {row.distribution} turns {names} against its declared prior.")
+            turned = ", ".join(
+                f"*{label(name)}*" for name in str(row.signs_against_prior).split(", ")
+            )
+            family = DISTRIBUTIONS.get(str(row.distribution), str(row.distribution))
+            reading.append(f"The {family} turns {turned} against its declared prior.")
     closest = against_km.sort_values("mean_deviation").iloc[0]
     reading.append(
-        f"Against Kaplan-Meier the **{closest['distribution']}** is closer on average, "
+        f"Against Kaplan-Meier the **{DISTRIBUTIONS.get(str(closest['distribution']))}** "
+        "is closer on average, "
         f"{float(closest['mean_deviation']):.2f} percentage points of survival."
     )
     if leader["distribution"] != reported:
         reading.append(
-            f"The model reported throughout is the {reported}, and "
+            f"The model reported throughout is the {DISTRIBUTIONS.get(reported, reported)}, and "
             "`docs/variable_selection.md` records why it was kept against a better likelihood."
         )
     return "\n\n".join(reading)
@@ -212,10 +218,10 @@ Three exclusions are deliberate and matter more than the inclusions:
         ]
     ).text(
         """
-Loan-to-value is decomposed rather than indexed. `orig_ltv` and `indexed_cltv` are
+Loan-to-value is decomposed rather than indexed. `original_ltv` and `indexed_cltv` are
 *equal* at origination and stay strongly correlated afterwards, so fitting both
-gives unstable coefficients. They are split into a level -- `orig_ltv`,
-underwriting quality -- and a movement -- `cltv_drift`, how far house prices have
+gives unstable coefficients. They are split into a level -- `original_ltv`,
+underwriting quality -- and a movement -- `ltv_change`, how far house prices have
 carried the position since, zero at origination by construction.
 """
     )
@@ -315,7 +321,7 @@ rather than fitting the data -- and the survival curve against Kaplan-Meier, ove
 horizons a lifetime PD is quoted on. The three need not agree, and when they do not the
 report says so rather than choosing for the reader. The validation made this comparison on
 the specification before it: the log-logistic came 623,126 AIC points behind the Weibull
-and turned `orig_ltv`, `term_years` and investor occupancy around. The tables are this
+and turned `original_ltv`, `term_years` and investor occupancy around. The tables are this
 run's own comparison, on this run's specification.
 
 The log-normal is absent because it does not converge on this panel structure --
@@ -384,7 +390,7 @@ It matters for lifetime PD specifically: if the shape genuinely varies, the term
 structure differs by loan rather than merely shifting, and a single shape misstates
 the timing of losses even when it gets the total right.
 
-Tested on `{relaxed}`{why}:
+Tested on *{label(relaxed)}*{why}:
 """
     )
     if shape is None:
@@ -421,7 +427,7 @@ over a horizon of {len(band)} months. That is what the comparison is for.
 This check earned its place. An earlier version of the comparison predicted each
 loan's curve from its origination covariates and averaged those, which put only
 half the horizon inside the band and overstated five-year survival by eight
-percentage points. The cause is that `cltv_drift` and `unemp_gap` are zero at
+percentage points. The cause is that `ltv_change` and `unemployment_change` are zero at
 origination *by construction*, so freezing them there assumes house prices never
 move and unemployment never changes. The curve below chains the monthly hazard
 along each loan's realised covariate path instead.

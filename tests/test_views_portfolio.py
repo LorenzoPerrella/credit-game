@@ -77,7 +77,7 @@ def test_segments_are_labelled_as_the_calibration_views_label_them(
 
     purposes = set(table.loc[table["segment"] == "purpose", "group"])
     scores = set(table.loc[table["segment"] == "fico", "group"])
-    assert {"purchase", "refinance_cashout"} <= purposes
+    assert {"purchase", "cash_out_refinance"} <= purposes
     assert all(" to " in label for label in scores)
 
 

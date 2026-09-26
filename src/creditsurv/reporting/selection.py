@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
+from creditsurv.data.panel import DEFAULT_CAUSE
+from creditsurv.models.procedure import MATERIALITY_THRESHOLD
 from creditsurv.reporting.builder import Report, provenance
 
 if TYPE_CHECKING:
@@ -19,7 +21,8 @@ if TYPE_CHECKING:
 
     from creditsurv.models.procedure import SelectionRecord
 
-#: The summary the configuration is tested against, written beside the report.
+#: The summary the configuration is tested against, written beside the report. It belongs to
+#: the **published** model: see :func:`record_name`.
 SUMMARY_FILE: Final = "selection.json"
 
 #: Every table behind the report, one file each. A notebook shows these rather than
@@ -32,14 +35,34 @@ TABLE_FILES: Final[dict[str, str]] = {
     "screening": "selection_screening.csv",
     "elimination": "selection_elimination.csv",
     "stability": "selection_stability.csv",
+    "materiality": "selection_materiality.csv",
 }
 
 #: The fits the run made, with their times and whether they came from the cache.
 FITS_FILE: Final = "selection_fits.csv"
 
 
-def generate(record: SelectionRecord, *, reports_dir: Path) -> Path:
-    """Write ``selection.md`` and ``selection.json`` under ``reports_dir``."""
+def record_name(*, distribution: str, cause: str, published: str = "weibull") -> str:
+    """What this run's files are called.
+
+    ``selection`` is the **published** model's record, which ``tests/test_procedure.py``
+    holds the configuration to. Every other run -- the other family, the prepayment model --
+    is a record of a run rather than of the model in the configuration, and would otherwise
+    overwrite it: two selections write two records, and the family rule then decides which
+    one the configuration should agree with.
+    """
+    if distribution == published and cause == DEFAULT_CAUSE:
+        return "selection"
+    parts = ["selection", distribution]
+    if cause != DEFAULT_CAUSE:
+        parts.append(cause)
+    return "_".join(parts)
+
+
+def generate(record: SelectionRecord, *, reports_dir: Path, name: str | None = None) -> Path:
+    """Write ``<name>.md`` and ``<name>.json`` under ``reports_dir``."""
+    if name is None:
+        name = record_name(distribution=record.distribution, cause=record.cause)
     reports_dir.mkdir(parents=True, exist_ok=True)
     report = Report(
         "Variable selection, run end to end",
@@ -110,6 +133,20 @@ An unstable covariate with no such partner is kept, and left visible here.
     else:
         report.table(record.stability)
 
+    report.heading("10. Materiality", level=3).text(
+        f"""
+A macro covariate whose effect of one standard deviation on log survival time is under
+{MATERIALITY_THRESHOLD:g} in absolute value contributes its sign and little else, and a covariate
+that small changes sign when the sample does. The threshold is fixed in `docs/rules.md`,
+before any of these fits, and the removals are made one at a time because each one moves
+every other coefficient.
+"""
+    )
+    if record.materiality.empty:
+        report.text("Every covariate that survived step 9 clears the threshold.")
+    else:
+        report.table(record.materiality, caption="One covariate a step, the smallest first")
+
     fits = pd.DataFrame(record.fits)
     if not fits.empty:
         report.heading("Fits").table(
@@ -122,16 +159,21 @@ An unstable covariate with no such partner is kept, and left visible here.
         provenance(
             [
                 f"`uv run creditsurv select --as-of {record.as_of} "
-                f"--moratorium {record.moratorium}`",
+                f"--moratorium {record.moratorium} --dist {record.distribution}"
+                + (f" --cause {record.cause}`" if record.cause != DEFAULT_CAUSE else "`"),
                 "Procedure: `creditsurv.models.procedure.run_selection`",
             ]
         )
     )
-    (reports_dir / SUMMARY_FILE).write_text(
+    (reports_dir / f"{name}.json").write_text(
         json.dumps(record.summary(), indent=2, sort_keys=True) + "\n"
     )
     for attribute, filename in TABLE_FILES.items():
         table: pd.DataFrame = getattr(record, attribute)
-        table.to_csv(reports_dir / filename, index=attribute == "correlation")
-    pd.DataFrame(record.fits).to_csv(reports_dir / FITS_FILE, index=False)
-    return report.write(reports_dir / "selection.md")
+        table.to_csv(
+            reports_dir / filename.replace("selection", name, 1), index=attribute == "correlation"
+        )
+    pd.DataFrame(record.fits).to_csv(
+        reports_dir / FITS_FILE.replace("selection", name, 1), index=False
+    )
+    return report.write(reports_dir / f"{name}.md")

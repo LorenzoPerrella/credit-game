@@ -32,11 +32,11 @@ flowchart LR
 | **D6** `super_conforming_flag` | Mapped from what the field holds | -- | [Data dictionary](data_dictionary.md) |
 | **M1** calendar two months late | The exact origination month in the cell key | 0 of 1,536,686 defaults filed in a different month; the correlation peaks at lag zero | [Data preparation](data_preparation.md#the-grouping-key) |
 | **M2** two grids of cut points | One production grid, held by a test to a subset of the exploratory one | -- | [Data preparation](data_preparation.md#cut-points) |
-| **M3** loan characteristics kept out of the key | `has_mi` and `first_time_buyer` in the key and screened into the model | 1.19 times the cells, where sixteen had been claimed | [Variable selection](variable_selection.md#running-it-creditsurv-select) |
-| **F1, S5** the specification could not be regenerated; levels as calendar effects | `creditsurv select` runs steps 5 to 9 and produces the specification, which a test holds the configuration to; gap forms offered beside levels; the reversal rule runs | 7 macro covariates kept; `vix` and `inflation` removed by the procedure | [Methodology](methodology.md#how-the-covariates-were-chosen), [selection record](reports/selection.md) |
+| **M3** loan characteristics kept out of the key | Mortgage insurance and buyer type in the key and screened into the model | 1.19 times the cells, where sixteen had been claimed | [Variable selection](variable_selection.md#running-it-creditsurv-select) |
+| **F1, S5** the specification could not be regenerated; levels as calendar effects | `creditsurv select` runs steps 5 to 9 and produces the specification, which a test holds the configuration to; gap forms offered beside levels; the reversal rule runs | 7 macro covariates kept; equity volatility and inflation removed by the procedure | [Methodology](methodology.md#how-the-covariates-were-chosen), [selection record](reports/selection.md) |
 | **S1** a backtest with no criterion | Acceptance criteria declared before the run; in-sample actual over expected by year beside the out-of-time figure | Overall ratio and Gini pass; **deciles fail** | [Calibration & backtest](calibration.md) |
 | **S2** scenario misaligned | The adverse path moves only series the model reads, and its table is built from the scenario | Adverse lifetime PD 2.39 times baseline | [Model](model.md#scenarios) |
-| **S3** family and shape untested | Distribution comparison with a sign check, and the shape test on `occupancy`, both run | The log-logistic leads on likelihood; the shape varies with occupancy | [Methodology](methodology.md#the-distribution-family) |
+| **S3** family and shape untested | Distribution comparison with a sign check, and the shape test on occupancy, both run | The log-logistic leads on likelihood; the shape varies with occupancy | [Methodology](methodology.md#the-distribution-family) |
 | **S4, S6, S7** lags, marginal effects, figures | Every macro series lagged; marginal effects and event count fixed; figures aligned across documents | -- | [Data](data.md), [portfolio](portfolio.md) |
 
 The measured column records the figures of the re-estimation that closed the findings.
@@ -58,7 +58,7 @@ The current figures are on the pages linked beside them.
 | | Why it is open |
 |---|---|
 | **Decile calibration** | The declared criterion fails: out of time, actual over expected runs from <!-- value: backtest.deciles --> across the deciles |
-| **Weibull or log-logistic** | The log-logistic has the better likelihood but turns `nfci_lagged` against its prior; switching means a selection run with log-logistic fits |
+| **Weibull or log-logistic** | The log-logistic has the better likelihood but turns *financial conditions* against its prior; switching means a selection run with log-logistic fits |
 | **Prepayment** | Independent censoring, so lifetime PD is overstated at long horizons |
 | **HARP** | Outside the model; covering it needs a level of its own in the key |
 | **Point-in-time macro** | FRED serves revised series |

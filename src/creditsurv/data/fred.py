@@ -47,6 +47,31 @@ _TIMEOUT_SECONDS: Final = 30
 _MISSING_MARKER: Final = "."
 
 
+#: What a point-in-time series would be fetched with, if one could be.
+#:
+#: **It cannot, without an API key.** Tried on 18 September 2026, for the validation's
+#: observation that the macro series are revised rather than point-in-time:
+#:
+#: * ``alfred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&vintage_date=...`` -- 404;
+#: * ``alfred.stlouisfed.org/series/downloaddata?...&vintage_date=...`` -- 404;
+#: * ``api.stlouisfed.org/fred/series/observations?realtime_start=...`` -- 400, needs a key;
+#: * ``fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE_20190601`` and the same endpoint
+#:   with ``&vintage_date=2019-06-01`` -- **200, and the current series**: both run to the
+#:   latest observation, and both give 2019-04 unemployment as 3.7, today's figure.
+#:
+#: The last one is the dangerous result, and the reason this is written down rather than
+#: left as a failed experiment: the endpoint accepts the parameter, returns a healthy CSV,
+#: and ignores it. Code that asked for a vintage this way would look like a point-in-time
+#: backtest and be a revised-data backtest with extra steps.
+#:
+#: So every backtest here reads revised data, and says so. What that costs is a
+#: backtest that is fair about the *model* and optimistic about the *data*: the unemployment
+#: rate a 2018 model would have been given differs from the one it is scored with by a
+#: revision nobody could have known. ``tests/test_fred.py`` holds the finding to the network,
+#: so the day the endpoint starts honouring the parameter, the suite says so.
+VINTAGE_ENDPOINT: Final = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+
+
 class FredUnavailableError(RuntimeError):
     """Raised when a series can be served neither from the network nor from cache."""
 
@@ -106,6 +131,23 @@ def _cached_start(path: Path) -> pd.Timestamp:
     return pd.Timestamp.min if recorded is None else pd.Timestamp(recorded.decode())
 
 
+def _cached_column(cache_file: Path, spec: SeriesSpec) -> pd.Series:
+    """The cached series, under the column name it has now.
+
+    The cache is keyed by series id, so a file written before the macro columns were renamed
+    holds the same observations under the former name.
+    """
+    from creditsurv import names
+
+    frame = pd.read_parquet(cache_file)
+    if spec.column not in frame.columns:
+        former = names.variable(spec.column, kind=names.Kind.SERIES).former
+        if former in frame.columns:
+            return frame[former].rename(spec.column)
+    series: pd.Series = frame[spec.column]
+    return series
+
+
 def load_series(
     spec: SeriesSpec, *, start: str = MACRO_START, end: str | None = None, refresh: bool = False
 ) -> pd.Series:
@@ -131,7 +173,7 @@ def load_series(
     cache_file = _cache_path(spec.series_id)
 
     if not refresh and cache_file.exists() and _cached_start(cache_file) <= pd.Timestamp(start):
-        cached = pd.read_parquet(cache_file)[spec.column]
+        cached = _cached_column(cache_file, spec)
         _LOGGER.debug("Loaded %s from cache (%d observations)", spec.series_id, len(cached))
         return cached
 
@@ -144,7 +186,7 @@ def load_series(
                 f"using the cached copy at {cache_file}.",
                 stacklevel=2,
             )
-            return pd.read_parquet(cache_file)[spec.column]
+            return _cached_column(cache_file, spec)
         message = f"{spec.series_id} is not cached and could not be downloaded: {error}"
         raise FredUnavailableError(message) from error
 

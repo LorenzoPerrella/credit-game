@@ -11,7 +11,7 @@ the group-by all have to happen out of core — the inputs are far larger than m
 and never need to be resident.
 
 **The macro series are deliberately absent from the grouping key.** Since
-``period = orig_period + age``, unemployment, house prices and financial conditions
+``period = origination_period + age``, unemployment, house prices and financial conditions
 are a deterministic function of two columns that are already in the key, so they can
 be recomputed on the aggregate at no cost in cardinality. Putting them in the key
 instead would multiply it by the number of distinct months and destroy the collapse.
@@ -37,6 +37,7 @@ import duckdb
 import pandas as pd
 
 from creditsurv.data.ingest import completed_files
+from creditsurv.features import BIN_EDGES
 
 _LOGGER: Final = logging.getLogger(__name__)
 
@@ -55,7 +56,17 @@ DEFAULT_DELINQUENCY: Final = 3
 #: Both were previously unclassified and so treated as ordinary censoring, which
 #: violated this module's own rule that every CASE lists its branches.
 DEFAULT_ZERO_BALANCE: Final = ("02", "03", "09", "15")
-PREPAYMENT_ZERO_BALANCE: Final = ("01", "16", "96")
+
+#: A voluntary payoff, and the only one of the three that is a prepayment.
+#:
+#: With prepayment modelled as a competing risk it has to be the borrower's own decision to
+#: repay: that is what the refinancing incentive predicts. A reperforming sale (16) and an
+#: administrative removal (96) are neither default nor repayment -- they are the loan leaving
+#: the dataset -- so they end observation and are censoring, which is what `--report-exits`
+#: measured them to be: 90.1% of reperforming sales had already defaulted, and 57.5% of
+#: removals were performing when they went.
+PREPAYMENT_ZERO_BALANCE: Final = ("01",)
+CENSORING_ZERO_BALANCE: Final = ("16", "96")
 
 
 class MoratoriumPolicy(StrEnum):
@@ -225,20 +236,41 @@ def _region_case() -> str:
 
 
 def _state_of_the_book_sql(
-    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE, *, complete_only: bool = True
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
+    *,
+    complete_only: bool = True,
+    harp_level: bool = True,
 ) -> str:
     """The loan-month panel, cleaned and truncated, before any aggregation.
 
     ``complete_only`` drops loans missing a credit score, loan-to-value or debt-to-income,
     as the cells do. Off, they are kept, so :func:`incomplete_cases` can say what is lost.
+
+    ``harp_level`` says whether the key carries ``harp``, and with it whether a loan may be
+    kept without a debt-to-income. The two go together and cannot be chosen separately: the
+    ratio is missing for exactly the HARP refinances -- 181,302 of the 181,356 missing in
+    2012Q2, measured -- so without the level in the key those loans would collapse into a
+    band of NULL that nothing in the table explains. Off, the rule is the one that held
+    before September 2026, which is what makes the two comparable when the extension is
+    priced.
     """
+    # A HARP refinance reports no debt-to-income, and dropping it dropped 18% of the 2009Q2
+    # to 2019Q1 vintages, at three times the default rate of the loans kept. It is kept, and
+    # the missing ratio stays missing all the way into the cell table: `harp` is a level of
+    # the key, so a NULL debt-to-income is a HARP loan and reads as one. Nothing is imputed.
+    ratio = (
+        "(o.debt_to_income IS NOT NULL OR o.harp_indicator = 'Y')"
+        if harp_level
+        else "o.debt_to_income IS NOT NULL"
+    )
     complete = (
-        "WHERE o.credit_score IS NOT NULL AND o.orig_ltv IS NOT NULL AND o.dti IS NOT NULL"
+        f"WHERE o.credit_score IS NOT NULL AND o.original_ltv IS NOT NULL AND {ratio}"
         if complete_only
         else ""
     )
     default_codes = ", ".join(f"'{code}'" for code in DEFAULT_ZERO_BALANCE)
     prepayment_codes = ", ".join(f"'{code}'" for code in PREPAYMENT_ZERO_BALANCE)
+    exit_codes = ", ".join(f"'{code}'" for code in CENSORING_ZERO_BALANCE)
     modification_flags = ", ".join(f"'{flag}'" for flag in MODIFICATION_FLAGS)
     # Under EXCLUDE an accommodated month is not an event but the loan stays at risk;
     # under CENSOR it ends observation the way a modification does.
@@ -251,6 +283,16 @@ def _state_of_the_book_sql(
             loan_identifier,
             CAST(loan_age AS INTEGER)                                   AS age,
             CAST(period AS INTEGER)                                     AS period_key,
+            -- What the borrower's payment history said *before* this month. The state
+            -- itself is a mediator -- a loan 90 days late has already defaulted -- but the
+            -- month before is what a servicer knows when the month opens, and it is the
+            -- strongest thing the file holds that the model never read.
+            -- Lagged as the file writes it, not as a number: RA is a real value of this
+            -- field (REO acquisition) and casting first would turn it into the same NULL
+            -- as "this is the loan's first month", which reads as current.
+            LAG(current_loan_delinquency_status)
+                OVER (PARTITION BY loan_identifier ORDER BY CAST(period AS INTEGER))
+                                                                        AS previous_status,
             -- 999 marks "not available" here exactly as it does for LTV and DTI in
             -- the origination file. Untreated it is an ordinary number: the median
             -- ELTV of the 2006 vintage is literally 999.
@@ -273,6 +315,7 @@ def _state_of_the_book_sql(
                 FALSE
             )                                                           AS defaulted,
             COALESCE(zero_balance_code IN ({prepayment_codes}), FALSE)   AS prepaid,
+            COALESCE(zero_balance_code IN ({exit_codes}), FALSE)         AS left_the_book,
             COALESCE(modification_flag IN ({modification_flags}), FALSE)
                 OR ({censoring})                                    AS ends_observation
         FROM read_parquet(?)
@@ -289,7 +332,8 @@ def _state_of_the_book_sql(
     terminal AS (
         SELECT
             loan_identifier,
-            MIN(CASE WHEN defaulted OR prepaid THEN period_key END) AS terminal_period,
+            MIN(CASE WHEN defaulted OR prepaid OR left_the_book THEN period_key END)
+                AS terminal_period,
             MIN(CASE WHEN ends_observation THEN period_key END)     AS ended_period
         FROM perf GROUP BY loan_identifier
     ),
@@ -312,19 +356,20 @@ def _state_of_the_book_sql(
             -- ordinary numbers, and left in place they produce a portfolio whose
             -- average credit score is several thousand.
             NULLIF(TRY_CAST(classic_fico AS DOUBLE), 9999)              AS credit_score,
-            NULLIF(TRY_CAST(original_ltv AS DOUBLE), 999)               AS orig_ltv,
-            NULLIF(TRY_CAST(original_cltv AS DOUBLE), 999)              AS orig_cltv,
-            NULLIF(TRY_CAST(original_dti AS DOUBLE), 999)               AS dti,
-            TRY_CAST(original_upb AS DOUBLE)                            AS orig_upb,
+            NULLIF(TRY_CAST(original_ltv AS DOUBLE), 999)               AS original_ltv,
+            NULLIF(TRY_CAST(original_cltv AS DOUBLE), 999)              AS original_cltv,
+            NULLIF(TRY_CAST(original_dti AS DOUBLE), 999)               AS debt_to_income,
+            TRY_CAST(original_upb AS DOUBLE)                            AS original_balance,
             TRY_CAST(original_interest_rate AS DOUBLE)                  AS note_rate,
             TRY_CAST(original_loan_term AS INTEGER)                     AS orig_term,
-            -- 999 is "not available" for MI exactly as for LTV and DTI. Untreated, has_mi
-            -- read a missing percentage as an insured loan.
-            NULLIF(TRY_CAST(mortgage_insurance_percentage AS DOUBLE), 999) AS mi_percent,
+            -- 999 is "not available" for MI exactly as for LTV and DTI. Untreated,
+            -- mortgage_insurance read a missing percentage as an insured loan.
+            NULLIF(TRY_CAST(mortgage_insurance_percentage AS DOUBLE), 999) AS insurance_coverage,
             -- Raw codes, deliberately. The mapping lives in _CATEGORICAL, where the
             -- choices are documented next to the frequencies that justify them, and
             -- an ELSE branch here would silently fold a "not available" code into a
             -- real level before anyone could see it.
+            harp_indicator,
             loan_purpose,
             occupancy_status,
             channel,
@@ -342,6 +387,14 @@ def _state_of_the_book_sql(
         t.eltv,
         COALESCE(t.defaulted AND t.period_key = t.terminal_period, FALSE) AS event,
         COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE)  AS prepaid,
+        COALESCE(t.left_the_book AND t.period_key = t.terminal_period, FALSE)
+                                                                         AS left_the_book,
+        t.previous_status,
+        CASE
+            WHEN COALESCE(t.defaulted AND t.period_key = t.terminal_period, FALSE) THEN 'default'
+            WHEN COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE) THEN 'prepayment'
+            ELSE 'none'
+        END                                                              AS outcome,
         o.*
     FROM truncated t JOIN orig o USING (loan_identifier)
     {complete}
@@ -350,18 +403,23 @@ def _state_of_the_book_sql(
 
 #: Source expression for each continuous covariate, keyed by the name it takes.
 _SOURCE: Final[dict[str, str]] = {
-    "fico_s": "(credit_score - 700.0) / 50.0",
-    "orig_ltv": "orig_ltv",
-    "orig_cltv": "orig_cltv",
-    "dti": "dti",
-    "log_orig_upb": "ln(orig_upb)",
+    "credit_score": "credit_score",
+    "original_ltv": "original_ltv",
+    "original_cltv": "original_cltv",
+    "debt_to_income": "debt_to_income",
+    "log_original_balance": "ln(original_balance)",
     # Freddie's own mark-to-market valuation. Available as a covariate, but not in
     # the default specification: coverage runs from 0.8% of the 1999 vintage to 94%
     # of 2021, so a model using it would be estimating a different quantity in every
     # decade. The house-price-indexed drift computed in cells_to_episodes covers
     # every vintage evenly instead.
-    "eltv_drift": "COALESCE(eltv, orig_ltv) - orig_ltv",
-    "mi_percent": "mi_percent",
+    "estimated_ltv_change": "COALESCE(eltv, original_ltv) - original_ltv",
+    "insurance_coverage": "insurance_coverage",
+    # In the key so that the refinancing incentive and the spread at origination can be
+    # rebuilt after the collapse: both are the note rate against a mortgage rate, and the
+    # mortgage rate is a function of the origination month, which the key already carries.
+    # It is the cheapest way to reach the covariate a prepayment model turns on.
+    "note_rate": "note_rate",
 }
 
 #: Categorical covariates and the SQL that produces them.
@@ -387,12 +445,12 @@ _SOURCE: Final[dict[str, str]] = {
 #: See docs/variable_selection.md for the frequencies these rest on.
 _CATEGORICAL: Final[dict[str, str]] = {
     "purpose": (
-        "CASE loan_purpose WHEN 'P' THEN 'purchase' WHEN 'C' THEN 'refinance_cashout' "
-        "WHEN 'N' THEN 'refinance_rate_term' WHEN 'R' THEN 'refinance_rate_term' END"
+        "CASE loan_purpose WHEN 'P' THEN 'purchase' WHEN 'C' THEN 'cash_out_refinance' "
+        "WHEN 'N' THEN 'rate_term_refinance' WHEN 'R' THEN 'rate_term_refinance' END"
     ),
     "occupancy": (
         "CASE occupancy_status WHEN 'P' THEN 'owner_occupied' "
-        "WHEN 'S' THEN 'second_home' WHEN 'I' THEN 'investor' END"
+        "WHEN 'S' THEN 'second_home' WHEN 'I' THEN 'investment_property' END"
     ),
     # Retail against everything else, because the finer split is not comparable
     # across the history. Until 2008 roughly half of originations are coded T,
@@ -404,35 +462,64 @@ _CATEGORICAL: Final[dict[str, str]] = {
     # split is the part that means the same thing in every vintage.
     "channel": (
         "CASE channel WHEN 'R' THEN 'retail' "
-        "WHEN 'B' THEN 'third_party' WHEN 'C' THEN 'third_party' "
-        "WHEN 'T' THEN 'third_party' END"
+        "WHEN 'B' THEN 'broker_or_correspondent' WHEN 'C' THEN 'broker_or_correspondent' "
+        "WHEN 'T' THEN 'broker_or_correspondent' END"
     ),
     "region": "region",
+    # Both branches explicit, as everywhere here: a blank is neither, and drops the loan.
+    # Before September 2026 the flag was not even ingested, and every HARP loan fell out
+    # of the model through its missing debt-to-income.
+    "harp": "CASE harp_indicator WHEN 'Y' THEN 'harp' WHEN 'N' THEN 'standard' END",
+    # What the payment history said when the month opened. The state *in* the month is a
+    # mediator -- at three missed payments the loan has defaulted by definition -- but the
+    # month before is what a servicer knows in time to act on, and it is the strongest thing
+    # the performance file holds that this model has never read.
+    #
+    # No earlier month means the loan's first observed month, which opens current: that is
+    # the origination month, not a missing value. Everything else is read from the code, and
+    # a code that is neither a number nor absent -- RA, an REO acquisition -- has no branch
+    # and drops the row, as every other mapping here does.
+    #
+    # ``three_or_more`` exists only under MoratoriumPolicy.EXCLUDE, where an accommodated
+    # 90+ month is not an event and the loan stays under observation: the month after it
+    # opens at three. Under IGNORE the loan has already defaulted and no such row survives.
+    "delinquency_state": (
+        "CASE WHEN previous_status IS NULL THEN 'current' "
+        "WHEN TRY_CAST(previous_status AS INTEGER) = 0 THEN 'current' "
+        "WHEN TRY_CAST(previous_status AS INTEGER) = 1 THEN 'one_month' "
+        "WHEN TRY_CAST(previous_status AS INTEGER) = 2 THEN 'two_months' "
+        f"WHEN TRY_CAST(previous_status AS INTEGER) >= {DEFAULT_DELINQUENCY} "
+        "THEN 'three_or_more' END"
+    ),
     # In the cell key, so a 9 -- "not available" -- drops the loan. Measured across the
     # whole book that is 19,053 of 49.2 million loans, 0.04%, and at most 0.92% of any
     # vintage (1999): too small for the drop to be the informative loss D4 is about.
-    "first_time_buyer": (
-        "CASE first_time_homebuyer_indicator WHEN 'Y' THEN 'Y' WHEN 'N' THEN 'N' END"
+    "buyer_type": (
+        "CASE first_time_homebuyer_indicator WHEN 'Y' THEN 'first_time' WHEN 'N' THEN 'repeat' END"
     ),
     # SF, PU and CO carry 99.3% between them; the rest is a tail of half-percents.
     "property_type": (
-        "CASE property_type WHEN 'SF' THEN 'single_family' WHEN 'PU' THEN 'planned_unit' "
-        "WHEN 'CO' THEN 'condo' WHEN 'MH' THEN 'other' WHEN 'CP' THEN 'other' END"
+        "CASE property_type WHEN 'SF' THEN 'single_family' "
+        "WHEN 'PU' THEN 'planned_unit_development' WHEN 'CO' THEN 'condominium' "
+        "WHEN 'MH' THEN 'manufactured_or_coop' WHEN 'CP' THEN 'manufactured_or_coop' END"
     ),
     # 98.1% are single-unit; two, three and four are one category together.
     "units": (
-        "CASE WHEN TRY_CAST(number_of_units AS INTEGER) = 1 THEN '1' "
-        "WHEN TRY_CAST(number_of_units AS INTEGER) BETWEEN 2 AND 4 THEN '2-4' END"
+        "CASE WHEN TRY_CAST(number_of_units AS INTEGER) = 1 THEN 'one_unit' "
+        "WHEN TRY_CAST(number_of_units AS INTEGER) BETWEEN 2 AND 4 THEN 'two_to_four_units' END"
     ),
     # Both branches explicit. With an ELSE, a term that failed to parse became thirty years.
     "term_years": "CASE WHEN orig_term <= 190 THEN 15 WHEN orig_term > 190 THEN 30 END",
-    # Both branches explicit, reading a mi_percent the 999 sentinel has been removed from.
-    # With an ELSE and no sentinel treatment, a percentage recorded as "not available"
-    # read as *insured*: 735 loans, negligible in number, and precisely the two rules
-    # this module states -- sentinels are real numbers, no ELSE -- broken in the covariate
-    # the cardinality argument had just been corrected to admit. Its content is real: the
-    # insured share runs from 6.8% of the 2010 vintage to 38.9% of 2023's.
-    "has_mi": "CASE WHEN mi_percent > 0 THEN 'Y' WHEN mi_percent = 0 THEN 'N' END",
+    # Both branches explicit, reading an insurance coverage the 999 sentinel has been removed from.
+    # With an ELSE and no sentinel treatment, a percentage recorded as "not available" read as
+    # *insured*: 735 loans, negligible in number, and precisely the two rules this module states --
+    # sentinels are real numbers, no ELSE -- broken in the covariate the cardinality argument had
+    # just been corrected to admit. Its content is real: the insured share runs from 6.8% of the
+    # 2010 vintage to 38.9% of 2023's.
+    "mortgage_insurance": (
+        "CASE WHEN insurance_coverage > 0 THEN 'insured' "
+        "WHEN insurance_coverage = 0 THEN 'uninsured' END"
+    ),
     # Screened like everything else rather than ingested and forgotten. It reached the
     # parquet without appearing in any screening table or in DEGENERATE_FIELDS, which is
     # the gap that let three performance fields disappear silently.
@@ -443,10 +530,12 @@ _CATEGORICAL: Final[dict[str, str]] = {
     # mapping would have dropped 98% of the book the day the flag entered a key. It is not
     # in one. No loan before 2008 is Y, because the category did not exist, so its N for
     # those vintages records a date rather than a loan.
-    "super_conforming": "CASE super_conforming_flag WHEN 'Y' THEN 'Y' WHEN 'N' THEN 'N' END",
-    "n_borrowers": (
-        "CASE WHEN TRY_CAST(number_of_borrowers AS INTEGER) = 1 THEN '1' "
-        "WHEN TRY_CAST(number_of_borrowers AS INTEGER) BETWEEN 2 AND 5 THEN '2+' END"
+    "loan_size": (
+        "CASE super_conforming_flag WHEN 'Y' THEN 'super_conforming' WHEN 'N' THEN 'conforming' END"
+    ),
+    "borrower_count": (
+        "CASE WHEN TRY_CAST(number_of_borrowers AS INTEGER) = 1 THEN 'one' "
+        "WHEN TRY_CAST(number_of_borrowers AS INTEGER) BETWEEN 2 AND 5 THEN 'two_or_more' END"
     ),
 }
 
@@ -518,18 +607,89 @@ class CellSpec:
 #: thresholds dropped are the finer ones; the MI break at 80 and the underwriting
 #: break at 43 survive, and those are the two the economics actually turns on.
 PRODUCTION_EDGES: Final[dict[str, tuple[float, ...]]] = {
-    "fico_s": (-2.4, -0.8, 0.0, 0.8, 1.2, 2.4),
-    "orig_ltv": (30.0, 70.0, 80.0, 90.0, 100.0),
-    "dti": (10.0, 28.0, 36.0, 43.0, 55.0),
+    "credit_score": (580.0, 660.0, 700.0, 740.0, 760.0, 820.0),
+    "original_ltv": (30.0, 70.0, 80.0, 90.0, 100.0),
+    "debt_to_income": (10.0, 28.0, 36.0, 43.0, 55.0),
 }
 
-DEFAULT_SPEC: Final = CellSpec(
+#: The documented grid, whole: 8 bands of credit score, 8 of loan-to-value, 6 of
+#: debt-to-income against 5 / 4 / 4 above.
+#:
+#: Read from BIN_EDGES rather than copied, so the coarse grid and the fine one cannot drift
+#: apart and the fine one needs no separate justification: it *is* the documentation's grid.
+#: What it costs is 384 combinations against 80, a 4.8x ceiling that the sparsity of the cell
+#: space cuts to far less -- how much less is measured, not assumed, in `creditsurv profile`.
+FINE_EDGES: Final[dict[str, tuple[float, ...]]] = {
+    name: BIN_EDGES[name] for name in PRODUCTION_EDGES
+}
+
+
+class Extension(StrEnum):
+    """An addition to the cell key, switchable one at a time.
+
+    The cell count is the product of the band counts, so an extension cannot be adopted
+    because it sounds right: it has to be measured against the ceiling in `docs/rules.md`,
+    which is why each one is a flag rather than an edit to the specification. ``creditsurv
+    profile`` prices them one by one and in combination, on nine quarters.
+    """
+
+    HARP = "harp"
+    ORIGINATION_SPREAD = "origination_spread"
+    DELINQUENCY_STATE = "delinquency_state"
+    FINE_BANDS = "fine_bands"
+
+
+#: The order the extensions are given up in if the measured table exceeds the 150 million
+#: cell ceiling, fixed in `docs/rules.md` **before** the measurement, so that what survives is
+#: not chosen by what came out large.
+#:
+#: HARP is not on the list. It is a correction of what the model covers -- 18% of a decade of
+#: vintages, at three times the default rate of the loans kept -- not a refinement of it, and
+#: the three-state outcome is the same kind of thing. The refinements go first: the finer
+#: bands, then the origination spread, then the payment state.
+GIVE_UP_ORDER: Final[tuple[Extension, ...]] = (
+    Extension.FINE_BANDS,
+    Extension.ORIGINATION_SPREAD,
+    Extension.DELINQUENCY_STATE,
+)
+
+
+def extended(base: CellSpec, *extensions: Extension) -> CellSpec:
+    """``base`` with each extension switched on.
+
+    Order is irrelevant and repetition harmless, so a caller can build the whole lattice of
+    specifications by feeding it subsets.
+    """
+    continuous = dict(base.continuous)
+    categorical = list(base.categorical)
+    # In declaration order, not the caller's, so the cell file's columns do not depend on
+    # how the specification was written down.
+    for extension in (member for member in Extension if member in set(extensions)):
+        if extension is Extension.FINE_BANDS:
+            continuous.update(FINE_EDGES)
+        elif extension is Extension.ORIGINATION_SPREAD:
+            # The note rate, not the spread: the spread is the rate against the market rate
+            # of the origination month, and the month is already in the key, so the rate is
+            # the only part of it a cell has to carry.
+            continuous["note_rate"] = BIN_EDGES["note_rate"]
+        elif extension.value not in categorical:
+            categorical.append(extension.value)
+    spec = CellSpec(
+        continuous=continuous, categorical=tuple(categorical), episode_months=base.episode_months
+    )
+    spec.validate()
+    return spec
+
+
+#: The specification before the extensions of September 2026, kept so that each of them can
+#: be priced against it rather than against a moving baseline.
+BASE_SPEC: Final = CellSpec(
     continuous=PRODUCTION_EDGES,
-    # cltv_drift is absent on purpose: it is a function of orig_ltv and the macro
+    # ltv_change is absent on purpose: it is a function of original_ltv and the macro
     # path, both recoverable from the key, so carrying it would multiply the
     # cardinality for information already there.
     #
-    # has_mi and first_time_buyer are present because the argument that excluded them
+    # mortgage_insurance and buyer_type are present because the argument that excluded them
     # was wrong. It asserted a cost of "up to 16x the table" from the product of the
     # level counts; the cell space is sparse and the measured cost of the two together
     # is **1.23x**. Mortgage insurance is a classic credit predictor and already had an
@@ -539,10 +699,42 @@ DEFAULT_SPEC: Final = CellSpec(
         "purpose",
         "occupancy",
         "term_years",
-        "has_mi",
-        "first_time_buyer",
+        "mortgage_insurance",
+        "buyer_type",
     ),
 )
+
+#: What the cells are built with: the base key, the HARP level and the payment state.
+#:
+#: **Chosen by the give-up order, not by preference.** `creditsurv profile --extensions`
+#: priced every extension on nine quarters against the 150 million cell ceiling
+#: (`docs/reports/key_extensions.csv`), projecting each multiple onto the 63.6 million cells
+#: the base key produced:
+#:
+#: ===========================================  ==========  ==================
+#: Specification                                Multiple    Projected cells
+#: ===========================================  ==========  ==================
+#: harp                                             1.063          67,650,751
+#: delinquency_state                                1.185          75,403,551
+#: origination_spread                               2.128         135,439,974
+#: fine_bands                                       2.276         144,854,977
+#: all four                                         4.903         312,015,537
+#: less the finer bands                             2.544         161,891,606
+#: less the finer bands and the spread              1.264          80,416,459
+#: ===========================================  ==========  ==================
+#:
+#: All four is twice the ceiling, and giving up the finer bands alone still leaves it over,
+#: so the second rung goes too and the key stops here. The order was fixed in
+#: `docs/rules.md` before any of this was measured, which is the only reason the answer is
+#: not the one that happened to be convenient: the finer bands are individually affordable
+#: at 144.9 million and go first anyway, because a band grid is a refinement and the HARP
+#: level and the payment state are corrections of what the model covers.
+#:
+#: What it costs is the loan's own note rate, and with it the spread at origination and the
+#: refinancing incentive. The market rate's fall since origination survives, free, and
+#: carries the first-order part of both: within a month the note rates of this book span a
+#: point, where the rate itself has moved several since 2021.
+DEFAULT_SPEC: Final = extended(BASE_SPEC, Extension.HARP, Extension.DELINQUENCY_STATE)
 
 
 def _age_expression(step: int) -> str:
@@ -576,7 +768,9 @@ def _not_null_filter(spec: CellSpec) -> str:
 #:
 #: It costs 3.11x the cells, measured. The convention matches ``_months_to_periods``:
 #: ``year * 12 + (month - 1)``.
-_ORIGINATION_MONTH: Final = "(period_key // 100) * 12 + (period_key % 100) - 1 - age AS orig_month"
+_ORIGINATION_MONTH: Final = (
+    "(period_key // 100) * 12 + (period_key % 100) - 1 - age AS origination_month"
+)
 
 
 def _select_columns(spec: CellSpec) -> str:
@@ -586,13 +780,19 @@ def _select_columns(spec: CellSpec) -> str:
     continuous or categorical set would otherwise leave a dangling comma and fail
     with a parser error that says nothing about the specification that caused it.
     """
+    # A band of NULL is not a gap in the table: it is the loan not reporting the ratio,
+    # which only a HARP refinance does, and the key carries `harp` to say so. What the
+    # model does with it is decided on the model's side, in features.absorb_not_reported.
     columns = [
         _case_expression(_SOURCE[name], edges, name) for name, edges in spec.continuous.items()
     ]
     columns += [f"{_CATEGORICAL[name]} AS {name}" for name in spec.categorical]
     columns.append(_age_expression(spec.episode_months))
     columns.append(_ORIGINATION_MONTH)
-    columns.append("event")
+    # Three states, not a flag: a cell's loan-months ended in default, in a voluntary
+    # repayment, or in neither. Prepayment is a competing risk, and a model of it needs to
+    # tell the two exits apart.
+    columns.append("outcome")
     return ",\n            ".join(columns)
 
 
@@ -639,12 +839,14 @@ def _cells_for_quarter(
     lets the macro series stay out of the key entirely and be read at the right date.
     """
     query = f"""
-    WITH book AS ({_state_of_the_book_sql(policy)}), classed AS (
+    WITH book AS (
+        {_state_of_the_book_sql(policy, harp_level=Extension.HARP in spec.categorical)}
+    ), classed AS (
         SELECT
             {_select_columns(spec)}
         FROM book
     )
-    SELECT '{vintage}' AS vintage, *, COUNT(*) AS n
+    SELECT '{vintage}' AS vintage, *, COUNT(*) AS loan_months
     FROM classed
     -- A categorical that mapped to NULL is a code nobody has looked at. The loan is
     -- dropped rather than aggregated into a NULL level, for the same reason a loan
@@ -688,7 +890,9 @@ def build_cells(
         vintage = Path(perf_path).stem
         cells = _compact(_cells_for_quarter(con, perf_path, orig_path, vintage, spec, policy))
         frames.append(cells)
-        _LOGGER.info("%s: %d cells from %d loan-months", vintage, len(cells), int(cells["n"].sum()))
+        _LOGGER.info(
+            "%s: %d cells from %d loan-months", vintage, len(cells), int(cells["loan_months"].sum())
+        )
 
     # Vintage is in the key and constant within a quarter, so the pieces are already
     # disjoint: concatenating needs no second group-by.
@@ -709,8 +913,8 @@ def _compact(cells: pd.DataFrame) -> pd.DataFrame:
     for column in cells.columns:
         if cells[column].dtype == object:
             cells[column] = cells[column].astype("category")
-    if "orig_month" in cells.columns:
-        cells["orig_month"] = cells["orig_month"].astype("int32")
+    if "origination_month" in cells.columns:
+        cells["origination_month"] = cells["origination_month"].astype("int32")
     return cells
 
 
@@ -764,14 +968,14 @@ def cardinality_report(
                 "loan_months": rows,
                 "cells": len(cells),
                 "compression": rows / max(len(cells), 1),
-                "weight_total": int(cells["n"].sum()),
+                "weight_total": int(cells["loan_months"].sum()),
             }
         ]
     )
 
 
 #: Origination fields whose absence drops a loan before the categorical keys are read.
-_COMPLETE_CASE_FIELDS: Final[tuple[str, ...]] = ("credit_score", "orig_ltv", "dti")
+_COMPLETE_CASE_FIELDS: Final[tuple[str, ...]] = ("credit_score", "original_ltv", "debt_to_income")
 
 
 def incomplete_cases(
@@ -876,8 +1080,11 @@ def credit_adjacent_exits(
         vintage = Path(perf_path).stem
         query = f"""
         WITH book AS ({_state_of_the_book_sql(policy, complete_only=False)}),
-        outcome AS (
-            SELECT loan_identifier, BOOL_OR(event) AS defaulted, BOOL_OR(prepaid) AS exited
+        per_loan AS (
+            SELECT
+                loan_identifier,
+                BOOL_OR(event) AS defaulted,
+                BOOL_OR(left_the_book) AS exited
             FROM book
             GROUP BY loan_identifier
         ),
@@ -892,7 +1099,7 @@ def credit_adjacent_exits(
                 c.code,
                 COALESCE(o.defaulted, FALSE) AS defaulted,
                 COALESCE(o.exited, FALSE) AND NOT COALESCE(o.defaulted, FALSE) AS at_exit
-            FROM coded c LEFT JOIN outcome o USING (loan_identifier)
+            FROM coded c LEFT JOIN per_loan o USING (loan_identifier)
         )
         SELECT
             '{vintage}' AS vintage,
@@ -941,7 +1148,7 @@ def defaults_by_month(
         )
         SELECT
             (period_key // 100) * 12 + (period_key % 100) - 1 AS month,
-            SUM(CAST(event AS INTEGER)) AS defaults
+            SUM(CASE WHEN outcome = 'default' THEN 1 ELSE 0 END) AS defaults
         FROM classed
         {_not_null_filter(spec)}
         GROUP BY 1
