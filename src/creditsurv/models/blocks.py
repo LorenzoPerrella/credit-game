@@ -472,7 +472,7 @@ def fit_interval_censoring_in_blocks(
             raise exceptions.ConvergenceError(message)
         if method_used != fitter._scipy_fit_method:
             log.info("optimised with %s where %s failed", method_used, fitter._scipy_fit_method)
-        solution = _from_slsqp(objective, results, polish=polish)
+        solution = _from_optimiser(objective, results, polish=polish)
         method = str(method_used).lower()
     else:
         method = "newton"
@@ -1211,16 +1211,23 @@ def _damped_step(x: np.ndarray, gradient: np.ndarray, damped: np.ndarray) -> np.
     return np.asarray(x - np.linalg.solve(damped, gradient), dtype=float)
 
 
-def _from_slsqp(
+def _from_optimiser(
     objective: _Evaluator, results: OptimizeResult, *, polish: bool
 ) -> tuple[np.ndarray, float, np.ndarray, int, float, float]:
-    """Where SLSQP stopped, polished to the optimum unless ``polish`` is off."""
+    """Where the optimiser stopped, polished to the optimum unless ``polish`` is off.
+
+    The value and the gradient are **recomputed here** rather than read off the result. Each
+    optimiser reports them its own way -- SLSQP's ``jac`` is the gradient, trust-constr's is
+    shaped for its constraint machinery -- and reading them cost a run: trust-constr solved a
+    prepayment fit SLSQP had given up on, and the polish then died on `LinAlgError:
+    Incompatible dimensions`, an hour of fitting thrown away for a field's shape. One
+    value-and-gradient is 2% of the Hessian this function computes anyway.
+    """
     started = time.perf_counter()
     x = np.asarray(results.x, dtype=float)
     curvature = _symmetric(objective.hessian(x))
     log.info("hessian in %.0fs", time.perf_counter() - started)
-    value = float(results.fun)
-    gradient = np.asarray(results.jac, dtype=float)
+    value, gradient = objective(x)
     if polish:
         return _polish(objective, x, value, gradient, curvature)
     _, stopped = _newton_step(curvature, gradient, objective.total_weight)

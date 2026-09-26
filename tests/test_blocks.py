@@ -413,5 +413,48 @@ def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
     assert calls[0].lower() == "slsqp"
     assert calls[1] == "L-BFGS-B", "the first fallback is tried next"
     assert record.method == "l-bfgs-b"
+    assert record.evaluations > 0
     assert fitter.log_likelihood_ < 0, "a real fit came out of the fallback"
     assert record.residual_error_se < 1e-3, "and the polish certifies it is at the optimum"
+
+
+def test_the_optimisers_report_is_used_for_nothing_but_its_point(
+    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each optimiser reports its value and gradient its own way: SLSQP's ``jac`` is the
+    gradient, trust-constr's is shaped for its constraint machinery. Reading that field cost a
+    run -- trust-constr solved a prepayment fit SLSQP had given up on, and the polish died on
+    `LinAlgError: Incompatible dimensions`, an hour of fitting thrown away for a shape.
+
+    So both are recomputed from the objective, and here the optimiser returns nonsense in
+    those fields to prove nothing reads them.
+    """
+    from scipy import optimize
+
+    from creditsurv.models import blocks
+
+    real = optimize.minimize
+
+    def reports_nonsense(*args: object, **kwargs: object) -> object:
+        results = real(*args, **kwargs)
+        results.jac = "not a gradient"
+        results.fun = float(results.fun)  # kept finite: the engine checks convergence on it
+        return results
+
+    monkeypatch.setattr(blocks, "minimize", reports_nonsense)
+
+    fitter = FITTERS["weibull"]()
+    record = fit_interval_censoring_in_blocks(
+        fitter,
+        model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+        formula=FORMULA,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+        polish=True,
+    )
+
+    assert record.residual_error_se < 1e-3, "the polish ran on a recomputed gradient"
+    assert fitter.log_likelihood_ < 0
