@@ -877,3 +877,38 @@ def test_a_candidate_that_cannot_be_fitted_is_a_finding_not_a_crash() -> None:
     # sign -- which is the stub's doing and, more to the point, proof that step 8 ran at all.
     assert record.eliminated["ltv_change"].startswith("step 8:")
     assert not record.screening.empty
+
+
+def test_a_warm_start_that_will_not_converge_is_retried_cold(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A warm start is an optimisation, not part of any rule: it turns a 45-minute cold fit
+    into 13 minutes. When it fails it fails as a starting point, and the answer is to start
+    where lifelines would have and pay for it.
+
+    The prepayment selection lost six hours to this. Its backward elimination walked six
+    damped Newton steps from 144 standard errors out to 3.86e+03, with damping at 1e+12, and
+    then SLSQP diverged -- on a model that fits perfectly well from a cold start.
+    """
+    from lifelines import exceptions
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    attempts: list[bool] = []
+    real = Fits._once
+
+    def refuses_warm(self: Fits, spec: Specification, **kwargs: object) -> FitResult:
+        warm = kwargs.get("start") is not None
+        attempts.append(warm)
+        if warm:
+            message = "Fitting did not converge after 43 evaluations"
+            raise exceptions.ConvergenceError(message)
+        return real(self, spec, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Fits, "_once", refuses_warm)
+    fits = Fits(train, identity="fixture", as_of="2008-12", moratorium="exclude")
+    base = fits.fit(Specification(continuous=("credit_score",)))
+
+    result = fits.fit(Specification(continuous=("credit_score", "debt_to_income")), start=base)
+
+    assert result.log_likelihood < 0, "the cold fit is a real fit"
+    assert attempts == [False, True, False], "cold, then a warm start that failed, then cold"

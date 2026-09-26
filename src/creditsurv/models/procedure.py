@@ -251,7 +251,32 @@ class Fits:
         parity: int | None,
         start: FitResult | None,
     ) -> FitResult:
-        """One fit, from the rows in hand or from the cell file."""
+        """One fit, from the rows in hand or from the cell file.
+
+        A warm start is an optimisation, not part of any rule here: it is what turns a
+        45-minute cold fit into 13 minutes by beginning at the nearest model's coefficients.
+        When it fails, it fails as a *starting point* -- the prepayment model's backward
+        elimination walked six damped Newton steps from 144 standard errors out to 3.86e+03,
+        with damping at 1e+12, and then SLSQP diverged -- so the answer is to start where
+        lifelines would have started and pay for it, not to give up on the model.
+        """
+        try:
+            return self._once(spec, where=where, parity=parity, start=start)
+        except exceptions.ConvergenceError:
+            if start is None:
+                raise
+            log.warning("warm start did not converge; refitting cold: %s", spec.formula)
+            return self._once(spec, where=where, parity=parity, start=None)
+
+    def _once(
+        self,
+        spec: Specification,
+        *,
+        where: np.ndarray | None,
+        parity: int | None,
+        start: FitResult | None,
+    ) -> FitResult:
+        """One attempt, from the rows in hand or from the cell file."""
         initial_point = None if start is None else start.fitter.params_
         if self.blocks is None:
             if self.train is None:

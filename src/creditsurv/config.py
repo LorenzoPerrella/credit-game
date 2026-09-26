@@ -281,24 +281,27 @@ ORDINAL: Final[tuple[str, ...]] = ("term_years",)
 #: origination and stays strongly correlated with it, so fitting both gives unstable coefficients.
 #: The pair is decomposed into a level (``original_ltv``, underwriting at origination) and a
 #: movement (``ltv_change``, how far house prices have carried the position since, zero at
-#: origination). ``refinance_incentive`` is absent: it needs the note rate, which the key does not
-#: carry. It is recoverable the same way ``ltv_change`` is -- from a banded ``origination_spread``
-#: plus the mortgage-rate path, both functions of the key -- which is the cheapest of the candidate
-#: additions and the one to weigh first. **The output of ``creditsurv select``, not a choice made
-#: here.** Steps 5 to 9 on the training half kept seven of the fifteen macro candidates, and
-#: ``tests/test_procedure.py`` fails if this tuple and ``docs/reports/selection.json`` part. One per
-#: economic dimension except housing, where ``housing_starts_growth``, the construction cycle, held
-#: its sign beside ``ltv_change`` on both halves of the book (1 sd effect +0.068 and +0.088 against
-#: -0.168 and -0.186). The first run, done by hand before the validation, kept ``equity_volatility``
-#: and ``inflation_rate``; the selection removed both. See ``ELIMINATED``.
+#: origination). ``refinance_incentive`` is absent because the cell key cannot carry the note
+#: rate at this cell count: `docs/reports/key_extensions.csv` priced it at 2.13x and the give-up
+#: order of rule 7 reached it.
+#:
+#: **The output of ``creditsurv select``, not a choice made here.** Steps 5 to 10 on the training
+#: half of the rebuilt cells -- 72.7 million, up to 2021-12 -- kept six of the fifteen macro
+#: candidates, and ``tests/test_procedure.py`` fails if this tuple and
+#: ``docs/reports/selection.json`` part.
+#:
+#: What changed from the run before it, and why, is in ``ELIMINATED``: the new **step 10** removed
+#: ``financial_conditions`` at -0.0155 per standard deviation and ``inflation_change`` at +0.0032,
+#: both under the 0.02 of rule 3 -- which named financial conditions in advance. Step 9 removed
+#: ``mortgage_rate_decline``, whose sign flips between even and odd vintages beside
+#: ``policy_rate_change``, and ``yield_curve_slope`` survived in its place.
 TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
     "ltv_change",
     "unemployment_change",
-    "financial_conditions",
     "policy_rate_change",
+    "yield_curve_slope",
     "consumer_sentiment",
     "housing_starts_growth",
-    "inflation_change",
 )
 
 #: Every macro-derived covariate available, including the ones the default model does
@@ -385,37 +388,40 @@ ELIMINATED: Final[dict[str, str]] = {
     #
     # --- step 6: collinearity, in the priority fixed before any fit ---
     "corporate_bond_spread": (
-        "variance inflation 11.9, above 10 -- the first candidate over the threshold. The "
+        "variance inflation 10.8, above 10 -- the first candidate over the threshold. The "
         "first run had it at 8.41 and removed it by hand for a sign reversal"
     ),
     # --- step 8: backwards against a declared prior ---
-    "volatility_change": (
-        "wrong sign: +0.00254 in the full model, where stress should shorten survival"
-    ),
     "equity_volatility": (
-        "wrong sign: +0.00935 in the full model once volatility_change is gone, against "
-        "-0.0198 beside the loan block alone. The first run's largest effect: part of it was "
-        "the 2020 moratoria, as the validation suspected (S5), and the rest is shared with "
-        "financial_conditions"
+        "wrong sign: +0.009578 where - is expected. The first run's largest effect: part of "
+        "it was the 2020 moratoria, as the validation suspected (S5), and the rest is shared "
+        "with financial_conditions"
+    ),
+    "volatility_change": "wrong sign: +0.001721 where - is expected",
+    "house_price_growth": (
+        "wrong sign: -0.1456 where + is expected. It is built from the same house price index "
+        "as ltv_change, which survives"
     ),
     # --- step 8: its sign reversed against its own ---
-    "mortgage_rate_decline": (
-        "reversed: -0.190 beside the loan block alone, +0.018 in the full model"
-    ),
-    "equity_return": "reversed: +0.431 beside the loan block alone, -0.086 in the full model",
     "inflation_rate": (
-        "reversed: +10.04 beside the loan block alone, -8.33 in the full model, against "
-        "inflation_change's +6.9 there -- together the pair was reading inflation at origination"
+        "reversed: +7.972 beside the loan block alone, -8.929 in the full model -- with "
+        "inflation_change there the pair was reading inflation at origination"
     ),
+    "equity_return": "reversed: +0.5614 beside the loan block alone, -0.004448 in the full model",
     # --- step 9: not identified beside a larger covariate of the same dimension ---
-    "yield_curve_slope": (
-        "1 sd effect -0.058 on even and +0.013 on odd origination years, beside "
-        "policy_rate_change at +0.119"
+    "mortgage_rate_decline": (
+        "1 sd effect -0.030 on even and +0.034 on odd origination years, beside "
+        "policy_rate_change at +0.118, both interest rates"
     ),
-    "house_price_growth": (
-        "1 sd effect -0.004 on even and +0.015 on odd origination years, beside ltv_change "
-        "at -0.179, which is built from the same house price index"
+    # --- step 10: material by the threshold declared in docs/rules.md ---
+    #
+    # The step the validation's objection asked for, firing where rule 3 said it would: it
+    # named financial_conditions in advance, at -0.004 on the model before this one.
+    "financial_conditions": (
+        "1 sd effect -0.0155 on log survival time, under the 0.02 of rule 3: its sign and "
+        "little else, and a covariate that small changes sign when the sample does"
     ),
+    "inflation_change": "1 sd effect +0.0032 on log survival time, under the 0.02 of rule 3",
 }
 
 MACRO_ELIMINATION_PRIORITY: Final[tuple[str, ...]] = (
@@ -452,9 +458,15 @@ DISTRIBUTION: Final = "weibull"
 #: the cells where an unmeasured sixteenfold had kept them out, and the model with the
 #: selection, whose screen beside the loan block put them at z = -46 and +26. ``channel``
 #: and ``region`` are mapped but not in the key.
+#:
+#: ``harp`` is here because the model cannot read the debt-to-income without it: the ratio is
+#: missing for exactly the HARP refinances, and the constant that fills it is absorbed by this
+#: level. It is in the selection's protected block for that reason rather than on the strength of
+#: its coefficient -- rule 8 of `docs/rules.md`, and `features.NOT_REPORTED`.
 CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
     "purpose": "purchase",
     "occupancy": "owner_occupied",
+    "harp": "standard",
     "mortgage_insurance": "uninsured",
     "buyer_type": "repeat",
 }
