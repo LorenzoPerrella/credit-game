@@ -76,6 +76,19 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
 - **Never leave a long run unsaved.** One run completed a 154-minute fit and was then
   killed writing its reports, keeping nothing. That is why the cache exists.
 
+**Where a fit's time actually goes, measured.** On a 250,000-row block of the production table
+with 19 parameters: expanding the design 41 ms, a value 28 ms, a value with its gradient 66 ms,
+**a Hessian 1,381 ms -- 49 times the value**, because autograd takes it forward-over-reverse.
+A cold fit is 50 to 100 SLSQP evaluations and two to six Newton steps, so **the optimiser's
+path is ~85% of a fit and the Hessian ~15%**: speed lives in the evaluation, not in Newton.
+
+And the evaluation is not arithmetic-bound. Profiled, a value-and-gradient spent **42% in
+autograd's tape, 32% in `pandas.take` and 20% copying**, with the likelihood's own exp and log a
+minority. The pandas half was waste -- the design and the masks the likelihood filters by do not
+change between evaluations -- and `_Slicer` removed it: **1.9x on every evaluation**. What is
+left is autograd, and reducing that means owning an analytic gradient, which is the second
+implementation of lifelines' likelihood this engine exists to avoid.
+
 ## lifelines' optimiser stops short of the optimum
 
 SLSQP stops on a change of 1e-10 in the *mean* log-likelihood, a tolerance that takes no

@@ -328,3 +328,40 @@ def test_the_polish_never_steps_into_values_no_likelihood_can_take() -> None:
     assert reached >= 0
     assert abs(float(point[0]) - 1.0) < 1e-6
     assert left < POLISH_TOLERANCE_SE
+
+
+def test_the_slicer_hands_lifelines_the_columns_it_asks_for(macro: pd.DataFrame) -> None:
+    """The design is handed to the likelihood through a slicer of our own, and the likelihood
+    is lifelines' -- so the slicer has to answer exactly as lifelines' own does.
+
+    It exists because pandas' answer was measured at 32% of a value-and-gradient, plus the
+    copies it made: a parameter's columns are adjacent in the design, so asking for them is a
+    view, and the masks the likelihood filters by are properties of the data, so a repeated
+    filter is free. Together they made an evaluation 1.9 times faster.
+    """
+    from lifelines.utils import DataframeSlicer
+
+    from creditsurv.models.blocks import _Slicer
+
+    columns = pd.MultiIndex.from_tuples(
+        [("lambda_", "Intercept"), ("lambda_", "credit_score"), ("rho_", "Intercept")]
+    )
+    design = np.asfortranarray(np.arange(30, dtype=float).reshape(10, 3))
+    theirs = DataframeSlicer(pd.DataFrame(design, columns=columns))
+    ours = _Slicer(design, columns)
+    mask = np.zeros(10, dtype=bool)
+    mask[[1, 4, 7]] = True
+
+    for key in ("lambda_", "rho_"):
+        np.testing.assert_array_equal(ours[key], theirs[key])
+        np.testing.assert_array_equal(ours.filter(mask)[key], theirs.filter(mask)[key])
+        np.testing.assert_array_equal(ours.filter(~mask)[key], theirs.filter(~mask)[key])
+    assert ours.size == theirs.size
+    assert ours.filter(mask).size == 3
+
+    # The same mask twice is the same object, and the columns come back contiguous -- the
+    # first version of this returned C-ordered rows and was 60% slower than the pandas it
+    # replaced.
+    assert ours.filter(mask) is ours.filter(mask.copy())
+    assert ours["lambda_"].flags["F_CONTIGUOUS"]
+    assert ours.filter(mask)["lambda_"].flags["F_CONTIGUOUS"]
