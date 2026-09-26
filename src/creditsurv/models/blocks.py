@@ -73,6 +73,24 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _check_interior(x: np.ndarray) -> None:
+    """Refuse a point sitting on the bound: that is not a maximum of the likelihood.
+
+    The bound is there to keep the optimiser out of the region where lifelines' clipped
+    objective stops being a likelihood, not to constrain the model. A fit that ends on it is
+    telling us the model is not identified, and saying so is more use than a coefficient of
+    exactly 100.
+    """
+    at_bound = np.flatnonzero(np.abs(np.asarray(x, dtype=float)) >= _PARAMETER_BOUND * 0.99)
+    if at_bound.size:
+        message = (
+            f"Coefficient(s) {at_bound.tolist()} reached the bound of {_PARAMETER_BOUND:g} on "
+            "standardised covariates, so the fit is at the edge of what the likelihood can be "
+            "evaluated on rather than at a maximum. The specification is not identified."
+        )
+        raise exceptions.ConvergenceError(message)
+
+
 def _methods(first: str, prefer: str | None) -> tuple[str, ...]:
     """The optimisers to try, in order, starting with the one that last worked.
 
@@ -88,6 +106,23 @@ def _methods(first: str, prefer: str | None) -> tuple[str, ...]:
     rest = [name for name in ordered if name.lower() != prefer.lower()]
     return (next(name for name in ordered if name.lower() == prefer.lower()), *rest)
 
+
+#: How large a coefficient the optimiser may consider, on standardised covariates.
+#:
+#: lifelines leaves an AFT model's coefficients unbounded -- its ``_bounds`` are for the
+#: univariate fitters -- and that is where the runs went wrong. The likelihood it writes clips
+#: the interval probability at 1e-25 but adds the truncation term unclipped, so far from the
+#: data the objective -- a mean *negative* log-likelihood, which cannot be negative -- goes
+#: negative and flat. Every failure of the prepayment model ended there: SLSQP at coefficients
+#: of 1e+80, L-BFGS-B ``ABNORMAL``, and trust-constr returning a point where the next
+#: evaluation read **-8.97e+69**.
+#:
+#: The covariates are divided by their own standard deviation before the fit, so a coefficient
+#: of 100 means a scale factor of e^100 per standard deviation. The bound is three orders of
+#: magnitude outside anything a credit model can mean and ten orders inside the region where
+#: the objective stops being one: it cannot bind at an optimum, and `_check_interior` refuses
+#: the fit if it ever does.
+_PARAMETER_BOUND: Final = 100.0
 
 #: Optimisers tried when lifelines' own stops without converging, in order.
 #:
@@ -465,6 +500,7 @@ def fit_interval_censoring_in_blocks(
                     start,
                     method=method,
                     jac=True,
+                    bounds=[(-_PARAMETER_BOUND, _PARAMETER_BOUND)] * len(start),
                     options={
                         "disp": show_progress,
                         **(fitter._scipy_fit_options if method == fitter._scipy_fit_method else {}),
@@ -477,6 +513,7 @@ def fit_interval_censoring_in_blocks(
                 # lifelines prints the optimiser's result under the same flag.
                 print(results)
             if results.fun < np.inf and results.success:
+                _check_interior(results.x)
                 method_used = method
                 break
             log.warning("%s did not converge (%s); trying the next method", method, results.message)

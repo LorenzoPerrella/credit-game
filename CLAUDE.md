@@ -116,6 +116,15 @@ errors out to 4e-6: **30 minutes against 76**. On three million rows the same st
 evaluations and 7 Hessians where SLSQP needed 91 evaluations, and ended 3e-5 standard errors
 from the cold optimum.
 
+**The coefficients are bounded, because lifelines leaves them unbounded.** Its `_bounds` are
+for the univariate fitters; an AFT model's coefficients are free, and the objective is not a
+likelihood everywhere. Every failed run of the prepayment model ended in that region --
+coefficients of 1e+80 under SLSQP, `ABNORMAL` under L-BFGS-B, and a trust-constr point whose
+next evaluation read **-8.97e+69**. The bound is 100 on standardised covariates: three orders
+of magnitude outside anything a credit model can mean, ten inside where the objective breaks,
+so it cannot bind at an optimum -- and a fit that ends on it is refused as not identified
+rather than published.
+
 **SLSQP gives up on an ill-conditioned design; another optimiser does not.** It solves a
 quadratic subproblem at each step, and where the curvature is bad it reports *"Rank-deficient
 equality constraint subproblem"* and stops -- the prepayment model did that at step 8 of its

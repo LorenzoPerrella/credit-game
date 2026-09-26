@@ -474,3 +474,20 @@ def test_the_optimiser_that_worked_is_tried_first_next_time() -> None:
     assert _methods("SLSQP", "l-bfgs-b") == ("L-BFGS-B", "SLSQP", "trust-constr")
     # A method nobody offers is ignored rather than tried.
     assert _methods("SLSQP", "newton") == ("SLSQP", "L-BFGS-B", "trust-constr")
+
+
+def test_a_coefficient_on_the_bound_is_refused_rather_than_published() -> None:
+    """The bound keeps the optimiser out of the region where lifelines' clipped objective
+    stops being a likelihood -- every failure of the prepayment model ended there, the worst
+    reading -8.97e+69. It is not a constraint on the model, so a fit that ends on it is not a
+    maximum and says so.
+    """
+    from lifelines import exceptions
+
+    from creditsurv.models.blocks import _PARAMETER_BOUND, _check_interior
+
+    _check_interior(np.array([0.5, -2.0, 30.0]))  # interior: nothing happens
+    with pytest.raises(exceptions.ConvergenceError, match="not identified"):
+        _check_interior(np.array([0.5, _PARAMETER_BOUND]))
+    with pytest.raises(exceptions.ConvergenceError, match="Coefficient\\(s\\) \\[0\\]"):
+        _check_interior(np.array([-_PARAMETER_BOUND, 0.1]))
