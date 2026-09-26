@@ -458,3 +458,19 @@ def test_the_optimisers_report_is_used_for_nothing_but_its_point(
 
     assert record.residual_error_se < 1e-3, "the polish ran on a recomputed gradient"
     assert fitter.log_likelihood_ < 0
+
+
+def test_the_optimiser_that_worked_is_tried_first_next_time() -> None:
+    """A design that defeats SLSQP is usually beside another one just like it: the backward
+    elimination refits nearly the same model at every step. Walking the whole chain each time
+    cost over an hour a fit on the prepayment model -- 25 minutes of SLSQP failing, 40 of
+    L-BFGS-B, then an hour of trust-constr answering.
+    """
+    from creditsurv.models.blocks import _methods
+
+    assert _methods("SLSQP", None) == ("SLSQP", "L-BFGS-B", "trust-constr")
+    assert _methods("SLSQP", "slsqp") == ("SLSQP", "L-BFGS-B", "trust-constr")
+    assert _methods("SLSQP", "trust-constr") == ("trust-constr", "SLSQP", "L-BFGS-B")
+    assert _methods("SLSQP", "l-bfgs-b") == ("L-BFGS-B", "SLSQP", "trust-constr")
+    # A method nobody offers is ignored rather than tried.
+    assert _methods("SLSQP", "newton") == ("SLSQP", "L-BFGS-B", "trust-constr")

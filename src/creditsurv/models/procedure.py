@@ -203,6 +203,11 @@ class Fits:
     #: Processes the likelihood is evaluated in, when streaming. Each holds one batch at a
     #: time plus its share of the stored blocks.
     workers: int = 1
+    #: The optimiser that last answered, tried first on the next fit. A design that defeats
+    #: SLSQP is usually beside another one just like it -- the elimination refits nearly the
+    #: same model at every step -- and walking the chain each time cost over an hour a fit on
+    #: the prepayment model.
+    preferred: str | None = None
     record: list[dict[str, object]] = field(default_factory=list)
 
     def fit(
@@ -297,7 +302,7 @@ class Fits:
         source = replace(
             self.blocks, covariates=tuple(spec.covariates), vintage_parity=parity
         ).prepared()
-        return fit_streamed(
+        fitted = fit_streamed(
             source,
             spec.covariates,
             spec.formula,
@@ -305,7 +310,11 @@ class Fits:
             weights_col=WEIGHT,
             initial_point=initial_point,
             workers=self.workers,
+            prefer=self.preferred,
         )
+        if fitted.blocks is not None and fitted.blocks.method not in {"newton", "warm"}:
+            self.preferred = fitted.blocks.method
+        return fitted
 
 
 def selection_description(

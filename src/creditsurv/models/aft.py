@@ -278,6 +278,7 @@ def fit_streamed(
     initial_point: np.ndarray | pd.Series | None = None,
     polish: bool = True,
     workers: int = 1,
+    prefer: str | None = None,
 ) -> FitResult:
     """Fit the interval-censored likelihood from blocks, without an episode frame in memory.
 
@@ -309,6 +310,7 @@ def fit_streamed(
         show_progress=show_progress,
         polish=polish,
         workers=workers,
+        prefer=prefer,
     )
     return FitResult(
         fitter=fitter,

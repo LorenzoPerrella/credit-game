@@ -72,6 +72,23 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+
+def _methods(first: str, prefer: str | None) -> tuple[str, ...]:
+    """The optimisers to try, in order, starting with the one that last worked.
+
+    A fit whose design defeats SLSQP is usually beside another one just like it -- the
+    backward elimination refits nearly the same model at every step -- and walking the whole
+    chain each time is expensive: on the prepayment model, SLSQP spent 25 minutes failing,
+    L-BFGS-B 40 more, and trust-constr then took an hour to answer. Starting from what worked
+    last time saves the first two on every fit after the first.
+    """
+    ordered = (first, *_FALLBACK_METHODS)
+    if prefer is None or prefer.lower() not in {name.lower() for name in ordered}:
+        return ordered
+    rest = [name for name in ordered if name.lower() != prefer.lower()]
+    return (next(name for name in ordered if name.lower() == prefer.lower()), *rest)
+
+
 #: Optimisers tried when lifelines' own stops without converging, in order.
 #:
 #: SLSQP is lifelines' choice and is the fastest here when it works. It solves a quadratic
@@ -327,6 +344,7 @@ def fit_interval_censoring_in_blocks(
     show_progress: bool = False,
     polish: bool = True,
     workers: int = 1,
+    prefer: str | None = None,
 ) -> BlockFit:
     """``fitter.fit_interval_censoring``, reading the rows a block at a time.
 
@@ -439,7 +457,7 @@ def fit_interval_censoring_in_blocks(
     )
     if solution is None:
         attempts: list[OptimizeResult] = []
-        for method in (fitter._scipy_fit_method, *_FALLBACK_METHODS):
+        for method in _methods(fitter._scipy_fit_method, prefer):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 results = minimize(
