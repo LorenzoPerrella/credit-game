@@ -389,13 +389,15 @@ def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
         method = str(kwargs.get("method"))
         calls.append(method)
         if method.lower() == "slsqp":
-            # Not merely `success=False`: since the polish decides, a method is only out of the
-            # running when its point is one no likelihood can take -- which is exactly what
-            # SLSQP's failures looked like on the production table.
+            # Inside the likelihood but nowhere near the optimum, so the polish cannot finish
+            # from it and the next method is tried. A point *outside* the likelihood is a
+            # different matter and stops the chain -- that is a fact about the surface, not the
+            # method, and the test below covers it.
             failed = real(*args, **{**kwargs, "options": {"maxiter": 1}})
             failed.success = False
             failed.message = "Rank-deficient equality constraint subproblem HFTI"
-            failed.fun = -1.0
+            failed.x = np.asarray(failed.x, dtype=float) + 40.0
+            failed.fun = 1.0
             return failed
         return real(*args, **kwargs)
 
@@ -584,3 +586,48 @@ def test_the_region_that_is_not_a_likelihood_is_a_wall() -> None:
         value, gradient = answer
         assert value == float("inf")
         np.testing.assert_array_equal(gradient, np.zeros_like(x))
+
+
+def test_a_point_outside_the_likelihood_stops_the_chain(
+    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ending outside the likelihood is a statement about the **surface**: the optimiser found
+    nothing better than the wall, so the specification has the spurious minimum lifelines'
+    unclipped truncation term creates -- and every other method finds it too, measured six times
+    out of six on the prepayment model, warm and cold, with both bounds in place.
+
+    Trying the rest costs hours and tells us what we already know, so the engine stops and lets
+    the caller decide. Step 8 keeps the covariate: rule 11 of docs/rules.md.
+    """
+    from lifelines import exceptions
+    from scipy import optimize
+
+    from creditsurv.models import blocks
+
+    calls: list[str] = []
+    real = optimize.minimize
+
+    def leaves_the_likelihood(*args: object, **kwargs: object) -> object:
+        calls.append(str(kwargs.get("method")))
+        results = real(*args, **{**kwargs, "options": {"maxiter": 1}})
+        results.success = False
+        results.fun = float("inf")
+        results.message = "the wall"
+        return results
+
+    monkeypatch.setattr(blocks, "minimize", leaves_the_likelihood)
+
+    with pytest.raises(exceptions.ConvergenceError, match="unbounded below"):
+        fit_interval_censoring_in_blocks(
+            FITTERS["weibull"](),
+            model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+            formula=FORMULA,
+            lower_bound_col=LOWER_BOUND,
+            upper_bound_col=UPPER_BOUND,
+            event_col=EXACT_OBSERVATION,
+            entry_col=AGE_START,
+            weights_col="loan_months",
+            polish=True,
+        )
+
+    assert calls == ["SLSQP"], "no other method was tried"

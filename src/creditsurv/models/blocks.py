@@ -552,8 +552,21 @@ def fit_interval_censoring_in_blocks(
             # point whose next evaluation read -8.97e+69. What settles it is the distance to
             # the optimum, which only the polish measures.
             if not _possible(float(results.fun)):
-                log.warning("%s left the likelihood (%s); trying the next", method, results.message)
-                continue
+                # **A statement about the surface, not about the method.** Ending outside the
+                # likelihood means the optimiser found nothing better than the wall: the
+                # specification has the spurious minimum lifelines' unclipped truncation term
+                # creates, and every other method finds it too -- measured six times out of six
+                # on the prepayment model, warm and cold, with both bounds in place. Trying the
+                # rest costs hours and tells us what we already know, so this stops here and the
+                # caller decides (step 8 keeps the covariate: rule 11 of docs/rules.md).
+                message = (
+                    f"{method} ended outside the likelihood ({results.message}) after "
+                    f"{objective.evaluations} evaluations of {scan.rows:,} rows. The objective "
+                    "is unbounded below on this specification -- lifelines clips the interval "
+                    "probability and adds the truncation term unclipped -- so no optimiser can "
+                    "maximise it and another method would find the same region."
+                )
+                raise exceptions.ConvergenceError(message)
             try:
                 _check_interior(results.x, limits)
                 solution = _from_optimiser(objective, results, polish=polish)
