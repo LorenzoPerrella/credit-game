@@ -1213,14 +1213,24 @@ class _Objective:
         elapsed = time.perf_counter() - self._started
         refused = _outside_the_domain(value, x, self.floor)
         if refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS:
-            # A refused point is always logged, whatever the interval: it is the surface
-            # falling away, and reading a run without seeing that happen is misleading.
+            # A refused point is always logged, whatever the interval: it is the surface falling
+            # away, and reading a run without seeing that happen is misleading. The two reasons
+            # are named apart, because they say different things -- a negative value is
+            # lifelines' clipped likelihood breaking, and a value under the floor is a nested
+            # model claiming to beat its parent.
             self._reported = elapsed
+            why = ""
+            if refused is not None:
+                why = (
+                    " (refused: below the parent's optimum, reported as infinite)"
+                    if _possible(value)
+                    else " (refused: not a likelihood, reported as infinite)"
+                )
             log.info(
                 "evaluation %d: objective %.12f%s at %.0fs",
                 self.evaluations,
                 value,
-                " (refused: not a likelihood, reported as infinite)" if refused else "",
+                why,
                 elapsed,
             )
         return refused or (value, gradient)
