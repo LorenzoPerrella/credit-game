@@ -631,3 +631,28 @@ def test_a_point_outside_the_likelihood_stops_the_chain(
         )
 
     assert calls == ["SLSQP"], "no other method was tried"
+
+
+def test_a_floor_makes_the_unbounded_region_unreachable_while_the_fit_runs() -> None:
+    """For a nested model there is a floor the objective cannot go below: its parameters are the
+    parent's with a coefficient held at zero, so every point of the child is a point of the
+    parent, and the parent's maximum bounds all of them.
+
+    Handing that bound to the objective is the difference between a fit that converges and one
+    that runs for three hours and is thrown away -- the prepayment model's step 8 had reached
+    0.0122 against a parent's optimum of 0.0179, which is impossible, and was still going.
+    """
+    from creditsurv.models.blocks import _outside_the_domain
+
+    x = np.array([0.5, -1.0])
+
+    # With no floor, anything non-negative is allowed through.
+    assert _outside_the_domain(0.0122, x) is None
+    # With the parent's optimum as the floor, the impossible value is a wall.
+    refused = _outside_the_domain(0.0122, x, 0.0179)
+    assert refused is not None and refused[0] == float("inf")
+    np.testing.assert_array_equal(refused[1], np.zeros_like(x))
+    # At or above the floor it passes, and a negative value is still refused either way.
+    assert _outside_the_domain(0.0179, x, 0.0179) is None
+    assert _outside_the_domain(0.02, x, 0.0179) is None
+    assert _outside_the_domain(-1e-9, x, None) is not None

@@ -944,3 +944,24 @@ def test_a_nested_model_that_fits_better_than_its_parent_is_refused() -> None:
 
     with pytest.raises(exceptions.ConvergenceError, match="cannot fit better"):
         _check_nested(child, fitted(-500.0), parent=parent, parent_fit=fitted(-900.0))
+
+
+def test_the_floor_handed_to_a_nested_fit_is_its_parents_optimum() -> None:
+    """A mean, so the parent's total log-likelihood is divided by the exposure it was measured
+    over, with one unit of log-likelihood allowed back for the arithmetic.
+    """
+    from creditsurv.models.procedure import _NESTED_TOLERANCE, _floor
+
+    parent = Specification(continuous=("credit_score", "ltv_change"))
+    child = Specification(continuous=("credit_score",))
+    fitted = cast(
+        "FitResult",
+        SimpleNamespace(log_likelihood=-37_800.0, blocks=SimpleNamespace(loan_months=2_000_000.0)),
+    )
+
+    floor = _floor(child, parent, fitted)
+
+    assert floor == pytest.approx((37_800.0 - _NESTED_TOLERANCE) / 2_000_000.0)
+    assert _floor(child, None, fitted) is None, "nothing to bound against"
+    assert _floor(parent, child, fitted) is None, "the parent is not nested in the child"
+    assert _floor(child, parent, cast("FitResult", SimpleNamespace(blocks=None))) is None

@@ -240,7 +240,9 @@ class Fits:
 
         log.info("fitting: %s on the %s", spec.formula, sample)
         started = time.perf_counter()
-        result = self._estimate(spec, where=where, parity=parity, start=start)
+        result = self._estimate(
+            spec, where=where, parity=parity, start=start, floor=_floor(spec, parent, start)
+        )
         _check_nested(spec, result, parent=parent, parent_fit=start)
         minutes = (time.perf_counter() - started) / 60
         save_fit(result, fingerprint, {**described, "minutes": minutes})
@@ -257,6 +259,7 @@ class Fits:
         where: np.ndarray | None,
         parity: int | None,
         start: FitResult | None,
+        floor: float | None = None,
     ) -> FitResult:
         """One fit, from the rows in hand or from the cell file.
 
@@ -268,12 +271,12 @@ class Fits:
         lifelines would have started and pay for it, not to give up on the model.
         """
         try:
-            return self._once(spec, where=where, parity=parity, start=start)
+            return self._once(spec, where=where, parity=parity, start=start, floor=floor)
         except exceptions.ConvergenceError:
             if start is None:
                 raise
             log.warning("warm start did not converge; refitting cold: %s", spec.formula)
-            return self._once(spec, where=where, parity=parity, start=None)
+            return self._once(spec, where=where, parity=parity, start=None, floor=floor)
 
     def _once(
         self,
@@ -282,6 +285,7 @@ class Fits:
         where: np.ndarray | None,
         parity: int | None,
         start: FitResult | None,
+        floor: float | None = None,
     ) -> FitResult:
         """One attempt, from the rows in hand or from the cell file."""
         initial_point = None if start is None else start.fitter.params_
@@ -313,10 +317,34 @@ class Fits:
             initial_point=initial_point,
             workers=self.workers,
             prefer=self.preferred,
+            floor=floor,
         )
         if fitted.blocks is not None and fitted.blocks.method not in {"newton", "warm"}:
             self.preferred = fitted.blocks.method
         return fitted
+
+
+def _floor(
+    spec: Specification, parent: Specification | None, parent_fit: FitResult | None
+) -> float | None:
+    """The objective's floor for a nested model: the parent's own optimum.
+
+    The child's parameters are the parent's with a coefficient held at zero, so every point of
+    the child is a point of the parent and the parent's maximum bounds all of them. Handing that
+    bound to the objective makes lifelines' unbounded region **unreachable while the fit runs**,
+    which is the difference between converging and running for three hours to be thrown away.
+
+    The objective is a mean, so the total log-likelihood is divided by the exposure, and a unit of
+    log-likelihood is allowed back for the last digits of a sum over 72 million terms.
+    """
+    if parent is None or parent_fit is None or parent_fit.blocks is None:
+        return None
+    if not set(spec.covariates) <= set(parent.covariates):
+        return None
+    weight = parent_fit.blocks.loan_months
+    if weight <= 0:
+        return None
+    return float(-(parent_fit.log_likelihood + _NESTED_TOLERANCE) / weight)
 
 
 def _check_nested(

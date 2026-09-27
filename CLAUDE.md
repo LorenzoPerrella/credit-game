@@ -136,12 +136,14 @@ log scale**, a shape of 0.05 to 20, where **125 converged fits on this book** pu
 1.07 and 1.62. Neither bound can bind here, and a fit that ends on one is refused as not
 identified rather than published.
 
-**A nested model cannot fit better than its parent, and that is the cheapest guard there is.**
+**A nested model cannot fit better than its parent, and that bound belongs inside the fit.**
 Dropping a covariate cannot raise the maximised log-likelihood -- the parent could have set that
-coefficient to zero -- so a backward-elimination fit that reports an improvement has not found a
-maximum. It has found the region where lifelines' clipped likelihood is unbounded below. The
-prepayment model's step 8 spent **two hours and forty minutes** reaching one such point, with a
-log-likelihood of -3.06e+06 against its parent's, and the comparison that refuses it is free.
+coefficient to zero, so every point of the child is a point of the parent. A backward-elimination
+fit reporting an improvement has therefore not found a maximum but the region where lifelines'
+clipped likelihood is unbounded below. The parent's optimum is handed to the objective as a
+**floor**, which makes that region unreachable while the fit runs; refusing it afterwards is the
+belt, and the difference matters -- the prepayment model's step 8 spent two hours and forty
+minutes reaching 0.0122 against a parent's 0.0179 and was still going.
 
 **The polish's verdict is binding.** It measures the distance to the optimum and the engine
 promises under a thousandth of a standard error; a fit the polish could not move is refused, not

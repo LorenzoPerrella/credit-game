@@ -411,6 +411,7 @@ def fit_interval_censoring_in_blocks(
     polish: bool = True,
     workers: int = 1,
     prefer: str | None = None,
+    floor: float | None = None,
 ) -> BlockFit:
     """``fitter.fit_interval_censoring``, reading the rows a block at a time.
 
@@ -509,6 +510,7 @@ def fit_interval_censoring_in_blocks(
         unflatten,
         total_weight=total_weight,
         with_penalty=pool is None,
+        floor=floor,
     )
     objective: _Evaluator = local
     if pool is not None:
@@ -1097,6 +1099,7 @@ class _Pooled:
     ) -> None:
         self._local = local
         self._workers = workers
+        self.floor = local.floor
         self.total_weight = local.total_weight
         self.evaluations = 0
         penalizer = fitter.penalizer
@@ -1119,7 +1122,7 @@ class _Pooled:
             value += float(penalty_value)
             gradient = gradient + penalty_gradient
         self.evaluations += 1
-        return _outside_the_domain(value, x) or (value, gradient)
+        return _outside_the_domain(value, x, self.floor) or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
         remote = self._workers.hessian(x)
@@ -1160,7 +1163,9 @@ class _Objective:
         *,
         total_weight: float | None = None,
         with_penalty: bool = True,
+        floor: float | None = None,
     ) -> None:
+        self.floor = floor
         self._blocks = blocks
         self._columns = columns
         self._scale = scale
@@ -1206,7 +1211,7 @@ class _Objective:
 
         self.evaluations += 1
         elapsed = time.perf_counter() - self._started
-        refused = _outside_the_domain(value, x)
+        refused = _outside_the_domain(value, x, self.floor)
         if refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS:
             # A refused point is always logged, whatever the interval: it is the surface
             # falling away, and reading a run without seeing that happen is misleading.
@@ -1328,7 +1333,9 @@ def _polish(
     return x, value, curvature, steps, stopped, remaining
 
 
-def _outside_the_domain(value: float, x: np.ndarray) -> tuple[float, np.ndarray] | None:
+def _outside_the_domain(
+    value: float, x: np.ndarray, floor: float | None = None
+) -> tuple[float, np.ndarray] | None:
     """``(inf, 0)`` where the objective is not one a likelihood can take, else ``None``.
 
     The objective is a **mean negative log-likelihood** and cannot be negative. lifelines clips
@@ -1344,10 +1351,18 @@ def _outside_the_domain(value: float, x: np.ndarray) -> tuple[float, np.ndarray]
     Reported as infinite, it is a wall: every method backtracks from it, which is how a domain
     boundary is meant to be told to an optimiser.
 
+    ``floor`` is the value the objective cannot go below on this specification, and for a
+    **nested** model there is one: its parameters are the parent's with a coefficient held at
+    zero, so every point of the child is a point of the parent and the parent's maximum bounds
+    all of them. A child reporting better than that is reporting a wrong number, and the floor
+    makes the whole artefact unreachable *during* the fit rather than refusing it afterwards --
+    which is the difference between a fit that converges and one that runs for three hours and is
+    thrown away.
+
     The gradient is zero because there is nothing there to differentiate; the optimisers only
     use it to shorten a step they are already rejecting.
     """
-    if _possible(value):
+    if _possible(value) and (floor is None or value >= floor):
         return None
     return float("inf"), np.zeros_like(x)
 

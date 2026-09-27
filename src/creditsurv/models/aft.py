@@ -279,6 +279,7 @@ def fit_streamed(
     polish: bool = True,
     workers: int = 1,
     prefer: str | None = None,
+    floor: float | None = None,
 ) -> FitResult:
     """Fit the interval-censored likelihood from blocks, without an episode frame in memory.
 
@@ -311,6 +312,7 @@ def fit_streamed(
         polish=polish,
         workers=workers,
         prefer=prefer,
+        floor=floor,
     )
     return FitResult(
         fitter=fitter,
