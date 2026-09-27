@@ -82,6 +82,7 @@ nav:
       - Rules written first: rules.md
       - Variable selection: variable_selection.md
       - The selection record: reports/selection.md
+      - The selection record, log-logistic: reports/selection_loglogistic.md
       - Methodology report: reports/methodology.md
   - Model:
       - In short: model.md

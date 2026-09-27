@@ -65,7 +65,7 @@ from creditsurv.models.selection import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Collection, Mapping, Sequence
 
 log = logging.getLogger(__name__)
 
@@ -531,18 +531,42 @@ def run_selection(
     screening = pd.DataFrame(screened, columns=_SCREENING_COLUMNS)
 
     # 8. Backward elimination, one covariate a step.
+    #
+    # The candidate model is **fitted before it is adopted**, so a removal that leaves a model
+    # nobody can fit is a finding rather than the end of the run: rule 11 of `docs/rules.md`
+    # keeps the covariate, records why, and offers the next-worst instead. On the prepayment
+    # model that is not hypothetical -- removing `unemployment_change` from the thirteen macro
+    # survivors leaves a specification every optimiser walks away from.
     log.info("step 8: backward elimination")
     current = base
     for name, reference in kept:
         current = current.plus(name, reference=reference)
     previous = base_fit
     steps: list[dict[str, object]] = []
+    unfittable: set[str] = set()
     while True:
         result = fits.fit(current, start=previous)
-        worst = _worst(current, result, alone=alone, signs=signs)
+        worst = _worst(current, result, alone=alone, signs=signs, skip=unfittable)
         if worst is None:
             break
         name, reason, coefficient, p_value = worst
+        candidate = current.minus(name)
+        try:
+            fitted = fits.fit(candidate, start=result)
+        except exceptions.ConvergenceError as error:
+            log.warning("step 8: without %s the model cannot be fitted; keeping it", name)
+            unfittable.add(name)
+            steps.append(
+                {
+                    "step": len(steps) + 1,
+                    "removed": f"{name} (refused)",
+                    "coef": coefficient,
+                    "p": p_value,
+                    "reason": f"kept: without it the model cannot be fitted ({error!s:.90})",
+                    "remaining": len(current.covariates),
+                }
+            )
+            continue
         steps.append(
             {
                 "step": len(steps) + 1,
@@ -550,12 +574,11 @@ def run_selection(
                 "coef": coefficient,
                 "p": p_value,
                 "reason": reason,
-                "remaining": len(current.covariates) - 1,
+                "remaining": len(candidate.covariates),
             }
         )
         eliminated[name] = f"step 8: {reason}"
-        current = current.minus(name)
-        previous = result
+        current, previous = candidate, fitted
     elimination = pd.DataFrame(steps, columns=_ELIMINATION_COLUMNS)
 
     # 9. Stability, on two halves of the book.
@@ -752,6 +775,7 @@ def _worst(
     *,
     alone: Mapping[str, float] | None = None,
     signs: Mapping[str, int] = EXPECTED_SIGNS,
+    skip: Collection[str] = (),
 ) -> tuple[str, str, float, float] | None:
     """The covariate step 8 removes next, and why -- or ``None`` when every one stays.
 
@@ -773,12 +797,15 @@ def _worst(
 
     Categorical terms carry no expected sign, are not screened alone, and at this sample
     size have no p-value.
+
+    ``skip`` names covariates whose removal step 8 has tried and found to leave a model that
+    cannot be fitted. They stay in the model and are not offered again.
     """
     summary = _terms(result)
     backwards: list[tuple[float, str, float, float]] = []
     reversed_: list[tuple[float, str, float, float]] = []
     thin: list[tuple[float, str, float, float]] = []
-    for name in spec.continuous:
+    for name in (term for term in spec.continuous if term not in skip):
         coefficient = _number(summary, name, "coef")
         z = coefficient / _number(summary, name, "se(coef)")
         p_value = _number(summary, name, "p")

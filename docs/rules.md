@@ -215,6 +215,30 @@ it says where the defaults are, which is worth publishing -- and no model reads 
 behavioural model is a different model with a different purpose, and this repository does not
 hold one.
 
+## 11. A removal that leaves a model nobody can fit
+
+Added on 27 September 2026, after the prepayment selection failed seven times on the same
+removal and before the run that follows. Backward elimination removes the worst covariate by the
+rules of step 8; nothing said what to do when the model *after* the removal cannot be fitted.
+
+It happens, and for a reason worth stating. lifelines' interval-censored likelihood clips the
+survival difference at 1e-25 but adds the left-truncation term **unclipped**, so the conditional
+probability it computes can exceed one and the objective can fall below anything a likelihood can
+take. The trade-off needs no extreme parameter: on the prepayment model the truncation term has
+only to reach **0.0176 on the mean**, the same order as the hazard itself, to make a spurious
+minimum seventy times below the real one. Every optimiser found it, from every start, with the
+coefficients bounded and the shape bounded.
+
+So: **the candidate model is fitted before it is adopted.** If it cannot be fitted, the removal
+is refused, the covariate stays, the reason is recorded in the elimination table, and the
+next-worst covariate is offered instead. The run continues and the record says what happened.
+
+This is a rule about the *tool*, not about the model, and it is stated here because it changes
+what a published specification means: a covariate may be in the model because removing it left
+something unfittable rather than because it earned its place. Any such covariate is named in
+`selection_*.md`, and one that stays for this reason is a candidate for a family whose
+likelihood does not have the flaw.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.
@@ -225,3 +249,4 @@ hold one.
 - Putting the refinancing incentive, the origination spread and the fall in the market rate
   in one model.
 - Letting the payment state into any model of the remaining life.
+- Removing a covariate without fitting the model that remains.
