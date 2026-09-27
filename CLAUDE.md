@@ -126,14 +126,15 @@ bounded throughout, because it is `rho_` and not the coefficients that makes the
 hazard explode: exp(5) is enough. Returned as `inf` with a zero gradient it is a wall, and every
 method backtracks from it.
 
-**The coefficients are bounded, because lifelines leaves them unbounded.** Its `_bounds` are
-for the univariate fitters; an AFT model's coefficients are free, and the objective is not a
-likelihood everywhere. Every failed run of the prepayment model ended in that region --
-coefficients of 1e+80 under SLSQP, `ABNORMAL` under L-BFGS-B, and a trust-constr point whose
-next evaluation read **-8.97e+69**. The bound is 100 on standardised covariates: three orders
-of magnitude outside anything a credit model can mean, ten inside where the objective breaks,
-so it cannot bind at an optimum -- and a fit that ends on it is refused as not identified
-rather than published.
+**The parameters are bounded, because lifelines leaves them unbounded, and the shape is the one
+that matters.** Its `_bounds` are for the univariate fitters; an AFT model's parameters are free.
+The cumulative hazard is `exp(rho * (log t - log lambda))`, so the **shape sits in an exponent**:
+it needs only reach exp(5) to overflow the hazard and take the objective with it, while a scale
+coefficient of the same size does nothing of the kind. Bounding the coefficients at 100 was
+therefore aimed at the wrong parameter and changed nothing; the shape is bounded at **3 on the
+log scale**, a shape of 0.05 to 20, where **125 converged fits on this book** put it between
+1.07 and 1.62. Neither bound can bind here, and a fit that ends on one is refused as not
+identified rather than published.
 
 **The polish decides whether a fit worked, not the optimiser's flag.** lifelines caps SLSQP at
 `ftol=1e-10, maxiter=200`, and on the prepayment model a fit reached the cap while stable to

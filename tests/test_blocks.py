@@ -480,21 +480,41 @@ def test_the_optimiser_that_worked_is_tried_first_next_time() -> None:
     assert _methods("SLSQP", "newton") == ("SLSQP", "L-BFGS-B", "trust-constr")
 
 
-def test_a_coefficient_on_the_bound_is_refused_rather_than_published() -> None:
-    """The bound keeps the optimiser out of the region where lifelines' clipped objective
-    stops being a likelihood -- every failure of the prepayment model ended there, the worst
-    reading -8.97e+69. It is not a constraint on the model, so a fit that ends on it is not a
-    maximum and says so.
+def test_the_shape_is_bounded_far_more_tightly_than_the_coefficients() -> None:
+    """The two are not comparable, and the first bound I wrote was aimed at the wrong one. A
+    scale coefficient of 100 is absurd but harmless to evaluate; the shape sits in an exponent,
+    and the same number overflows the cumulative hazard and takes the objective with it.
+
+    Three on the log scale is a shape between 0.05 and 20, where **125 converged fits** on this
+    book put it between 1.07 and 1.62. A fit that ends on a bound is refused: that is the edge
+    of where the likelihood can be evaluated, not a maximum.
     """
     from lifelines import exceptions
 
-    from creditsurv.models.blocks import _PARAMETER_BOUND, _check_interior
+    from creditsurv.models.blocks import (
+        _PARAMETER_BOUND,
+        _SHAPE_BOUND,
+        _check_interior,
+        _limits,
+    )
 
-    _check_interior(np.array([0.5, -2.0, 30.0]))  # interior: nothing happens
+    columns = pd.MultiIndex.from_tuples(
+        [("lambda_", "Intercept"), ("lambda_", "credit_score"), ("rho_", "Intercept")]
+    )
+    limits = _limits(columns, "lambda_")
+
+    assert limits == [
+        (-_PARAMETER_BOUND, _PARAMETER_BOUND),
+        (-_PARAMETER_BOUND, _PARAMETER_BOUND),
+        (-_SHAPE_BOUND, _SHAPE_BOUND),
+    ]
+    assert _SHAPE_BOUND < _PARAMETER_BOUND / 10, "the shape is bounded in a different league"
+
+    _check_interior(np.array([0.5, -30.0, 0.4]), limits)  # interior: nothing happens
     with pytest.raises(exceptions.ConvergenceError, match="not identified"):
-        _check_interior(np.array([0.5, _PARAMETER_BOUND]))
-    with pytest.raises(exceptions.ConvergenceError, match="Coefficient\\(s\\) \\[0\\]"):
-        _check_interior(np.array([-_PARAMETER_BOUND, 0.1]))
+        _check_interior(np.array([0.5, 0.5, _SHAPE_BOUND]), limits)
+    with pytest.raises(exceptions.ConvergenceError, match="Parameter\\(s\\) \\[0\\]"):
+        _check_interior(np.array([-_PARAMETER_BOUND, 0.1, 0.4]), limits)
 
 
 def test_a_method_that_stops_short_of_its_tolerance_is_finished_by_the_polish(

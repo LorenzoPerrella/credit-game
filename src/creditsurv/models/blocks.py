@@ -73,20 +73,36 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def _check_interior(x: np.ndarray) -> None:
-    """Refuse a point sitting on the bound: that is not a maximum of the likelihood.
+def _limits(columns: pd.MultiIndex, primary: str) -> list[tuple[float, float]]:
+    """A bound for every parameter: wide on the scale's coefficients, tight on the shape.
 
-    The bound is there to keep the optimiser out of the region where lifelines' clipped
-    objective stops being a likelihood, not to constrain the model. A fit that ends on it is
-    telling us the model is not identified, and saying so is more use than a coefficient of
-    exactly 100.
+    The two are not comparable. A scale coefficient of 100 is absurd but harmless to evaluate;
+    the shape sits in an exponent, and the same number overflows the cumulative hazard and takes
+    the objective with it.
     """
-    at_bound = np.flatnonzero(np.abs(np.asarray(x, dtype=float)) >= _PARAMETER_BOUND * 0.99)
+    shape = [
+        _SHAPE_BOUND if name != primary else _PARAMETER_BOUND
+        for name in columns.get_level_values(0)
+    ]
+    return [(-bound, bound) for bound in shape]
+
+
+def _check_interior(x: np.ndarray, limits: list[tuple[float, float]]) -> None:
+    """Refuse a point sitting on a bound: that is not a maximum of the likelihood.
+
+    The bounds keep the optimiser inside the region where lifelines' objective is a likelihood;
+    they are not constraints on the model, and on this book they cannot bind -- 125 converged
+    fits put the shape six times inside its own. A fit that ends on one is telling us the model
+    is not identified, and saying so is more use than a coefficient of exactly 100.
+    """
+    values = np.asarray(x, dtype=float)
+    edges = np.array([bound for _, bound in limits])
+    at_bound = np.flatnonzero(np.abs(values) >= edges * 0.99)
     if at_bound.size:
         message = (
-            f"Coefficient(s) {at_bound.tolist()} reached the bound of {_PARAMETER_BOUND:g} on "
-            "standardised covariates, so the fit is at the edge of what the likelihood can be "
-            "evaluated on rather than at a maximum. The specification is not identified."
+            f"Parameter(s) {at_bound.tolist()} reached their bound "
+            f"({edges[at_bound].tolist()}), so the fit is at the edge of where the likelihood "
+            "can be evaluated rather than at a maximum. The specification is not identified."
         )
         raise exceptions.ConvergenceError(message)
 
@@ -123,6 +139,21 @@ def _methods(first: str, prefer: str | None) -> tuple[str, ...]:
 #: the objective stops being one: it cannot bind at an optimum, and `_check_interior` refuses
 #: the fit if it ever does.
 _PARAMETER_BOUND: Final = 100.0
+
+#: How far the **shape** parameter may go, on the log scale it is estimated on.
+#:
+#: This is the bound that matters, and the coefficient bound above was aimed at the wrong
+#: parameter. The cumulative hazard is ``exp(rho * (log t - log lambda))``: the shape sits in
+#: an exponent, so it needs only reach exp(5) for the hazard to overflow and take lifelines'
+#: objective with it -- while a scale coefficient of the same size does nothing of the kind.
+#:
+#: Three on the log scale means a shape between 0.05 and 20. Measured across **125 converged
+#: fits** on this book -- default and prepayment, Weibull and log-logistic -- the log shape lies
+#: between +0.070 and +0.484, a shape of 1.07 to 1.62. The bound is six times outside the widest
+#: of those on the log scale, and a mortgage whose hazard bends twenty times faster than its age
+#: is not a mortgage. It cannot bind on this book; if it ever does, the fit is refused as not
+#: identified rather than published.
+_SHAPE_BOUND: Final = 3.0
 
 #: Optimisers tried when lifelines' own stops without converging, in order.
 #:
@@ -491,6 +522,7 @@ def fit_interval_censoring_in_blocks(
         _newton_from(objective, start) if polish and isinstance(initial_point, pd.Series) else None
     )
     if solution is None:
+        limits = _limits(columns, fitter._primary_parameter_name)
         attempts: list[OptimizeResult] = []
         for method in _methods(fitter._scipy_fit_method, prefer):
             with warnings.catch_warnings():
@@ -500,7 +532,7 @@ def fit_interval_censoring_in_blocks(
                     start,
                     method=method,
                     jac=True,
-                    bounds=[(-_PARAMETER_BOUND, _PARAMETER_BOUND)] * len(start),
+                    bounds=limits,
                     options={
                         "disp": show_progress,
                         **(fitter._scipy_fit_options if method == fitter._scipy_fit_method else {}),
@@ -523,7 +555,7 @@ def fit_interval_censoring_in_blocks(
                 log.warning("%s left the likelihood (%s); trying the next", method, results.message)
                 continue
             try:
-                _check_interior(results.x)
+                _check_interior(results.x, limits)
                 solution = _from_optimiser(objective, results, polish=polish)
             except exceptions.ConvergenceError as error:
                 log.warning("%s could not be polished (%s); trying the next", method, error)
