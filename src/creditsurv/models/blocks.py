@@ -594,6 +594,12 @@ def fit_interval_censoring_in_blocks(
         method = "newton"
 
     x, value, curvature, steps, stopped, remaining = solution
+    if polish and remaining > POLISH_TOLERANCE_SE:
+        message = (
+            f"The fit ended {remaining:.3g} standard errors from the optimum, past the "
+            f"{POLISH_TOLERANCE_SE:g} this engine promises."
+        )
+        raise exceptions.ConvergenceError(message)
     if not _possible(value):
         message = (
             f"The fit ended at an objective of {value:.6g}, which no likelihood can take: the "
@@ -1378,7 +1384,20 @@ def _from_optimiser(
     log.info("hessian in %.0fs", time.perf_counter() - started)
     value, gradient = objective(x)
     if polish:
-        return _polish(objective, x, value, gradient, curvature)
+        solution = _polish(objective, x, value, gradient, curvature)
+        remaining = solution[5]
+        if remaining > POLISH_TOLERANCE_SE:
+            # **The polish decides, and this is the deciding.** Without it a fit that the polish
+            # could not move was accepted and cached: the prepayment model produced one sitting
+            # 6,850 standard errors from the optimum, at an objective seventy times below any
+            # real fit, and the log cheerfully said the polish had finished it.
+            message = (
+                f"The polish stopped {remaining:.3g} standard errors from the optimum, past the "
+                f"{POLISH_TOLERANCE_SE:g} this engine promises, after {solution[3]} step(s). "
+                "The point the optimiser reached is not a maximum of the likelihood."
+            )
+            raise exceptions.ConvergenceError(message)
+        return solution
     _, stopped = _newton_step(curvature, gradient, objective.total_weight)
     return x, value, curvature, 0, stopped, stopped
 

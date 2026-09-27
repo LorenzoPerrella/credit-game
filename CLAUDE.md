@@ -136,6 +136,18 @@ log scale**, a shape of 0.05 to 20, where **125 converged fits on this book** pu
 1.07 and 1.62. Neither bound can bind here, and a fit that ends on one is refused as not
 identified rather than published.
 
+**A nested model cannot fit better than its parent, and that is the cheapest guard there is.**
+Dropping a covariate cannot raise the maximised log-likelihood -- the parent could have set that
+coefficient to zero -- so a backward-elimination fit that reports an improvement has not found a
+maximum. It has found the region where lifelines' clipped likelihood is unbounded below. The
+prepayment model's step 8 spent **two hours and forty minutes** reaching one such point, with a
+log-likelihood of -3.06e+06 against its parent's, and the comparison that refuses it is free.
+
+**The polish's verdict is binding.** It measures the distance to the optimum and the engine
+promises under a thousandth of a standard error; a fit the polish could not move is refused, not
+published. Without that, one was **cached** at 6,850 standard errors out while the log said the
+polish had finished it.
+
 **The polish decides whether a fit worked, not the optimiser's flag.** lifelines caps SLSQP at
 `ftol=1e-10, maxiter=200`, and on the prepayment model a fit reached the cap while stable to
 **nine significant figures for twenty evaluations** -- at the answer, reported `success=False`.

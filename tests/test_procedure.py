@@ -912,3 +912,35 @@ def test_a_warm_start_that_will_not_converge_is_retried_cold(
 
     assert result.log_likelihood < 0, "the cold fit is a real fit"
     assert attempts == [False, True, False], "cold, then a warm start that failed, then cold"
+
+
+def test_a_nested_model_that_fits_better_than_its_parent_is_refused() -> None:
+    """Mathematics, not a threshold: dropping a covariate cannot raise the maximised
+    log-likelihood, because the parent could always have set that coefficient to zero.
+
+    A fit that reports an improvement has found the region where lifelines clips the interval
+    probability and adds the truncation term unclipped. The prepayment model's step 8 spent two
+    hours and forty minutes reaching one such "solution" -- a log-likelihood of -3.06e+06 against
+    its parent's -- and this comparison costs nothing.
+    """
+    from lifelines import exceptions
+
+    from creditsurv.models.procedure import _check_nested
+
+    parent = Specification(continuous=("credit_score", "ltv_change"))
+    child = Specification(continuous=("credit_score",))
+    unrelated = Specification(continuous=("debt_to_income",))
+
+    def fitted(value: float) -> FitResult:
+        return cast("FitResult", SimpleNamespace(log_likelihood=value))
+
+    # Worse, as a nested model must be: nothing happens.
+    _check_nested(child, fitted(-1_000.0), parent=parent, parent_fit=fitted(-900.0))
+    # Equal to within the arithmetic: also fine.
+    _check_nested(child, fitted(-900.5), parent=parent, parent_fit=fitted(-900.0))
+    # No parent to compare with, or not nested: nothing to say.
+    _check_nested(child, fitted(0.0), parent=None, parent_fit=fitted(-900.0))
+    _check_nested(unrelated, fitted(0.0), parent=parent, parent_fit=fitted(-900.0))
+
+    with pytest.raises(exceptions.ConvergenceError, match="cannot fit better"):
+        _check_nested(child, fitted(-500.0), parent=parent, parent_fit=fitted(-900.0))

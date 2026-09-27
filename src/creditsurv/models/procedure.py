@@ -218,6 +218,7 @@ class Fits:
         where: np.ndarray | None = None,
         parity: int | None = None,
         start: FitResult | None = None,
+        parent: Specification | None = None,
     ) -> FitResult:
         described = selection_description(
             identity=self.identity,
@@ -240,6 +241,7 @@ class Fits:
         log.info("fitting: %s on the %s", spec.formula, sample)
         started = time.perf_counter()
         result = self._estimate(spec, where=where, parity=parity, start=start)
+        _check_nested(spec, result, parent=parent, parent_fit=start)
         minutes = (time.perf_counter() - started) / 60
         save_fit(result, fingerprint, {**described, "minutes": minutes})
         evaluations = None if result.blocks is None else result.blocks.evaluations
@@ -315,6 +317,47 @@ class Fits:
         if fitted.blocks is not None and fitted.blocks.method not in {"newton", "warm"}:
             self.preferred = fitted.blocks.method
         return fitted
+
+
+def _check_nested(
+    spec: Specification,
+    result: FitResult,
+    *,
+    parent: Specification | None,
+    parent_fit: FitResult | None,
+) -> None:
+    """Refuse a nested model that fits *better* than the model it is nested in.
+
+    Mathematics, not a threshold: dropping a covariate cannot raise the maximised
+    log-likelihood, because the parent could always have set that coefficient to zero. A fit
+    that reports an improvement has not found a maximum -- it has found the region where
+    lifelines clips the interval probability and adds the truncation term unclipped, where the
+    objective is unbounded below.
+
+    This is the cheapest guard available and the one that should have been written first. The
+    prepayment model's step 8 spent **two hours and forty minutes** reaching a "solution" with a
+    log-likelihood of -3.06e+06 against its parent's, and a comparison that costs nothing would
+    have refused it in the first evaluation.
+    """
+    if parent is None or parent_fit is None:
+        return
+    if not set(spec.covariates) <= set(parent.covariates):
+        return
+    if result.log_likelihood <= parent_fit.log_likelihood + _NESTED_TOLERANCE:
+        return
+    message = (
+        f"The nested model reports a log-likelihood of {result.log_likelihood:,.3f} against its "
+        f"parent's {parent_fit.log_likelihood:,.3f}. Dropping a covariate cannot fit better, so "
+        "this is not a maximum: it is the region where lifelines' clipped likelihood is "
+        "unbounded below."
+    )
+    raise exceptions.ConvergenceError(message)
+
+
+#: How much better a nested model may look before it is refused, in log-likelihood units. Not a
+#: tolerance on the statistics but on the arithmetic: two fits of the same rows differ in the last
+#: digits of a sum over 72 million terms.
+_NESTED_TOLERANCE: Final = 1.0
 
 
 def selection_description(
@@ -552,7 +595,7 @@ def run_selection(
         name, reason, coefficient, p_value = worst
         candidate = current.minus(name)
         try:
-            fitted = fits.fit(candidate, start=result)
+            fitted = fits.fit(candidate, start=result, parent=current)
         except exceptions.ConvergenceError as error:
             log.warning("step 8: without %s the model cannot be fitted; keeping it", name)
             unfittable.add(name)
