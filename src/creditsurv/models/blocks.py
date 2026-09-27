@@ -1155,10 +1155,19 @@ class _Objective:
 
         self.evaluations += 1
         elapsed = time.perf_counter() - self._started
-        if elapsed - self._reported >= _PROGRESS_SECONDS:
+        refused = _outside_the_domain(value, x)
+        if refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS:
+            # A refused point is always logged, whatever the interval: it is the surface
+            # falling away, and reading a run without seeing that happen is misleading.
             self._reported = elapsed
-            log.info("evaluation %d: objective %.12f at %.0fs", self.evaluations, value, elapsed)
-        return _outside_the_domain(value, x) or (value, gradient)
+            log.info(
+                "evaluation %d: objective %.12f%s at %.0fs",
+                self.evaluations,
+                value,
+                " (refused: not a likelihood, reported as infinite)" if refused else "",
+                elapsed,
+            )
+        return refused or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
         total = np.zeros((len(x), len(x)))
