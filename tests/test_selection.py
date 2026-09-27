@@ -615,3 +615,44 @@ def test_the_family_report_says_which_clause_of_the_rule_decided(tmp_path: Path)
     assert "0.1 percentage points" in body
     # Each family's own selection, so a reader can see the two are not one specification.
     assert "credit_score + ltv_change" in body
+
+
+def test_the_prior_a_sign_is_read_against_is_the_cause_s_own() -> None:
+    """There is more than one map, and reading the wrong one is not a small mistake: under rule
+    2 a family whose selected model turns a declared sign is excluded whatever its fit.
+
+    On the prepayment model, the default model's priors named three covariates as backwards when
+    one was -- a credit score that lengthens survival *shortens* the time to repayment.
+    """
+    from types import SimpleNamespace
+    from typing import cast
+
+    from creditsurv.models.aft import FitResult
+    from creditsurv.models.selection import (
+        EXPECTED_SIGNS,
+        PREPAYMENT_SIGNS,
+        signs_against_prior,
+    )
+
+    summary = pd.DataFrame(
+        {"coef": [-0.0013, -0.0552, -0.2417]},
+        index=["credit_score", "unemployment_change", "mortgage_rate_decline"],
+    )
+    fitted = cast(
+        "FitResult",
+        SimpleNamespace(
+            fitter=SimpleNamespace(
+                summary=pd.concat({"lambda_": summary}), _primary_parameter_name="lambda_"
+            )
+        ),
+    )
+
+    # By the default model's priors the score is backwards -- it expects a higher score to
+    # lengthen survival -- and unemployment agrees with them, which is the wrong question to be
+    # asking of a model of repayment.
+    assert signs_against_prior(fitted, EXPECTED_SIGNS) == ["credit_score"]
+    # By rule 6's, the score is right and unemployment is the one that is backwards: a weaker
+    # labour market should lengthen the time to repayment, and here it shortens it.
+    assert signs_against_prior(fitted, PREPAYMENT_SIGNS) == ["unemployment_change"]
+    # No map given is the default model's, as every caller before this expected.
+    assert signs_against_prior(fitted) == signs_against_prior(fitted, EXPECTED_SIGNS)

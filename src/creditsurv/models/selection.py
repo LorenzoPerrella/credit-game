@@ -180,18 +180,27 @@ def distribution_comparison(
     return table
 
 
-def signs_against_prior(result: FitResult) -> list[str]:
+def signs_against_prior(result: FitResult, signs: Mapping[str, int] | None = None) -> list[str]:
     """The covariates whose coefficient points against its declared expected sign.
 
     Read on the scale parameter, where every AFT family in the comparison puts its
-    covariates and where a positive coefficient lengthens survival. Only the signs declared
-    in ``EXPECTED_SIGNS`` count; a covariate without one cannot be against it.
+    covariates and where a positive coefficient lengthens survival. Only declared signs count;
+    a covariate without one cannot be against it.
+
+    ``signs`` is the map to read, because **there is more than one**: a prepayment model has its
+    own priors -- rule 6 of `docs/rules.md` -- and a credit score that lengthens survival
+    shortens the time to repayment. Reading the default model's map on a prepayment fit named
+    three covariates as backwards when one was, which is the sort of mistake that would have
+    excluded a family under rule 2 for the wrong reason.
     """
+    # Resolved here rather than as a default, because EXPECTED_SIGNS is declared further down
+    # this module with the reasoning that justifies each sign beside it.
+    declared = EXPECTED_SIGNS if signs is None else signs
     summary = result.fitter.summary.loc[result.fitter._primary_parameter_name]
     return [
         str(name)
         for name, coefficient in summary["coef"].items()
-        if EXPECTED_SIGNS.get(str(name), 0) * float(coefficient) < 0
+        if declared.get(str(name), 0) * float(coefficient) < 0
     ]
 
 

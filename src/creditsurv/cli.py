@@ -835,7 +835,7 @@ def family(
         incidence_gap,
     )
     from creditsurv.models.procedure import selected_fit
-    from creditsurv.models.selection import signs_against_prior
+    from creditsurv.models.selection import PREPAYMENT_SIGNS, signs_against_prior
     from creditsurv.reporting import family as family_report
     from creditsurv.reporting.selection import record_name
 
@@ -908,6 +908,22 @@ def family(
         )
         raise typer.BadParameter(message)
     prepaid = hazards(prepayment, PREPAYMENT_CAUSE)
+    prepayment_fit = selected_fit(
+        identity=identity,
+        as_of=as_of,
+        moratorium=moratorium,
+        formula=str(prepayment["formula"]),
+        distribution=str(prepayment["distribution"]),
+        cause=PREPAYMENT_CAUSE,
+    )
+    if prepayment_fit is not None:
+        backwards = signs_against_prior(prepayment_fit, PREPAYMENT_SIGNS)
+        if backwards:
+            typer.echo(
+                f"  the prepayment model turns {', '.join(backwards)} against rule 6's prior; "
+                "rule 11 names the covariates it kept because their removal left an unfittable "
+                "model, and the report says so."
+            )
 
     gaps: dict[str, pd.DataFrame] = {}
     signs: dict[str, list[str]] = {}
@@ -930,6 +946,9 @@ def family(
             distribution=distribution,
         )
         assert fitted is not None
+        # The default model's priors, which are not the prepayment model's: rule 6 declares its
+        # own, and reading the wrong map would exclude a family under rule 2 for a sign nobody
+        # ever expected of it.
         signs[distribution] = signs_against_prior(fitted)
 
     if not gaps:
