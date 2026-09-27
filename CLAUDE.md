@@ -116,6 +116,16 @@ errors out to 4e-6: **30 minutes against 76**. On three million rows the same st
 evaluations and 7 Hessians where SLSQP needed 91 evaluations, and ended 3e-5 standard errors
 from the cold optimum.
 
+**The region that is not a likelihood is reported as infinite, not at face value.** The
+objective is a mean *negative* log-likelihood and cannot be negative; beyond a ridge lifelines'
+surface falls away into a region that is not a likelihood at all, because the interval
+probability is clipped and the left-truncation term is not. At face value that region is the
+most attractive place on the surface, and on the prepayment model **six attempts in a row**
+ended there -- warm and cold, SLSQP, L-BFGS-B and trust-constr alike, with the coefficients
+bounded throughout, because it is `rho_` and not the coefficients that makes the cumulative
+hazard explode: exp(5) is enough. Returned as `inf` with a zero gradient it is a wall, and every
+method backtracks from it.
+
 **The coefficients are bounded, because lifelines leaves them unbounded.** Its `_bounds` are
 for the univariate fitters; an AFT model's coefficients are free, and the objective is not a
 likelihood everywhere. Every failed run of the prepayment model ended in that region --

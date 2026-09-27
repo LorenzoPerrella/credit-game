@@ -540,3 +540,27 @@ def test_a_method_that_stops_short_of_its_tolerance_is_finished_by_the_polish(
     assert calls == ["SLSQP"], "no other method was needed"
     assert record.method == "slsqp"
     assert record.residual_error_se < 1e-3
+
+
+def test_the_region_that_is_not_a_likelihood_is_a_wall() -> None:
+    """The objective is a mean negative log-likelihood and cannot be negative. lifelines clips
+    the interval probability but adds the truncation term unclipped, so beyond a ridge the
+    surface falls away -- the worst point seen on the production table read -8.97e+69.
+
+    Reported at face value that region is the most attractive place on the surface, and on the
+    prepayment model **six attempts in a row** ended there: warm and cold, SLSQP, L-BFGS-B and
+    trust-constr alike, with the coefficients bounded at 100 throughout. Reported as infinite
+    it is a wall, which is how a domain boundary is told to an optimiser.
+    """
+    from creditsurv.models.blocks import _outside_the_domain
+
+    x = np.array([1.0, -2.0, 0.5])
+
+    assert _outside_the_domain(0.0176, x) is None, "a possible value is left alone"
+    assert _outside_the_domain(0.0, x) is None, "zero is possible, if unlikely"
+    for impossible in (-1e-9, -8.97e69, float("-inf"), float("nan"), float("inf")):
+        answer = _outside_the_domain(impossible, x)
+        assert answer is not None
+        value, gradient = answer
+        assert value == float("inf")
+        np.testing.assert_array_equal(gradient, np.zeros_like(x))

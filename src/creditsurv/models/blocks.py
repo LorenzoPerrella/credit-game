@@ -1068,7 +1068,7 @@ class _Pooled:
             value += float(penalty_value)
             gradient = gradient + penalty_gradient
         self.evaluations += 1
-        return value, gradient
+        return _outside_the_domain(value, x) or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
         remote = self._workers.hessian(x)
@@ -1158,7 +1158,7 @@ class _Objective:
         if elapsed - self._reported >= _PROGRESS_SECONDS:
             self._reported = elapsed
             log.info("evaluation %d: objective %.12f at %.0fs", self.evaluations, value, elapsed)
-        return value, gradient
+        return _outside_the_domain(value, x) or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
         total = np.zeros((len(x), len(x)))
@@ -1266,6 +1266,30 @@ def _polish(
     if remaining > POLISH_TOLERANCE_SE:
         log.warning("polish stopped after %d steps, %.3g standard errors out", steps, remaining)
     return x, value, curvature, steps, stopped, remaining
+
+
+def _outside_the_domain(value: float, x: np.ndarray) -> tuple[float, np.ndarray] | None:
+    """``(inf, 0)`` where the objective is not one a likelihood can take, else ``None``.
+
+    The objective is a **mean negative log-likelihood** and cannot be negative. lifelines clips
+    the interval probability at 1e-25 but adds the left-truncation term unclipped, so beyond a
+    ridge the surface falls away into a region that is not a likelihood at all -- the worst
+    point seen here read -8.97e+69, and `rho_` needs only reach exp(5) for the cumulative hazard
+    to get there.
+
+    Reported at face value, that region is the most attractive place on the surface and every
+    optimiser walks into it: on the prepayment model, **six attempts in a row** -- warm and
+    cold, SLSQP, L-BFGS-B and trust-constr alike -- ended there, and bounding the coefficients
+    at 100 did not help, because it is the *shape* parameter that makes the hazard explode.
+    Reported as infinite, it is a wall: every method backtracks from it, which is how a domain
+    boundary is meant to be told to an optimiser.
+
+    The gradient is zero because there is nothing there to differentiate; the optimisers only
+    use it to shorten a step they are already rejecting.
+    """
+    if _possible(value):
+        return None
+    return float("inf"), np.zeros_like(x)
 
 
 def _possible(value: float) -> bool:
