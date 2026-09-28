@@ -727,3 +727,40 @@ def test_an_optimiser_pinned_against_the_floor_is_given_up_on() -> None:
         _check_pinned(_PINNED_REFUSALS, 0.07)
     with pytest.raises(exceptions.ConvergenceError, match="outside the likelihood"):
         _check_pinned(_PINNED_REFUSALS, None)
+
+
+def test_a_polish_closing_too_slowly_to_finish_is_given_up() -> None:
+    """The prepayment model's first backward-elimination candidate closed by a constant 0.925 a
+    step with the damping stuck at 1e+02, which needs 177 steps to reach a thousandth of a
+    standard error against a cap of 40. Its refusals were real -- every step long enough to
+    make progress landed below the parent's optimum -- but they came one to a step, each
+    followed by an accepted one, so `_PINNED_REFUSALS` counted no streak and stayed silent.
+
+    The trajectory below is that run's, step by step. The guard has to sit out the wild early
+    phase, where a step can land further out than the one before, and fire in the geometric
+    tail: it counts four slow steps by step 10 and stops the polish on the eleventh, where the
+    cap would have taken three more hours to reach the same verdict.
+    """
+    from itertools import pairwise
+
+    from creditsurv.models.blocks import _POLISH_STEPS, _STALL_STEPS, _required_ratio, _too_slow
+
+    observed = [144.0, 40.7, 81.8, 7.56e3, 3.45e3, 1.37e3, 1.24e3, 1.13e3, 1.05e3, 975.0]
+    streaks, stalled = [], 0
+    for step, (previous, remaining) in enumerate(pairwise(observed), 2):
+        stalled = stalled + 1 if _too_slow(remaining, previous, step) else 0
+        streaks.append(stalled)
+
+    # Steps 3 and 4 overshoot and are forgiven; 5 and 6 halve and reset the count; 7 to 10 are
+    # the tail, and a fifth of them would stop the polish.
+    assert streaks == [0, 1, 2, 0, 0, 1, 2, 3, 4]
+    assert max(streaks) < _STALL_STEPS
+
+    # 975 standard errors out with 30 of the 40 steps left has to close by 0.631 a step.
+    assert _required_ratio(975.0, 10) == pytest.approx(0.631, abs=5e-4)
+    assert _too_slow(975.0, 1050.0, 10)
+    assert not _too_slow(3.45e3, 7.56e3, 5)
+
+    # At the tolerance there is nothing left to close, and past the cap no budget to close in.
+    assert not _too_slow(POLISH_TOLERANCE_SE, 1.0, 2)
+    assert _required_ratio(975.0, _POLISH_STEPS) == 0.0

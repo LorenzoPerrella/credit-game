@@ -1306,6 +1306,29 @@ _POLISH_STEPS: Final = 40
 _DAMPING_FLOOR: Final = 1e-6
 _DAMPING_CEILING: Final = 1e12
 
+#: Steps closing too slowly to reach the tolerance, after which the polish is given up.
+#:
+#: A damping that cannot come down turns Newton into a short gradient step, and the distance to
+#: the optimum then falls by a **constant factor** a step instead of squaring. On the prepayment
+#: model's first backward-elimination candidate it settled at 0.925 with the damping stuck at
+#: 1e+02 -- 1.24e3 standard errors out, then 1.13e3, 1.05e3, 975 -- which needs **177 steps** to
+#: reach 1e-3 against a cap of 40. The cap does end it, three hours later, with the same verdict
+#: the fourth step already implied.
+#:
+#: The floor cannot come down there because the maximum of the likelihood as lifelines computes
+#: it lies below the parent's, in the region it cannot compute: every step long enough to make
+#: progress lands under the floor and is refused, and the damping rises to meet it. So the
+#: refusals are real, but they are **interleaved with accepted points**, one of each a step,
+#: which resets `_PINNED_REFUSALS` and leaves it silent. This is the same conclusion reached by
+#: the other road, and it needs its own guard.
+#:
+#: It shortens a phase; it does not decide a fit. A warm start the Newton steps cannot finish
+#: falls back on SLSQP from the same point, as it always has, and what happens to the fit is
+#: settled there -- by `_check_pinned`, by the polish's verdict, or by converging after all.
+#: Five is what it costs to sit out the wild early steps: on that run the count reached two by
+#: step 4 and reset at step 5, where two halvings in a row were real progress.
+_STALL_STEPS: Final = 5
+
 
 def _newton_step(
     curvature: np.ndarray, gradient: np.ndarray, total_weight: float
@@ -1357,6 +1380,7 @@ def _polish(
     """
     _, stopped = _newton_step(curvature, gradient, objective.total_weight)
     remaining, steps, damping = stopped, 0, 0.0
+    stalled = 0
     slack = 4 * np.finfo(float).eps
     while remaining > POLISH_TOLERANCE_SE and steps < _POLISH_STEPS:
         diagonal = np.diag(curvature)
@@ -1377,7 +1401,10 @@ def _polish(
                 return x, value, curvature, steps, stopped, remaining
         x, value, gradient = candidate, candidate_value, candidate_gradient
         curvature = _symmetric(objective.hessian(x))
-        _, remaining = _newton_step(curvature, gradient, objective.total_weight)
+        previous, (_, remaining) = (
+            remaining,
+            _newton_step(curvature, gradient, objective.total_weight),
+        )
         steps += 1
         log.info(
             "Newton step %d, damping %.0e: %.3g standard errors from the optimum",
@@ -1385,10 +1412,44 @@ def _polish(
             damping,
             remaining,
         )
+        stalled = stalled + 1 if _too_slow(remaining, previous, steps) else 0
+        if stalled >= _STALL_STEPS:
+            log.warning(
+                "the polish has closed by %.3g a step for %d steps and needs %.3g to finish "
+                "in the %d it has left; it is %.3g standard errors out and stopped",
+                remaining / previous,
+                stalled,
+                _required_ratio(remaining, steps),
+                _POLISH_STEPS - steps,
+                remaining,
+            )
+            return x, value, curvature, steps, stopped, remaining
         damping = damping / 10.0 if damping >= 10.0 * _DAMPING_FLOOR else 0.0
     if remaining > POLISH_TOLERANCE_SE:
         log.warning("polish stopped after %d steps, %.3g standard errors out", steps, remaining)
     return x, value, curvature, steps, stopped, remaining
+
+
+def _required_ratio(remaining: float, steps: int) -> float:
+    """The factor a step must close by to finish inside the steps the polish has left."""
+    budget = _POLISH_STEPS - steps
+    if budget <= 0:
+        return 0.0
+    return float((POLISH_TOLERANCE_SE / remaining) ** (1.0 / budget))
+
+
+def _too_slow(remaining: float, previous: float, steps: int) -> bool:
+    """Whether this step closed by less than finishing inside the remaining budget asks.
+
+    Compared against the budget rather than a fixed factor, because the two are the same
+    question: a polish 975 standard errors out with 30 steps left has to close by 0.631 a step,
+    and one 1.37e3 out with 34 left by 0.660. Closing by 0.925 fails both, and by the same
+    margin it will fail every step after -- which is what makes the projection worth acting on
+    rather than waiting for the cap.
+    """
+    if previous <= 0.0 or remaining <= POLISH_TOLERANCE_SE:
+        return False
+    return remaining / previous > _required_ratio(remaining, steps)
 
 
 def _outside_the_domain(

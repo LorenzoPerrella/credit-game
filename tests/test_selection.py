@@ -627,7 +627,6 @@ def test_the_prior_a_sign_is_read_against_is_the_cause_s_own() -> None:
     from types import SimpleNamespace
     from typing import cast
 
-    from creditsurv.models.aft import FitResult
     from creditsurv.models.selection import (
         EXPECTED_SIGNS,
         PREPAYMENT_SIGNS,
