@@ -656,3 +656,51 @@ def test_a_floor_makes_the_unbounded_region_unreachable_while_the_fit_runs() -> 
     assert _outside_the_domain(0.0179, x, 0.0179) is None
     assert _outside_the_domain(0.02, x, 0.0179) is None
     assert _outside_the_domain(-1e-9, x, None) is not None
+
+
+def test_the_floor_and_the_progress_line_belong_to_the_objective_over_every_row(
+    weighted: pd.DataFrame,
+) -> None:
+    """Inside a pool the local objective sees **a share of the rows**, so its value is a share of
+    the objective: with four processes, a quarter.
+
+    Comparing that quarter with a floor on the whole objective refused every nested fit that was
+    perfectly good -- the prepayment model's step 8 turned down a candidate at 0.076 against a
+    parent's 0.071, which is exactly what a nested model should look like. And the progress line,
+    being in the same place, had been reporting a quarter of the objective for every run made with
+    workers.
+    """
+    from creditsurv.models.blocks import _Objective, _scan, _seed_regressors, _set_censoring
+
+    names = ("lower_bound", "upper_bound", "exact_observation", "age_start", "loan_months")
+    fitter = FITTERS["weibull"]()
+    _set_censoring(fitter, names)
+    scan = _scan(
+        fitter,
+        model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+        seed=_seed_regressors(fitter, FORMULA, None),
+        names=names,
+    )
+    assert scan.columns is not None
+
+    pooled = _Objective(
+        fitter,
+        scan.blocks,
+        scan.columns,
+        np.ones(scan.columns.size),
+        lambda x: {"lambda_": x},
+        floor=0.5,
+        pooled=True,
+    )
+    alone = _Objective(
+        fitter,
+        scan.blocks,
+        scan.columns,
+        np.ones(scan.columns.size),
+        lambda x: {"lambda_": x},
+        floor=0.5,
+        pooled=False,
+    )
+
+    assert pooled.floor is None, "a share of the rows cannot be compared with a whole objective"
+    assert alone.floor == 0.5, "on its own it sees every row, so the floor is its own"

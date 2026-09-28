@@ -136,6 +136,13 @@ log scale**, a shape of 0.05 to 20, where **125 converged fits on this book** pu
 1.07 and 1.62. Neither bound can bind here, and a fit that ends on one is refused as not
 identified rather than published.
 
+**In a pool, the local objective sees a share of the rows -- so its value is a share of the
+objective.** With four processes it is a quarter. Anything compared against the whole objective
+therefore belongs to the pooled evaluator, and two things had been left in the local one: the
+floor, which then refused every nested fit that was good (a candidate at 0.076 turned down
+against a parent's 0.071), and the progress line, which reported a quarter of the objective in
+every run made with workers and misread four separate diagnoses before it was noticed.
+
 **A nested model cannot fit better than its parent, and that bound belongs inside the fit.**
 Dropping a covariate cannot raise the maximised log-likelihood -- the parent could have set that
 coefficient to zero, so every point of the child is a point of the parent. A backward-elimination

@@ -511,11 +511,12 @@ def fit_interval_censoring_in_blocks(
         total_weight=total_weight,
         with_penalty=pool is None,
         floor=floor,
+        pooled=pool is not None,
     )
     objective: _Evaluator = local
     if pool is not None:
         pool.prepare(columns, norm_std.to_numpy(), total_weight, seeded)
-        objective = _Pooled(fitter, local, pool, unflatten)
+        objective = _Pooled(fitter, local, pool, unflatten, floor=floor)
 
     # From a warm start Newton goes straight to the optimum. SLSQP would rebuild its
     # curvature estimate from nothing and take as many evaluations as from a cold start:
@@ -1096,10 +1097,13 @@ class _Pooled:
         local: _Objective,
         workers: _Workers,
         unflatten: Callable[[np.ndarray], dict[str, np.ndarray]],
+        floor: float | None = None,
     ) -> None:
         self._local = local
         self._workers = workers
-        self.floor = local.floor
+        self.floor = floor
+        self._started = time.perf_counter()
+        self._reported = -np.inf
         self.total_weight = local.total_weight
         self.evaluations = 0
         penalizer = fitter.penalizer
@@ -1122,7 +1126,21 @@ class _Pooled:
             value += float(penalty_value)
             gradient = gradient + penalty_gradient
         self.evaluations += 1
-        return _outside_the_domain(value, x, self.floor) or (value, gradient)
+        refused = _outside_the_domain(value, x, self.floor)
+        elapsed = time.perf_counter() - self._started
+        if refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS:
+            self._reported = elapsed
+            why = ""
+            if refused is not None:
+                why = (
+                    " (refused: below the parent's optimum, reported as infinite)"
+                    if _possible(value)
+                    else " (refused: not a likelihood, reported as infinite)"
+                )
+            log.info(
+                "evaluation %d: objective %.12f%s at %.0fs", self.evaluations, value, why, elapsed
+            )
+        return refused or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
         remote = self._workers.hessian(x)
@@ -1164,8 +1182,15 @@ class _Objective:
         total_weight: float | None = None,
         with_penalty: bool = True,
         floor: float | None = None,
+        pooled: bool = False,
     ) -> None:
-        self.floor = floor
+        # Inside a pool this objective sees **a share of the rows**, so its value is a share of
+        # the objective: with four processes, a quarter. Neither the floor nor the progress line
+        # belongs here then -- the floor is a bound on the whole objective, and comparing it with
+        # a quarter of one refused every nested fit that was perfectly good. The pooled evaluator
+        # owns both.
+        self._pooled = pooled
+        self.floor = None if pooled else floor
         self._blocks = blocks
         self._columns = columns
         self._scale = scale
@@ -1212,7 +1237,9 @@ class _Objective:
         self.evaluations += 1
         elapsed = time.perf_counter() - self._started
         refused = _outside_the_domain(value, x, self.floor)
-        if refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS:
+        if not self._pooled and (
+            refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS
+        ):
             # A refused point is always logged, whatever the interval: it is the surface falling
             # away, and reading a run without seeing that happen is misleading. The two reasons
             # are named apart, because they say different things -- a negative value is
