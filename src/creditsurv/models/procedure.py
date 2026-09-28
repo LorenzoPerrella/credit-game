@@ -334,8 +334,10 @@ def _floor(
     bound to the objective makes lifelines' unbounded region **unreachable while the fit runs**,
     which is the difference between converging and running for three hours to be thrown away.
 
-    The objective is a mean, so the total log-likelihood is divided by the exposure, and a unit of
-    log-likelihood is allowed back for the last digits of a sum over 72 million terms.
+    The objective is a mean, so the total log-likelihood is divided by the exposure, and
+    :data:`_NESTED_TOLERANCE` of it is allowed back -- for a discrepancy between a child's
+    likelihood and its parent's that is measured but not explained, and that refused a converging
+    fit at every evaluation while the allowance was one unit.
     """
     if parent is None or parent_fit is None or parent_fit.blocks is None:
         return None
@@ -344,7 +346,7 @@ def _floor(
     weight = parent_fit.blocks.loan_months
     if weight <= 0:
         return None
-    return float(-(parent_fit.log_likelihood + _NESTED_TOLERANCE) / weight)
+    return float(-(parent_fit.log_likelihood + _nested_tolerance(parent_fit)) / weight)
 
 
 def _check_nested(
@@ -371,7 +373,7 @@ def _check_nested(
         return
     if not set(spec.covariates) <= set(parent.covariates):
         return
-    if result.log_likelihood <= parent_fit.log_likelihood + _NESTED_TOLERANCE:
+    if result.log_likelihood <= parent_fit.log_likelihood + _nested_tolerance(parent_fit):
         return
     message = (
         f"The nested model reports a log-likelihood of {result.log_likelihood:,.3f} against its "
@@ -382,10 +384,40 @@ def _check_nested(
     raise exceptions.ConvergenceError(message)
 
 
-#: How much better a nested model may look before it is refused, in log-likelihood units. Not a
-#: tolerance on the statistics but on the arithmetic: two fits of the same rows differ in the last
-#: digits of a sum over 72 million terms.
-_NESTED_TOLERANCE: Final = 1.0
+#: How much better a nested model may look before it is refused, **as a fraction of the parent's
+#: log-likelihood**.
+#:
+#: It was one log-likelihood unit, justified by "the last digits of a sum over 72 million terms".
+#: That justification is measurably wrong. The same specification evaluated at the same
+#: coefficients over 800 blocks instead of 443 gives the same log-likelihood to **1.97e-16**
+#: relative -- 3e-8 of a unit on 151 million, not one unit -- so summation is not what the
+#: allowance has to cover.
+#:
+#: What it has to cover was measured on the prepayment model's step 8. Removing
+#: `unemployment_change` from the twenty-three-term model, on **exactly the same rows** (four
+#: shards of 18,203,131, 18,178,392, 18,155,858 and 18,134,119, as the parent reads), the
+#: optimiser converged to a point **11.8 units better** than the parent's certified optimum --
+#: 7.8e-08 relative -- and was refused for it at every evaluation, so the fit could not
+#: terminate. The parent is at its own optimum: a warm start from it takes zero Newton steps and
+#: reports 6.17e-05 standard errors, a deficit of 2e-09 units. **Where those 11.8 units come from
+#: is not known**, and a constant fitted to one unexplained measurement would be a guess dressed
+#: as a rule -- so the allowance is set by what it must separate, not by what it must absorb.
+#:
+#: What it must keep out was measured on the same run: the region where lifelines' clipped
+#: likelihood is unbounded sits 81,237 to 5,356,161 units below the floor, 4e-04 to 3e-02
+#: relative. A relative allowance of 1e-06 -- 151 units here -- is thirteen times the
+#: discrepancy it has to absorb and four hundred times below the nearest point it has to refuse.
+#: It is also below the smallest likelihood ratio this project treats as meaningful, 220.6 for
+#: occupancy in the shape parameter, so the belt still catches an improvement that would matter.
+#:
+#: Relative rather than absolute because the thing it covers is relative: one unit means
+#: something on a fixture and nothing on 151 million.
+_NESTED_TOLERANCE: Final = 1e-6
+
+
+def _nested_tolerance(parent_fit: FitResult) -> float:
+    """The allowance in log-likelihood units, for this parent's scale."""
+    return _NESTED_TOLERANCE * abs(parent_fit.log_likelihood)
 
 
 def selection_description(

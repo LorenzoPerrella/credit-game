@@ -1315,12 +1315,16 @@ _DAMPING_CEILING: Final = 1e12
 #: reach 1e-3 against a cap of 40. The cap does end it, three hours later, with the same verdict
 #: the fourth step already implied.
 #:
-#: The floor cannot come down there because the maximum of the likelihood as lifelines computes
-#: it lies below the parent's, in the region it cannot compute: every step long enough to make
-#: progress lands under the floor and is refused, and the damping rises to meet it. So the
-#: refusals are real, but they are **interleaved with accepted points**, one of each a step,
-#: which resets `_PINNED_REFUSALS` and leaves it silent. This is the same conclusion reached by
-#: the other road, and it needs its own guard.
+#: The damping cannot come down because every step long enough to make progress lands under the
+#: floor and is refused, so the damping rises to meet it. The refusals are real, but they are
+#: **interleaved with accepted points**, one of each a step, which resets `_PINNED_REFUSALS` and
+#: leaves it silent, so this pathology needs its own guard.
+#:
+#: What was refused there was not lifelines' unbounded region, as this comment first said. The
+#: optimiser was converging, to a point 11.8 log-likelihood units better than its parent's
+#: certified optimum on exactly the same rows, and the floor's allowance was one unit -- see
+#: `creditsurv.models.procedure._NESTED_TOLERANCE`, which carries that measurement. The guard is
+#: right either way: a polish closing by a constant factor cannot finish, whatever is holding it.
 #:
 #: It shortens a phase; it does not decide a fit. A warm start the Newton steps cannot finish
 #: falls back on SLSQP from the same point, as it always has, and what happens to the fit is

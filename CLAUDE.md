@@ -317,6 +317,21 @@ takes the footprint near 15 GB, so nothing else heavy runs beside it.
 
 ## Open
 
+**Twelve log-likelihood units nobody can account for.** On the prepayment model's step 8,
+removing *unemployment change since origination* (`unemployment_change`) from the
+twenty-three-term model converged to a point **11.8 units better than its parent's optimum**,
+on exactly the rows the parent reads -- four shards of 18,203,131, 18,178,392, 18,155,858 and
+18,134,119. A nested model cannot fit better, so one of the two numbers is wrong, and neither
+of the obvious explanations survives: the engine reproduces the same point over 800 blocks
+instead of 443 to **1.97e-16** relative, so it is not the arithmetic, and a warm start from the
+parent's coefficients takes **zero** Newton steps at 6.17e-05 standard errors, a deficit of
+2e-09 units, so the parent is at its optimum. It is 7.8e-08 of the log-likelihood, four orders
+of magnitude below the clipped region the floor exists to refuse, and
+`procedure._NESTED_TOLERANCE` is set to clear it rather than to explain it. Worth attributing
+before any nested likelihood-ratio test is published: the smallest this project has treated as
+meaningful is 220.6.
+
+
 **The Weibull against the log-logistic.** On the selected specification the log-logistic has
 the better likelihood by 83,961 AIC points and sits slightly closer to Kaplan-Meier (1.21
 points of survival on average against 1.26, -2.74 at 312 months against -3.20), but turns
