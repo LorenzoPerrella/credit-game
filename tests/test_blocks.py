@@ -704,3 +704,26 @@ def test_the_floor_and_the_progress_line_belong_to_the_objective_over_every_row(
 
     assert pooled.floor is None, "a share of the rows cannot be compared with a whole objective"
     assert alone.floor == 0.5, "on its own it sees every row, so the floor is its own"
+
+
+def test_an_optimiser_pinned_against_the_floor_is_given_up_on() -> None:
+    """Turned back this many times in a row, the only direction the optimiser can find an
+    improvement in is the impossible one -- so the maximum of the likelihood as lifelines
+    computes it lies in the region lifelines cannot compute.
+
+    That is a conclusion about the specification, and waiting for the iteration cap to confirm
+    it costs hours: the prepayment model's step 8 spent 85 minutes on 17 straight refusals
+    without a single accepted point, with four more hours to go. It cannot change which model is
+    chosen -- a fit ending this way is refused either way, and step 8 keeps the covariate under
+    rule 11 -- only how long the run waits to say what the log already shows.
+    """
+    from lifelines import exceptions
+
+    from creditsurv.models.blocks import _PINNED_REFUSALS, _check_pinned
+
+    _check_pinned(0, 0.07)
+    _check_pinned(_PINNED_REFUSALS - 1, 0.07)
+    with pytest.raises(exceptions.ConvergenceError, match="below the parent's optimum"):
+        _check_pinned(_PINNED_REFUSALS, 0.07)
+    with pytest.raises(exceptions.ConvergenceError, match="outside the likelihood"):
+        _check_pinned(_PINNED_REFUSALS, None)

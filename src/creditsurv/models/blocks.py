@@ -140,6 +140,20 @@ def _methods(first: str, prefer: str | None) -> tuple[str, ...]:
 #: the fit if it ever does.
 _PARAMETER_BOUND: Final = 100.0
 
+#: Consecutive refused points after which the fit is given up.
+#:
+#: An optimiser turned back this many times in a row is **pinned against the floor**: the only
+#: direction it can find an improvement in is the impossible one, so the maximum of the
+#: likelihood as lifelines computes it lies in the region lifelines cannot compute. That is a
+#: conclusion about the specification, and waiting for the iteration cap to confirm it costs
+#: hours -- the prepayment model's step 8 spent 85 minutes on 17 straight refusals without one
+#: accepted point, with four more hours to go.
+#:
+#: It cannot change which model is chosen: a fit that ends this way is refused either way, and
+#: step 8 keeps the covariate under rule 11. It decides only how long the run waits to say what
+#: the log already shows.
+_PINNED_REFUSALS: Final = 25
+
 #: How far the **shape** parameter may go, on the log scale it is estimated on.
 #:
 #: This is the bound that matters, and the coefficient bound above was aimed at the wrong
@@ -1102,6 +1116,7 @@ class _Pooled:
         self._local = local
         self._workers = workers
         self.floor = floor
+        self.refusals = 0
         self._started = time.perf_counter()
         self._reported = -np.inf
         self.total_weight = local.total_weight
@@ -1127,6 +1142,7 @@ class _Pooled:
             gradient = gradient + penalty_gradient
         self.evaluations += 1
         refused = _outside_the_domain(value, x, self.floor)
+        self.refusals = self.refusals + 1 if refused is not None else 0
         elapsed = time.perf_counter() - self._started
         if refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS:
             self._reported = elapsed
@@ -1140,6 +1156,7 @@ class _Pooled:
             log.info(
                 "evaluation %d: objective %.12f%s at %.0fs", self.evaluations, value, why, elapsed
             )
+        _check_pinned(self.refusals, self.floor)
         return refused or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
@@ -1216,6 +1233,7 @@ class _Objective:
             self._penalty = penalty
 
         self.evaluations = 0
+        self.refusals = 0
         self._started = time.perf_counter()
         self._reported = -np.inf
 
@@ -1237,6 +1255,7 @@ class _Objective:
         self.evaluations += 1
         elapsed = time.perf_counter() - self._started
         refused = _outside_the_domain(value, x, self.floor)
+        self.refusals = self.refusals + 1 if refused is not None else 0
         if not self._pooled and (
             refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS
         ):
@@ -1260,6 +1279,8 @@ class _Objective:
                 why,
                 elapsed,
             )
+        if not self._pooled:
+            _check_pinned(self.refusals, self.floor)
         return refused or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
@@ -1402,6 +1423,19 @@ def _outside_the_domain(
     if _possible(value) and (floor is None or value >= floor):
         return None
     return float("inf"), np.zeros_like(x)
+
+
+def _check_pinned(refusals: int, floor: float | None) -> None:
+    """Give up once the optimiser has been turned back this many times in a row."""
+    if refusals < _PINNED_REFUSALS:
+        return
+    where = "below the parent's optimum" if floor is not None else "outside the likelihood"
+    message = (
+        f"The optimiser has been refused {refusals} times in a row, every point {where}. The "
+        "maximum of the likelihood as lifelines computes it lies in the region it cannot "
+        "compute, so this specification cannot be fitted."
+    )
+    raise exceptions.ConvergenceError(message)
 
 
 def _possible(value: float) -> bool:
