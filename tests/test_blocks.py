@@ -828,3 +828,46 @@ def test_a_polish_closing_too_slowly_to_finish_is_given_up() -> None:
     # At the tolerance there is nothing left to close, and past the cap no budget to close in.
     assert not _too_slow(POLISH_TOLERANCE_SE, 1.0, 2)
     assert _required_ratio(975.0, _POLISH_STEPS) == 0.0
+
+
+def test_a_polish_the_floor_stalled_is_not_offered_to_another_optimiser() -> None:
+    """Told apart by what turned the steps back, because only one of the two answers is "try
+    something else".
+
+    A polish that stalls against lifelines' clipped region has failed where it stood, and another
+    method from another start may well stand somewhere better -- that is why the fallbacks exist.
+    A polish that stalls because every step it wants is below the **parent's optimum** has found
+    a boundary that is in the same place for everybody: on the prepayment model's step 8, SLSQP
+    gave up 557 standard errors out, then L-BFGS-B from its own path gave up at 762, then
+    trust-constr was started, and a cold attempt would have repeated all three. Over twelve hours
+    for one answer, which rule 11 gives either way.
+    """
+    from lifelines import exceptions
+
+    from creditsurv.models.blocks import _PINNED_WINDOW, Pinned, _Pinned
+
+    #: A value a likelihood can take, refused: that is the floor's doing.
+    below_floor = _Pinned()
+    for _ in range(_PINNED_WINDOW):
+        below_floor.saw(refused=True, value=0.0695)
+    assert below_floor.against_the_floor
+
+    #: A value no likelihood can take: lifelines' clipping, and another method may escape it.
+    impossible = _Pinned()
+    for _ in range(_PINNED_WINDOW):
+        impossible.saw(refused=True, value=float("-inf"))
+    assert not impossible.against_the_floor
+
+    #: Mostly clipping with a floor refusal among them is still clipping.
+    mixed = _Pinned()
+    for turn in range(_PINNED_WINDOW):
+        mixed.saw(refused=True, value=0.0695 if turn % 4 == 0 else float("inf"))
+    assert not mixed.against_the_floor
+
+    #: And an accepted point is neither.
+    working = _Pinned()
+    for _ in range(_PINNED_WINDOW):
+        working.saw(refused=False, value=0.0717)
+    assert not working.against_the_floor
+
+    assert issubclass(Pinned, exceptions.ConvergenceError)

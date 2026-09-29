@@ -187,6 +187,25 @@ after -- so forty evaluations three-quarters refused, **with nothing inside them
 best point already found**, ends the fit. The second condition is what makes it safe: a search is
 refused where it probes, not where it stands.
 
+**And a fit refused by the floor is refused by every optimiser and every starting point.** When
+the polish gives up, what turned its steps back decides what the failure means. Against
+lifelines' clipped region it has failed where it stood, and another method from another start
+may stand somewhere better -- that is what `_FALLBACK_METHODS` and the cold retry are for.
+Against the **parent's optimum** it has found a boundary that sits in the same place for
+everybody: on the prepayment model's step 8, SLSQP gave up 557 standard errors out, L-BFGS-B
+from its own path gave up at 762, trust-constr was started next, and a cold attempt would have
+repeated all three -- over twelve hours for one candidate, for an answer rule 11 gives either
+way. `_Pinned` therefore records which kind of refusal it saw, and a polish stalled by the floor
+raises `Pinned`, which both the method fallbacks and the cold retry let through.
+
+A diagnosis that did not survive its test, kept because it is easy to reach again: that such a
+stall means a **flat direction**, since the polish reported 557 standard errors while a refused
+probe changed the objective by 0.2 units. It does not. Those 0.2 units were the gain of a step
+damped by 1e+08, not of the Newton step, and the two quantities the comparison needed --
+`0.5 * remaining**2` and the quadratic model's own prediction carried to log-likelihood units --
+are **identically equal**, as a one-parameter test shows in three lines. The ratio is 1 whatever
+the curvature, so it measures nothing.
+
 **The polish's verdict is binding.** It measures the distance to the optimum and the engine
 promises under a thousandth of a standard error; a fit the polish could not move is refused, not
 published. Without that, one was **cached** at 6,850 standard errors out while the log said the

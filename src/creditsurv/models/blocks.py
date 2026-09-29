@@ -189,6 +189,7 @@ class _Pinned:
     def __init__(self) -> None:
         self.refusals = 0
         self._window: deque[bool] = deque(maxlen=_PINNED_WINDOW)
+        self._against_the_floor: deque[bool] = deque(maxlen=_PINNED_WINDOW)
         self._best = np.inf
         self._best_at = 0
         self._seen = 0
@@ -197,8 +198,18 @@ class _Pinned:
         self._seen += 1
         self.refusals = self.refusals + 1 if refused else 0
         self._window.append(refused)
+        # A refusal of a value a likelihood could take is the floor's doing; an impossible one is
+        # lifelines' clipping. The polish needs them apart, because only the first is a statement
+        # about the parent's optimum.
+        self._against_the_floor.append(refused and _possible(value))
         if not refused and value < self._best:
             self._best, self._best_at = value, self._seen
+
+    @property
+    def against_the_floor(self) -> bool:
+        """Whether what turned the optimiser back was the parent's optimum, not the clipping."""
+        recent = list(self._against_the_floor)
+        return bool(recent) and sum(recent) > len(recent) / 2
 
     @property
     def circling(self) -> bool:
@@ -643,6 +654,9 @@ def fit_interval_censoring_in_blocks(
             try:
                 _check_interior(results.x, limits)
                 solution = _from_optimiser(objective, results, polish=polish)
+            except Pinned:
+                # The floor stops every optimiser in the same place: see Pinned.
+                raise
             except exceptions.ConvergenceError as error:
                 log.warning("%s could not be polished (%s); trying the next", method, error)
                 continue
@@ -1186,7 +1200,7 @@ class _Pooled:
         self._local = local
         self._workers = workers
         self.floor = floor
-        self._pinned = _Pinned()
+        self.pinned = _Pinned()
         self._started = time.perf_counter()
         self._reported = -np.inf
         self.total_weight = local.total_weight
@@ -1212,7 +1226,7 @@ class _Pooled:
             gradient = gradient + penalty_gradient
         self.evaluations += 1
         refused = _outside_the_domain(value, x, self.floor)
-        self._pinned.saw(refused=refused is not None, value=value)
+        self.pinned.saw(refused=refused is not None, value=value)
         elapsed = time.perf_counter() - self._started
         if refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS:
             self._reported = elapsed
@@ -1226,7 +1240,7 @@ class _Pooled:
             log.info(
                 "evaluation %d: objective %.12f%s at %.0fs", self.evaluations, value, why, elapsed
             )
-        _check_pinned(self._pinned, self.floor)
+        _check_pinned(self.pinned, self.floor)
         return refused or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
@@ -1244,6 +1258,7 @@ class _Evaluator(Protocol):
 
     total_weight: float
     evaluations: int
+    pinned: _Pinned
 
     def __call__(self, x: np.ndarray) -> tuple[float, np.ndarray]: ...
 
@@ -1303,7 +1318,7 @@ class _Objective:
             self._penalty = penalty
 
         self.evaluations = 0
-        self._pinned = _Pinned()
+        self.pinned = _Pinned()
         self._started = time.perf_counter()
         self._reported = -np.inf
 
@@ -1325,7 +1340,7 @@ class _Objective:
         self.evaluations += 1
         elapsed = time.perf_counter() - self._started
         refused = _outside_the_domain(value, x, self.floor)
-        self._pinned.saw(refused=refused is not None, value=value)
+        self.pinned.saw(refused=refused is not None, value=value)
         if not self._pooled and (
             refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS
         ):
@@ -1350,7 +1365,7 @@ class _Objective:
                 elapsed,
             )
         if not self._pooled:
-            _check_pinned(self._pinned, self.floor)
+            _check_pinned(self.pinned, self.floor)
         return refused or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
@@ -1488,6 +1503,16 @@ def _polish(
         )
         stalled = stalled + 1 if _too_slow(remaining, previous, steps) else 0
         if stalled >= _STALL_STEPS:
+            if objective.pinned.against_the_floor:
+                # What stopped it is the parent's optimum, not this optimiser or this start:
+                # SLSQP gave up 557 standard errors out and L-BFGS-B, from its own path, 762.
+                message = (
+                    f"The polish stopped {remaining:.3g} standard errors out, every step it "
+                    "wanted refused below the parent's optimum. The maximum of the likelihood "
+                    "as lifelines computes it lies in the region it cannot compute, so this "
+                    "specification cannot be fitted."
+                )
+                raise Pinned(message)
             log.warning(
                 "the polish has closed by %.3g a step for %d steps and needs %.3g to finish "
                 "in the %d it has left; it is %.3g standard errors out and stopped",
