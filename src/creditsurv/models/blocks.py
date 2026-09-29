@@ -65,6 +65,8 @@ if TYPE_CHECKING:
     Command = tuple[str, np.ndarray | None]
     Prepared = tuple[pd.MultiIndex, np.ndarray, float, dict[str, np.ndarray]]
     Answer = dict[str, Any] | tuple[float, np.ndarray] | np.ndarray
+    #: A worker's answer with the part it read, so the parent can add them in one order.
+    Tagged = tuple[int, Answer]
 
     from collections.abc import Callable, Iterable
 
@@ -1048,7 +1050,7 @@ def _serve(
     part: int,
     of: int,
     commands: Queue[Command | Prepared],
-    results: Queue[Answer],
+    results: Queue[Tagged],
 ) -> None:
     """A worker: read a share of the rows, then answer with its part of the objective.
 
@@ -1063,7 +1065,7 @@ def _serve(
         seed=_seed_regressors(fitter, setup.formula, setup.ancillary),
         names=setup.names,
     )
-    results.put(_summary(scan))
+    results.put((part, _summary(scan)))
 
     columns, scale, total_weight, seeded = cast("Prepared", commands.get())
     raw_std = pd.Series(scale, index=columns)
@@ -1095,9 +1097,9 @@ def _serve(
         if command == "stop" or payload is None:
             return
         if command == "value":
-            results.put(objective(payload))
+            results.put((part, objective(payload)))
         else:
-            results.put(objective.hessian(payload))
+            results.put((part, objective.hessian(payload)))
 
 
 class _Workers:
@@ -1110,7 +1112,7 @@ class _Workers:
         of: int,
     ) -> None:
         context = multiprocessing.get_context("spawn")
-        self._results: Queue[Answer] = context.Queue()
+        self._results: Queue[Tagged] = context.Queue()
         self._commands: list[Queue[Command | Prepared]] = []
         self._processes: list[multiprocessing.process.BaseProcess] = []
         for part in range(1, of):
@@ -1126,7 +1128,7 @@ class _Workers:
         log.info("%d worker process(es) reading their share of the rows", len(self._processes))
 
     def summaries(self) -> list[dict[str, Any]]:
-        return [cast("dict[str, Any]", self._results.get()) for _ in self._processes]
+        return [cast("dict[str, Any]", answer) for answer in self._collect()]
 
     def prepare(
         self,
@@ -1141,7 +1143,21 @@ class _Workers:
     def _ask(self, command: str, x: np.ndarray) -> list[Answer]:
         for commands in self._commands:
             commands.put((command, x))
-        return [self._results.get() for _ in self._processes]
+        return self._collect()
+
+    def _collect(self) -> list[Answer]:
+        """The answers **in the order the rows were split**, never in the order they arrive.
+
+        One queue serves every worker, so `get` returns whichever finished first, and the parent
+        used to add them in that order. Floating-point addition is not associative, so the same
+        point summed in two arrival orders differs in its last digit -- and an optimiser turns
+        that into a different search: two runs of the identical fit agreed to every printed digit
+        for eighty evaluations, then diverged at 0.065288491918 against 0.065288491919 and were
+        five significant figures apart forty evaluations later. A fit of one specification on one
+        cell file has to give one answer, so the answers are added in the parts' own order.
+        """
+        answers = dict(cast("list[Tagged]", [self._results.get() for _ in self._processes]))
+        return [answers[part] for part in sorted(answers)]
 
     def value_and_gradient(self, x: np.ndarray) -> list[tuple[float, np.ndarray]]:
         return [cast("tuple[float, np.ndarray]", answer) for answer in self._ask("value", x)]

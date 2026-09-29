@@ -136,6 +136,17 @@ log scale**, a shape of 0.05 to 20, where **125 converged fits on this book** pu
 1.07 and 1.62. Neither bound can bind here, and a fit that ends on one is refused as not
 identified rather than published.
 
+**A pooled fit adds the shares in the parts' own order, because it used to add them in the
+order they arrived.** One queue serves every worker, so `get` returns whichever finished first.
+Floating-point addition is not associative, so the same point summed in two arrival orders
+differs in its last digit -- and an optimiser turns that into a different search: two runs of the
+identical prepayment fit agreed to every printed digit for eighty evaluations, split at
+0.065288491918 against 0.065288491919, and were five significant figures apart forty evaluations
+later, each walking its own path over the same surface. Every multi-process fit made before this
+was reproducible only to a tolerance, this one included, so a re-run of a cached fit may differ in
+its last digits. `tests/test_streaming.py` now fits the same fixture three times in three
+processes and compares **bit for bit**; it fails on arrival order.
+
 **In a pool, the local objective sees a share of the rows -- so its value is a share of the
 objective.** With four processes it is a quarter. Anything compared against the whole objective
 therefore belongs to the pooled evaluator, and two things had been left in the local one: the

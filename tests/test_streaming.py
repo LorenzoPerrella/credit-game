@@ -152,6 +152,35 @@ def test_the_same_fit_comes_out_of_three_processes_as_out_of_one(
     assert shared.log_likelihood == pytest.approx(alone.log_likelihood, rel=1e-12)
 
 
+def test_a_fit_in_processes_gives_the_same_answer_every_time(
+    cell_file: Path, macro_module: pd.DataFrame
+) -> None:
+    """Bit for bit, not to a tolerance: one specification on one cell file is one fit.
+
+    One queue serves every worker, so an answer arrives when that worker happens to finish, and
+    the parent used to add the shares in arrival order. Floating-point addition is not
+    associative, so the same point summed two ways differs in its last digit -- and an optimiser
+    makes that a different search. Two runs of the identical prepayment fit agreed to every
+    printed digit for eighty evaluations, split at 0.065288491918 against 0.065288491919, and
+    were five significant figures apart forty evaluations later, each taking its own path through
+    the same surface.
+
+    Three runs rather than two because the order has to be wrong only sometimes to be wrong.
+    """
+    source = CellBlocks(str(cell_file), macro_module, tuple(COVARIATES), rows=400)
+
+    runs = [
+        fit_streamed(source, COVARIATES, FORMULA, weights_col=WEIGHT, workers=3) for _ in range(3)
+    ]
+
+    first, *rest = runs
+    for other in rest:
+        assert other.log_likelihood == first.log_likelihood, "the same sum, added in one order"
+        np.testing.assert_array_equal(
+            other.fitter.params_.to_numpy(), first.fitter.params_.to_numpy()
+        )
+
+
 def test_fitting_in_processes_needs_a_description_of_the_rows(
     cell_file: Path, macro_module: pd.DataFrame
 ) -> None:
