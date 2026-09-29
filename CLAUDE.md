@@ -318,6 +318,21 @@ so: `MACRO_ELIMINATION_PRIORITY` and `ECONOMIC_DIMENSION`. Changed after the res
 either becomes a way of dropping whatever came out inconvenient. The selection never sees
 the test window; stability compares loans originated in even and in odd years.
 
+## The family was chosen, and the likelihood would have chosen differently
+
+Rule 2 of `docs/rules.md` is applied by `creditsurv family` and it picked the **Weibull**: both
+families went through their own selection, and the selected models sit 0.1027 and 0.1498
+percentage points from the Aalen-Johansen cumulative incidence of default on average over the
+222 loan ages above the exposure floor. Neither turns a declared sign, so neither is excluded,
+and the 0.047 pp between them is inside the 0.1 pp tie the rule declared -- where the Weibull is
+kept for not falling at long ages. It is also the closer of the two on the criterion itself.
+
+The likelihood is the reason the rule is not the likelihood. On the specification before the
+validation the Weibull led by 623,126 AIC points; on the one after it the log-logistic led by
+83,961. A criterion that changes its mind with the specification is not a criterion, and AIC on
+72 million episodes measures fit where the data is dense rather than where a lifetime PD spends
+its time. `docs/reports/family.md` carries the age-by-age gap.
+
 ## Identification
 
 `period = cohort + age` holds **identically**, so no two of calendar time, origination
@@ -370,14 +385,6 @@ fits: it stops when the report's fit is not in the cache. Scoring the training h
 takes the footprint near 15 GB, so nothing else heavy runs beside it.
 
 ## Open
-
-**The Weibull against the log-logistic.** On the selected specification the log-logistic has
-the better likelihood by 83,961 AIC points and sits slightly closer to Kaplan-Meier (1.21
-points of survival on average against 1.26, -2.74 at 312 months against -3.20), but turns
-*financial conditions* (`financial_conditions`, formerly `nfci_lagged`) against its prior;
-on the specification before the validation the Weibull led by 623,126. Switching family
-means `creditsurv select` with log-logistic fits, ~15 hours, since every rule of steps 8 and
-9 reads the family's coefficients. See `docs/variable_selection.md`.
 
 **The backtest fails its decile criterion.** Overall actual over expected 0.920 and Gini
 0.561 pass; the deciles run 0.598 to 1.064: over-prediction in the safer deciles, down to
