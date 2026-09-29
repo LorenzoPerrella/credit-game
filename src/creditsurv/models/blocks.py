@@ -207,9 +207,16 @@ class _Pinned:
 
     @property
     def against_the_floor(self) -> bool:
-        """Whether what turned the optimiser back was the parent's optimum, not the clipping."""
-        recent = list(self._against_the_floor)
-        return bool(recent) and sum(recent) > len(recent) / 2
+        """Whether what turned the optimiser back was the parent's optimum, not the clipping.
+
+        Most of the **refusals**, not most of the evaluations: a damped Newton alternates a
+        refused step with an accepted one, so the refusals are barely half of what it does. On
+        the prepayment model's warm phase, 9 of 11 refusals were the floor and 22 evaluations
+        were made -- a majority of the evaluations would have wanted 12, and the fit went on to
+        spend three more hours reaching the same answer.
+        """
+        refusals = sum(self._window)
+        return refusals > 0 and 2 * sum(self._against_the_floor) > refusals
 
     @property
     def circling(self) -> bool:

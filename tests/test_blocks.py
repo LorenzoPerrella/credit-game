@@ -870,4 +870,17 @@ def test_a_polish_the_floor_stalled_is_not_offered_to_another_optimiser() -> Non
         working.saw(refused=False, value=0.0717)
     assert not working.against_the_floor
 
+    #: The cadence that matters, and the one a first version got wrong: a damped Newton takes a
+    #: refused step and then an accepted one, so the refusals are half of what it does. This is
+    #: the prepayment model's own warm phase -- 22 evaluations, 9 refused by the floor, 2 by the
+    #: clipping -- and asking for a majority of the evaluations would have wanted 12 and let the
+    #: fit run three hours longer to the same answer.
+    warm = _Pinned()
+    for kind in [True] * 9 + [False] * 2 + [None] * 11:
+        if kind is None:
+            warm.saw(refused=False, value=0.0717)
+        else:
+            warm.saw(refused=True, value=0.0695 if kind else float("inf"))
+    assert warm.against_the_floor, "9 of 11 refusals are the floor's"
+
     assert issubclass(Pinned, exceptions.ConvergenceError)
