@@ -152,6 +152,30 @@ clipped likelihood is unbounded below. The parent's optimum is handed to the obj
 belt, and the difference matters -- the prepayment model's step 8 spent two hours and forty
 minutes reaching 0.0122 against a parent's 0.0179 and was still going.
 
+**lifelines' clipped region begins directly below the maximum, so the nested bound has no slack
+to give.** The allowance was one log-likelihood unit "for the last digits of a sum over 72 million
+terms", and that reason is measurably wrong: the same specification evaluated at the same
+coefficients over 800 blocks instead of 443 reproduces the log-likelihood to **1.97e-16** relative,
+three hundredths of a millionth of a unit. What settles the size is the other end. On the
+prepayment model's step 8 the optimiser probed points reading 11.8, then 158, 183 and 213 units
+better than its parent's optimum -- and the parent is not the one in the wrong: re-polished from
+its own coefficients with the tolerance driven from 1e-03 to **1e-09** standard errors it takes two
+more Newton steps and gains **-0.000 units**. Those probes are the shallow edge of the clipped
+region, in the same line searches that further along read 10,699 units and 4.6 million. An
+allowance wide enough to admit a probe 213 units better is one that lets a fit converge onto
+clipped ground and be cached as an optimum, so the bound stays at a unit. Raising it to 1e-06 of
+the log-likelihood on a first reading of the same run, which took the 11.8 for the scale of the
+thing, was wrong and is reverted.
+
+**An optimiser can circle the wall instead of stopping at it.** `_PINNED_REFUSALS` counts refusals
+in a row, and step 8 produced a cycle of six or seven refusals with one accepted point among them:
+the run never passed one, and the fit went to 211 evaluations and 4.3 hours to be refused as it
+would have been at the start. Over a window the states separate -- 73% refused across the whole of
+SLSQP, 88% once the cycle set in, 0% in the productive phase before it and never under 35%
+after -- so forty evaluations three-quarters refused, **with nothing inside them improving on the
+best point already found**, ends the fit. The second condition is what makes it safe: a search is
+refused where it probes, not where it stands.
+
 **The polish's verdict is binding.** It measures the distance to the optimum and the engine
 promises under a thousandth of a standard error; a fit the polish could not move is refused, not
 published. Without that, one was **cached** at 6,850 standard errors out while the log said the
@@ -316,21 +340,6 @@ fits: it stops when the report's fit is not in the cache. Scoring the training h
 takes the footprint near 15 GB, so nothing else heavy runs beside it.
 
 ## Open
-
-**Twelve log-likelihood units nobody can account for.** On the prepayment model's step 8,
-removing *unemployment change since origination* (`unemployment_change`) from the
-twenty-three-term model converged to a point **11.8 units better than its parent's optimum**,
-on exactly the rows the parent reads -- four shards of 18,203,131, 18,178,392, 18,155,858 and
-18,134,119. A nested model cannot fit better, so one of the two numbers is wrong, and neither
-of the obvious explanations survives: the engine reproduces the same point over 800 blocks
-instead of 443 to **1.97e-16** relative, so it is not the arithmetic, and a warm start from the
-parent's coefficients takes **zero** Newton steps at 6.17e-05 standard errors, a deficit of
-2e-09 units, so the parent is at its optimum. It is 7.8e-08 of the log-likelihood, four orders
-of magnitude below the clipped region the floor exists to refuse, and
-`procedure._NESTED_TOLERANCE` is set to clear it rather than to explain it. Worth attributing
-before any nested likelihood-ratio test is published: the smallest this project has treated as
-meaningful is 220.6.
-
 
 **The Weibull against the log-logistic.** On the selected specification the log-logistic has
 the better likelihood by 83,961 AIC points and sits slightly closer to Kaplan-Meier (1.21

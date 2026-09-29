@@ -719,14 +719,78 @@ def test_an_optimiser_pinned_against_the_floor_is_given_up_on() -> None:
     """
     from lifelines import exceptions
 
-    from creditsurv.models.blocks import _PINNED_REFUSALS, _check_pinned
+    from creditsurv.models.blocks import _PINNED_REFUSALS, _check_pinned, _Pinned
 
-    _check_pinned(0, 0.07)
-    _check_pinned(_PINNED_REFUSALS - 1, 0.07)
+    def turned_back(times: int) -> _Pinned:
+        pinned = _Pinned()
+        for _ in range(times):
+            pinned.saw(refused=True, value=float("inf"))
+        return pinned
+
+    _check_pinned(turned_back(0), 0.07)
+    _check_pinned(turned_back(_PINNED_REFUSALS - 1), 0.07)
     with pytest.raises(exceptions.ConvergenceError, match="below the parent's optimum"):
-        _check_pinned(_PINNED_REFUSALS, 0.07)
+        _check_pinned(turned_back(_PINNED_REFUSALS), 0.07)
     with pytest.raises(exceptions.ConvergenceError, match="outside the likelihood"):
-        _check_pinned(_PINNED_REFUSALS, None)
+        _check_pinned(turned_back(_PINNED_REFUSALS), None)
+
+    # One accepted point among them resets the run, which is the hole the window fills.
+    mixed = _Pinned()
+    for _ in range(_PINNED_REFUSALS + 5):
+        mixed.saw(refused=True, value=float("inf"))
+        mixed.saw(refused=False, value=0.07)
+    assert mixed.refusals == 0, "an accepted point clears the consecutive count"
+
+
+def test_an_optimiser_circling_the_floor_is_given_up_on() -> None:
+    """The shape a consecutive count cannot see, and the one that cost four hours.
+
+    The prepayment model's step 8 refused six or seven points a cycle with one accepted point
+    among them, so the run of refusals never passed one and the fit went to 211 evaluations
+    before being refused anyway. Over a window the states separate: that fit ran at 73% refused
+    across the whole of SLSQP and 88% once the cycle set in, while its productive phase ran at
+    0% and no window of forty fell below 35% afterwards.
+
+    The second condition is what keeps it honest. A search can be refused most of the time and
+    still be working -- the refusals are where it probes, not where it stands -- so the guard
+    also asks that nothing inside the window improved on the best point already found.
+    """
+    from lifelines import exceptions
+
+    from creditsurv.models.blocks import _PINNED_SHARE, _PINNED_WINDOW, _check_pinned, _Pinned
+
+    def cycle(cycles: int, *, improving: bool) -> _Pinned:
+        """Six refused, one accepted -- the prepayment model's own cadence."""
+        pinned, best = _Pinned(), 0.072
+        for _turn in range(cycles):
+            for _ in range(6):
+                pinned.saw(refused=True, value=0.0695)
+            best = best - 1e-5 if improving else best
+            pinned.saw(refused=False, value=best)
+        return pinned
+
+    short = cycle(3, improving=False)
+    assert not short.circling, "not a full window yet"
+    _check_pinned(short, 0.07)
+
+    # 6 refused in 7 is 86%, past the threshold, and the accepted point never improves.
+    stuck = cycle(2 * _PINNED_WINDOW // 7 + 2, improving=False)
+    assert stuck.refusals < 2, "the cycle keeps clearing the consecutive count"
+    assert stuck.circling
+    with pytest.raises(exceptions.ConvergenceError, match="circling a boundary"):
+        _check_pinned(stuck, 0.07)
+
+    # The same cadence, but each cycle finds a better point: not pinned, whatever the share.
+    working = cycle(2 * _PINNED_WINDOW // 7 + 2, improving=True)
+    assert not working.circling
+    _check_pinned(working, 0.07)
+
+    # And a window mostly accepted is never pinned, however little it improves.
+    quiet = _Pinned()
+    for _ in range(_PINNED_WINDOW * 2):
+        quiet.saw(refused=False, value=0.072)
+    assert sum(quiet._window) / _PINNED_WINDOW < _PINNED_SHARE
+    assert not quiet.circling
 
 
 def test_a_polish_closing_too_slowly_to_finish_is_given_up() -> None:

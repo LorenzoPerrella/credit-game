@@ -44,6 +44,7 @@ import logging
 import multiprocessing
 import time
 import warnings
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
@@ -153,6 +154,59 @@ _PARAMETER_BOUND: Final = 100.0
 #: step 8 keeps the covariate under rule 11. It decides only how long the run waits to say what
 #: the log already shows.
 _PINNED_REFUSALS: Final = 25
+
+#: Evaluations looked at when deciding whether the optimiser is pinned, and the share of them
+#: refused that says it is.
+#:
+#: `_PINNED_REFUSALS` counts refusals **in a row**, and the prepayment model's step 8 showed the
+#: shape it cannot see: a cycle of six or seven refusals with one accepted point among them, which
+#: resets the count and never reaches twenty-five. That fit ran to 211 evaluations, 4.3 hours, and
+#: was refused at the end as it would have been at the start.
+#:
+#: Over a window the two states separate cleanly. On that run the share refused was 73% across the
+#: whole of SLSQP and rose to 88% once the cycle set in, while **no** window of forty evaluations
+#: fell below 35% after it began -- and the early, productive phase ran at 0%. Forty at
+#: three-quarters therefore fires at evaluation 82 rather than 211, a cut of 2.6 times, with the
+#: threshold twice the worst the productive phase produced.
+#:
+#: It is paired with a second condition -- the best accepted objective has not improved inside the
+#: window -- which can only hold the guard back, never trip it. A fit still finding better points
+#: is not pinned however much of its search is refused.
+_PINNED_WINDOW: Final = 40
+_PINNED_SHARE: Final = 0.75
+
+
+class _Pinned:
+    """Whether the optimiser is stuck against a boundary it cannot leave.
+
+    Two readings of the same thing: a run of refusals, and a window of them without progress.
+    The first catches an optimiser that has walked into the wall and stopped; the second catches
+    one that is circling it, which is what the prepayment model did for four hours.
+    """
+
+    def __init__(self) -> None:
+        self.refusals = 0
+        self._window: deque[bool] = deque(maxlen=_PINNED_WINDOW)
+        self._best = np.inf
+        self._best_at = 0
+        self._seen = 0
+
+    def saw(self, *, refused: bool, value: float) -> None:
+        self._seen += 1
+        self.refusals = self.refusals + 1 if refused else 0
+        self._window.append(refused)
+        if not refused and value < self._best:
+            self._best, self._best_at = value, self._seen
+
+    @property
+    def circling(self) -> bool:
+        """A full window mostly refused, and no better point found inside it."""
+        if len(self._window) < _PINNED_WINDOW:
+            return False
+        if sum(self._window) / len(self._window) < _PINNED_SHARE:
+            return False
+        return self._seen - self._best_at >= _PINNED_WINDOW
+
 
 #: How far the **shape** parameter may go, on the log scale it is estimated on.
 #:
@@ -1116,7 +1170,7 @@ class _Pooled:
         self._local = local
         self._workers = workers
         self.floor = floor
-        self.refusals = 0
+        self._pinned = _Pinned()
         self._started = time.perf_counter()
         self._reported = -np.inf
         self.total_weight = local.total_weight
@@ -1142,7 +1196,7 @@ class _Pooled:
             gradient = gradient + penalty_gradient
         self.evaluations += 1
         refused = _outside_the_domain(value, x, self.floor)
-        self.refusals = self.refusals + 1 if refused is not None else 0
+        self._pinned.saw(refused=refused is not None, value=value)
         elapsed = time.perf_counter() - self._started
         if refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS:
             self._reported = elapsed
@@ -1156,7 +1210,7 @@ class _Pooled:
             log.info(
                 "evaluation %d: objective %.12f%s at %.0fs", self.evaluations, value, why, elapsed
             )
-        _check_pinned(self.refusals, self.floor)
+        _check_pinned(self._pinned, self.floor)
         return refused or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
@@ -1233,7 +1287,7 @@ class _Objective:
             self._penalty = penalty
 
         self.evaluations = 0
-        self.refusals = 0
+        self._pinned = _Pinned()
         self._started = time.perf_counter()
         self._reported = -np.inf
 
@@ -1255,7 +1309,7 @@ class _Objective:
         self.evaluations += 1
         elapsed = time.perf_counter() - self._started
         refused = _outside_the_domain(value, x, self.floor)
-        self.refusals = self.refusals + 1 if refused is not None else 0
+        self._pinned.saw(refused=refused is not None, value=value)
         if not self._pooled and (
             refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS
         ):
@@ -1280,7 +1334,7 @@ class _Objective:
                 elapsed,
             )
         if not self._pooled:
-            _check_pinned(self.refusals, self.floor)
+            _check_pinned(self._pinned, self.floor)
         return refused or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
@@ -1490,17 +1544,24 @@ def _outside_the_domain(
     return float("inf"), np.zeros_like(x)
 
 
-def _check_pinned(refusals: int, floor: float | None) -> None:
-    """Give up once the optimiser has been turned back this many times in a row."""
-    if refusals < _PINNED_REFUSALS:
-        return
+def _check_pinned(pinned: _Pinned, floor: float | None) -> None:
+    """Give up once the optimiser is pinned against the boundary, in a row or in a window."""
     where = "below the parent's optimum" if floor is not None else "outside the likelihood"
-    message = (
-        f"The optimiser has been refused {refusals} times in a row, every point {where}. The "
-        "maximum of the likelihood as lifelines computes it lies in the region it cannot "
-        "compute, so this specification cannot be fitted."
-    )
-    raise exceptions.ConvergenceError(message)
+    if pinned.refusals >= _PINNED_REFUSALS:
+        message = (
+            f"The optimiser has been refused {pinned.refusals} times in a row, every point "
+            f"{where}. The maximum of the likelihood as lifelines computes it lies in the region "
+            "it cannot compute, so this specification cannot be fitted."
+        )
+        raise exceptions.ConvergenceError(message)
+    if pinned.circling:
+        message = (
+            f"Of the last {_PINNED_WINDOW} evaluations at least "
+            f"{_PINNED_SHARE:.0%} were refused, every one {where}, and none of the rest "
+            "improved on the best point already found. The optimiser is circling a boundary it "
+            "cannot cross, so this specification cannot be fitted."
+        )
+        raise exceptions.ConvergenceError(message)
 
 
 def _possible(value: float) -> bool:
