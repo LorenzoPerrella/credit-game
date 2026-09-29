@@ -1544,6 +1544,18 @@ def _outside_the_domain(
     return float("inf"), np.zeros_like(x)
 
 
+class Pinned(exceptions.ConvergenceError):  # type: ignore[misc]  # lifelines is untyped
+    """The optimiser could not leave a boundary, so no starting point will help.
+
+    Told apart from every other way a fit fails to converge because the caller's remedy differs.
+    A warm start that diverges has failed *as a starting point* and a cold fit is the answer; an
+    optimiser pinned against the parent's optimum has found where lifelines' clipped region
+    begins, and that edge is a property of the surface. Starting somewhere else and walking back
+    to the same maximum costs another hour to meet the same edge, which the prepayment model paid
+    twice before this was told apart.
+    """
+
+
 def _check_pinned(pinned: _Pinned, floor: float | None) -> None:
     """Give up once the optimiser is pinned against the boundary, in a row or in a window."""
     where = "below the parent's optimum" if floor is not None else "outside the likelihood"
@@ -1553,7 +1565,7 @@ def _check_pinned(pinned: _Pinned, floor: float | None) -> None:
             f"{where}. The maximum of the likelihood as lifelines computes it lies in the region "
             "it cannot compute, so this specification cannot be fitted."
         )
-        raise exceptions.ConvergenceError(message)
+        raise Pinned(message)
     if pinned.circling:
         message = (
             f"Of the last {_PINNED_WINDOW} evaluations at least "
@@ -1561,7 +1573,7 @@ def _check_pinned(pinned: _Pinned, floor: float | None) -> None:
             "improved on the best point already found. The optimiser is circling a boundary it "
             "cannot cross, so this specification cannot be fitted."
         )
-        raise exceptions.ConvergenceError(message)
+        raise Pinned(message)
 
 
 def _possible(value: float) -> bool:

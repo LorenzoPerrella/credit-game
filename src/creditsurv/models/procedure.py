@@ -54,7 +54,7 @@ from creditsurv.data.panel import DEFAULT_CAUSE, WEIGHT, CellBlocks
 from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
 from creditsurv.explore import collinear_pairs
 from creditsurv.models.aft import FitResult, fit_aft, fit_streamed
-from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS
+from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, Pinned
 from creditsurv.models.selection import (
     EXPECTED_SIGNS,
     PVALUE_THRESHOLD,
@@ -265,13 +265,21 @@ class Fits:
 
         A warm start is an optimisation, not part of any rule here: it is what turns a
         45-minute cold fit into 13 minutes by beginning at the nearest model's coefficients.
-        When it fails, it fails as a *starting point* -- the prepayment model's backward
+        When it fails, it usually fails as a *starting point* -- the prepayment model's backward
         elimination walked six damped Newton steps from 144 standard errors out to 3.86e+03,
         with damping at 1e+12, and then SLSQP diverged -- so the answer is to start where
         lifelines would have started and pay for it, not to give up on the model.
+
+        :class:`~creditsurv.models.blocks.Pinned` is the exception, and it is not about the
+        start. An optimiser held against the parent's optimum has found where lifelines' clipped
+        region begins; a cold fit walks back to the same maximum and meets the same edge, for
+        another hour. It is raised through.
         """
         try:
             return self._once(spec, where=where, parity=parity, start=start, floor=floor)
+        except Pinned:
+            # Not a bad starting point but the shape of the surface: see blocks.Pinned.
+            raise
         except exceptions.ConvergenceError:
             if start is None:
                 raise

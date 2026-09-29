@@ -1000,3 +1000,42 @@ def test_the_allowance_stays_inside_the_edge_of_the_clipped_region() -> None:
     # And inside the edge: every probe from that run's clipped ground is still refused.
     for probe in (0.071717178645, 0.071717109308, 0.071717083355, 0.069535115476):
         assert probe < floor, f"{(-loglik / weight - probe) * weight:,.1f} units better, refused"
+
+
+def test_a_pinned_optimiser_is_not_refitted_cold() -> None:
+    """A warm start that diverges is refitted cold; an optimiser pinned against the floor is not.
+
+    The two failures ask for different remedies. A bad starting point is answered by starting
+    where lifelines would have -- that is what the retry is for, and it turned a diverging warm
+    start into a fit more than once. Being pinned is a statement about the surface: the optimiser
+    has found where lifelines' clipped region begins, directly below the parent's optimum, and a
+    cold fit walks back to the same maximum and meets the same edge. The prepayment model paid
+    that second hour twice before the two were told apart.
+    """
+    from lifelines import exceptions
+
+    from creditsurv.models.blocks import Pinned
+
+    spec = Specification(continuous=("credit_score",))
+    parent = cast("FitResult", SimpleNamespace(fitter=SimpleNamespace(params_=None)))
+    attempts: list[object] = []
+
+    def once(fits: Fits, failure: Exception) -> None:
+        def attempt(_spec: object, **kwargs: object) -> FitResult:
+            attempts.append(kwargs["start"])
+            raise failure
+
+        fits._once = attempt  # type: ignore[assignment]
+
+    fits = Fits(None, identity="x", as_of="2021-12", moratorium="exclude")
+
+    once(fits, exceptions.ConvergenceError("diverged"))
+    with pytest.raises(exceptions.ConvergenceError):
+        fits._estimate(spec, where=None, parity=None, start=parent)
+    assert attempts == [parent, None], "the warm start is retried cold"
+
+    attempts.clear()
+    once(fits, Pinned("circling a boundary"))
+    with pytest.raises(Pinned):
+        fits._estimate(spec, where=None, parity=None, start=parent)
+    assert attempts == [parent], "being pinned is not a starting point's fault"
