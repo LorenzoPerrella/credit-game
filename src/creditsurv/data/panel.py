@@ -553,6 +553,17 @@ MAX_AGE_MONTHS: Final = 360
 _EPOCH_MONTHS: Final = 1970 * 12
 
 
+def month_ordinal(period: pd.Period) -> int:
+    """One monthly period as months since year zero: the inverse of :func:`_months_to_periods`.
+
+    The cell key stores `origination_month` on this scale precisely so a loan age can be
+    added to a calendar month, and every caller that needs to cut the table at a reporting
+    date has to say the same thing. It was said in nine places, once as a closure and eight
+    times inline, which is eight chances for one of them to be off by a month.
+    """
+    return int(period.year) * 12 + int(period.month) - 1
+
+
 def _months_to_periods(months: pd.Series) -> pd.PeriodIndex:
     """Month ordinals since year zero, back to a monthly PeriodIndex.
 

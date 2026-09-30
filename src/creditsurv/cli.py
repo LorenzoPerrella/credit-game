@@ -627,7 +627,13 @@ def windows(
     from creditsurv.backtest.metrics import grade_backtest
     from creditsurv.backtest.runner import ACCEPTANCE, backtest_windows, predicted_hazard, score
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import WEIGHT, CellBlocks, cells_to_episodes, ended_in
+    from creditsurv.data.panel import (
+        WEIGHT,
+        CellBlocks,
+        cells_to_episodes,
+        ended_in,
+        month_ordinal,
+    )
     from creditsurv.data.store import cells_path, fit_fingerprint, load_cells_window, save_fit
     from creditsurv.models.aft import fit_streamed
     from creditsurv.models.anchoring import ANCHOR_WINDOW, anchor_on_window
@@ -641,9 +647,6 @@ def windows(
     first, last = ANCHOR_WINDOW if not anchor_window else anchor_window.split(",", 1)
     declared = backtest_windows() if not cuts else backtest_windows(cuts.split(","))
 
-    def ordinal(period: pd.Period) -> int:
-        return int(period.year) * 12 + int(period.month) - 1
-
     def fitted_to(cut: pd.Period, start: FitResult | None) -> FitResult:
         """The model estimated on everything up to ``cut``, read from the cell file."""
         source = CellBlocks(
@@ -651,7 +654,7 @@ def windows(
             macro,
             tuple(covariates),
             rows=block_rows,
-            months=(None, ordinal(cut)),
+            months=(None, month_ordinal(cut)),
         ).prepared()
         result = fit_streamed(
             source,
@@ -702,7 +705,7 @@ def windows(
         typer.echo(f"\nWindow {cut} to {until}: fitting on everything up to the cut...")
         model = fitted_to(cut, previous)
         previous = model
-        window = scored(ordinal(cut) + 1, ordinal(until), f"{cut} to {until}")
+        window = scored(month_ordinal(cut) + 1, month_ordinal(until), f"{cut} to {until}")
         result = score(model, window, covariates, as_of=cut)
         summary = result.summary()
         rows.append(
@@ -731,8 +734,8 @@ def windows(
     #    the coefficients have already seen, and not the test window, which would be marking
     #    its own homework.
     anchoring = scored(
-        ordinal(pd.Period(first, freq="M")),
-        ordinal(pd.Period(last, freq="M")),
+        month_ordinal(pd.Period(first, freq="M")),
+        month_ordinal(pd.Period(last, freq="M")),
         f"the anchoring window {first} to {last}",
     )
     anchor = anchor_on_window(
@@ -746,7 +749,7 @@ def windows(
     del anchoring
 
     # 4. The test window, scored twice: the same ranking at two levels.
-    test = scored(ordinal(pd.Period(last, freq="M")) + 1, None, f"the months after {last}")
+    test = scored(month_ordinal(pd.Period(last, freq="M")) + 1, None, f"the months after {last}")
     unanchored = score(development, test, covariates, as_of=development_cut)
     exposure = test[WEIGHT].astype(float)
     events = exposure * ended_in(test)
@@ -773,8 +776,10 @@ def windows(
     typer.echo("\nThe cycle, year by year in sample...")
     years: list[dict[str, object]] = []
     for year in range(int(macro.index.min().year), development_cut.year + 1):
-        opens = ordinal(pd.Period(f"{year}-01", freq="M"))
-        closes = min(ordinal(pd.Period(f"{year}-12", freq="M")), ordinal(development_cut))
+        opens = month_ordinal(pd.Period(f"{year}-01", freq="M"))
+        closes = min(
+            month_ordinal(pd.Period(f"{year}-12", freq="M")), month_ordinal(development_cut)
+        )
         rows_of_year = episodes(opens, closes)
         if rows_of_year is None:
             continue
@@ -836,7 +841,12 @@ def family(
     import pandas as pd
 
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import PREPAYMENT_CAUSE, WEIGHT, CellBlocks
+    from creditsurv.data.panel import (
+        PREPAYMENT_CAUSE,
+        WEIGHT,
+        CellBlocks,
+        month_ordinal,
+    )
     from creditsurv.data.store import cells_identity, cells_path, outcomes_by_age
     from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
     from creditsurv.models.nonparametric import (
@@ -854,7 +864,7 @@ def family(
     macro = load_macro_panel()
     identity = cells_identity(moratorium)
     reporting_date = pd.Period(as_of, freq="M")
-    cut = reporting_date.year * 12 + reporting_date.month - 1
+    cut = month_ordinal(reporting_date)
 
     def record(distribution: str, cause: str = DEFAULT_CAUSE) -> dict[str, object] | None:
         """One selection's record, read from the JSON it wrote beside its report."""
@@ -1125,6 +1135,7 @@ def views(
         CellBlocks,
         cells_to_episodes,
         ended_in,
+        month_ordinal,
     )
     from creditsurv.data.store import (
         cells_path,
@@ -1183,7 +1194,7 @@ def views(
         typer.echo(f"Scoring with fit {fingerprint} ({described.get('rows'):,} cells)...")
 
         macro = load_macro_panel()
-        cut = reporting_date.year * 12 + reporting_date.month - 1
+        cut = month_ordinal(reporting_date)
         source = CellBlocks(
             str(cells_path(moratorium)),
             macro,
@@ -1332,7 +1343,7 @@ def select(
 
     from creditsurv.config import MACRO_CANDIDATES
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import WEIGHT, CellBlocks
+    from creditsurv.data.panel import WEIGHT, CellBlocks, month_ordinal
     from creditsurv.data.store import cells_identity, cells_path
     from creditsurv.models.procedure import (
         BASE_CATEGORICAL,
@@ -1362,7 +1373,7 @@ def select(
     # specification the two ways agrees to 9.4e-07 standard errors, at 4.7 GB against 15.
     #
     # Nothing of the test half is read either way: the window stops at the reporting date.
-    cut = reporting_date.year * 12 + reporting_date.month - 1
+    cut = month_ordinal(reporting_date)
     source = CellBlocks(
         str(cells_path(moratorium)),
         load_macro_panel(),
@@ -1503,7 +1514,7 @@ def _fit_streamed(
     import pandas as pd
 
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import WEIGHT, CellBlocks
+    from creditsurv.data.panel import WEIGHT, CellBlocks, month_ordinal
     from creditsurv.data.store import cells_path, fit_fingerprint, save_fit
     from creditsurv.models.aft import fit_streamed
 
@@ -1511,7 +1522,7 @@ def _fit_streamed(
     cut = None
     if as_of:
         reporting_date = pd.Period(as_of, freq="M")
-        cut = reporting_date.year * 12 + reporting_date.month - 1
+        cut = month_ordinal(reporting_date)
     source = CellBlocks(
         str(cells_path(moratorium)),
         load_macro_panel(),

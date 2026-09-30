@@ -400,3 +400,27 @@ def test_blocks_of_a_selection_are_the_selected_rows() -> None:
 
     expected = model_frame(panel[selected], ["covariate"]).assign(loan_months=1.0)
     pd.testing.assert_frame_equal(pd.concat(blocks), expected)
+
+
+def test_a_month_ordinal_is_the_inverse_of_reading_one_back() -> None:
+    """The scale the cell key stores a calendar month on, so a loan age can be added to it.
+
+    It was written nine times -- once as a closure inside `windows` and eight times inline as
+    `period.year * 12 + period.month - 1` -- which is eight chances for one of them to be a
+    month out, and a month out on the development cut leaks the test window into the
+    estimation sample. One function, and the round trip through `_months_to_periods` holds it.
+    """
+    from creditsurv.data.panel import _months_to_periods, month_ordinal
+
+    periods = pd.period_range("1999-01", "2026-06", freq="M")
+    ordinals = pd.Series([month_ordinal(period) for period in periods])
+
+    pd.testing.assert_index_equal(_months_to_periods(ordinals), pd.PeriodIndex(periods))
+    # Consecutive months are consecutive ordinals, which is the property the key relies on.
+    assert (ordinals.diff().dropna() == 1).all()
+    # And the vectorised spelling in `features` agrees with it, term by term.
+    from creditsurv.features import _month_ordinal
+
+    pd.testing.assert_series_equal(
+        _month_ordinal(pd.Series(periods)), ordinals, check_names=False, check_dtype=False
+    )

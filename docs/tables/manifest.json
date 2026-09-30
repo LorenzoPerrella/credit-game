@@ -152,7 +152,7 @@
       "cpr"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "coefficients": {
     "title": "Coefficients",
@@ -225,7 +225,7 @@
       "amount_share"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "macro_series": {
     "title": "Macroeconomic series",
@@ -238,7 +238,7 @@
       "value"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "scenarios_by_segment": {
     "title": "Scenarios by segment",
@@ -268,7 +268,7 @@
       "correlation"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "selection_correlation": {
     "title": "Selection: correlation",
@@ -281,7 +281,7 @@
       "correlation"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "selection_elimination": {
     "title": "Selection: elimination",
@@ -297,7 +297,7 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "selection_fits": {
     "title": "Selection: fits",
@@ -318,7 +318,7 @@
       "cached"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "selection_inflation": {
     "title": "Selection: inflation",
@@ -332,7 +332,7 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "selection_materiality": {
     "title": "Selection: materiality",
@@ -347,7 +347,7 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "selection_screening": {
     "title": "Selection: screening",
@@ -367,7 +367,7 @@
       "lr_statistic"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "selection_stability": {
     "title": "Selection: stability",
@@ -384,7 +384,7 @@
       "round"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "term_structure_by_segment": {
     "title": "PD term structure by segment",
@@ -416,7 +416,7 @@
       "q75"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   },
   "vintage_curves": {
     "title": "Cumulative default by vintage",
@@ -434,6 +434,6 @@
       "cumulative_default_pct"
     ],
     "fit": null,
-    "generated": "2026-09-30 06:12 UTC"
+    "generated": "2026-09-30 17:04 UTC"
   }
 }

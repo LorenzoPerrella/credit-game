@@ -24,6 +24,7 @@ from creditsurv.data.panel import (
     WEIGHT,
     cells_to_episodes,
     episode_step,
+    month_ordinal,
     observation_months,
     validate_episodes,
 )
@@ -124,12 +125,12 @@ def split_cells(
     by its origination month and its age, so dividing the cells first gives the same
     halves -- which a test holds to the row -- and each half is expanded on its own.
     """
-    cut = as_of.year * 12 + as_of.month - 1
+    cut = month_ordinal(as_of)
     months = observation_months(cells).to_numpy()
     before = months <= cut
     after = ~before
     if until is not None:
-        after &= months <= until.year * 12 + until.month - 1
+        after &= months <= month_ordinal(until)
     if not before.any():
         message = f"No exposure at or before {as_of}."
         raise ValueError(message)
