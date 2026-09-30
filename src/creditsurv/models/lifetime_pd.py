@@ -370,7 +370,6 @@ ADVERSE = Scenario(
     shocks={
         "unemployment_rate": [*np.linspace(0.0, 4.0, 12), *([4.0] * 24)],
         "house_price_index": [*np.linspace(0.0, -0.20, 24), *([-0.20] * 12)],
-        "consumer_price_index": [*np.linspace(0.0, -0.02, 12), *([-0.02] * 24)],
         "financial_conditions_index": [
             *np.linspace(0.0, 3.4, 16),
             *np.linspace(3.4, 0.0, 12),
@@ -379,14 +378,26 @@ ADVERSE = Scenario(
         "fed_funds_rate": [*np.linspace(0.0, -0.95, 30), *([-0.95] * 6)],
         "consumer_sentiment_index": [*np.linspace(0.0, -0.39, 16), *([-0.39] * 20)],
         "housing_starts": [*np.linspace(0.0, -0.65, 21), *([-0.65] * 15)],
+        # The four the prepayment hazard reads and the curve the default one does. Each is the
+        # 2008-09 move, which is where every path above is calibrated: the 10y-2y went from flat
+        # to +2.7 points as the front end was cut to zero, the 30-year mortgage rate fell about
+        # 1.5 points with Treasuries though spreads widened, the Nasdaq lost 45% and the VIX
+        # trebled. Taken a little short of each, and held rather than recovered.
+        "treasury_10y_2y_spread": [*np.linspace(0.0, 1.5, 18), *([1.5] * 18)],
+        "mortgage_rate_30y": [*np.linspace(0.0, -1.2, 18), *([-1.2] * 18)],
+        "mortgage_rate_15y": [*np.linspace(0.0, -1.0, 18), *([-1.0] * 18)],
+        "nasdaq_composite": [*np.linspace(0.0, -0.40, 12), *([-0.40] * 24)],
+        "vix_index": [*np.linspace(0.0, 1.5, 6), *np.linspace(1.5, 0.3, 18), *([0.3] * 12)],
     },
     proportional=frozenset(
         {
             "house_price_index",
-            "consumer_price_index",
             "fed_funds_rate",
             "consumer_sentiment_index",
             "housing_starts",
+            # A spread and two rates are already in percentage points; an index is not.
+            "nasdaq_composite",
+            "vix_index",
         }
     ),
 )

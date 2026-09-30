@@ -350,6 +350,37 @@ def test_the_configuration_is_what_the_last_selection_chose() -> None:
     assert summary.get("distribution", DISTRIBUTION) == DISTRIBUTION
 
 
+def test_the_prepayment_macro_block_is_what_its_own_selection_chose() -> None:
+    """The same tie as above, for the covariates a stress scenario has to move.
+
+    Only the macro block of the prepayment model is copied into the configuration, because the
+    scenario is its only consumer -- everything else reads the fit's own formula. A copy with
+    nothing holding it to the record is how the adverse path came to promise a volatility spike
+    to a model that no longer read volatility, so this is that holding.
+    """
+    from creditsurv.config import (
+        PREPAYMENT_TIME_VARYING_CONTINUOUS,
+        STRESSED_COVARIATES,
+        TIME_VARYING_CONTINUOUS,
+        reports_dir,
+    )
+    from creditsurv.reporting.selection import record_name
+
+    path = reports_dir() / f"{record_name(distribution='weibull', cause='prepayment')}.json"
+    if not path.exists():
+        pytest.skip("no prepayment selection has been run on the whole population yet")
+    summary = json.loads(path.read_text())
+
+    assert list(PREPAYMENT_TIME_VARYING_CONTINUOUS) == summary["time_varying_continuous"]
+    assert summary["cause"] == "prepayment"
+
+    # And the stressed set is the union of the two, in order, with no covariate counted twice.
+    assert set(STRESSED_COVARIATES) == set(TIME_VARYING_CONTINUOUS) | set(
+        PREPAYMENT_TIME_VARYING_CONTINUOUS
+    )
+    assert len(STRESSED_COVARIATES) == len(set(STRESSED_COVARIATES))
+
+
 def test_an_extra_fit_is_estimated_once_and_read_back_after(
     train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

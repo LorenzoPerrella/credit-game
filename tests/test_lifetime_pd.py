@@ -219,12 +219,12 @@ def test_lifelines_conditional_after_matches_the_survival_ratio(
 def test_the_scenario_legs_say_what_moves_and_what_reads_it() -> None:
     """The calibration report described the adverse path in prose, and the prose outlived
     the path. A table built from the scenario cannot describe a different one."""
-    from creditsurv.config import TIME_VARYING_CONTINUOUS
+    from creditsurv.config import STRESSED_COVARIATES
     from creditsurv.features import MACRO_SOURCES
     from creditsurv.models.lifetime_pd import scenario_legs
 
     legs = scenario_legs(
-        ADVERSE, {name: MACRO_SOURCES[name] for name in TIME_VARYING_CONTINUOUS}
+        ADVERSE, {name: MACRO_SOURCES[name] for name in STRESSED_COVARIATES}
     ).set_index("series")
 
     assert set(legs.index) == set(ADVERSE.shocks)

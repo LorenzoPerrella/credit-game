@@ -304,6 +304,41 @@ TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
     "housing_starts_growth",
 )
 
+#: The macro block of the **prepayment** model, as `creditsurv select --cause prepayment`
+#: chose it -- `docs/reports/selection_weibull_prepayment.json`.
+#:
+#: Only the macro block, and for one consumer: a stress scenario has to move every covariate a
+#: published hazard reads, and the lifetime PD now chains two of them. Everything else about the
+#: prepayment model is read from the fit's own formula, so copying it here would be duplication
+#: with nothing to keep it honest; this much is tied to the record by a test.
+#:
+#: What it says about a refinancing is what one would hope: `mortgage_rate_decline` at -0.198 per
+#: standard deviation and `equity_volatility` at -0.215 are its largest effects, while the
+#: general-cycle covariates -- inflation, its change, volatility change, sentiment -- were
+#: eliminated for turning their signs.
+PREPAYMENT_TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
+    "unemployment_change",
+    "financial_conditions",
+    "mortgage_rate_decline",
+    "house_price_growth",
+    "policy_rate_change",
+    "equity_return",
+    "equity_volatility",
+    "housing_starts_growth",
+)
+
+#: Every macro covariate a published hazard reads, in one tuple: what a stress scenario has to
+#: move, and nothing it moves may fall outside.
+#:
+#: The validation's finding was a scenario that shocked four series of which two fed no covariate,
+#: while two covariates had no shocked path -- the published multiplier understated the model's own
+#: sensitivity and nothing failed. With a competing risk there are two ways to make that mistake
+#: now, so the set is derived rather than written: `tests/test_scenarios.py` holds the adverse path
+#: to it in both directions.
+STRESSED_COVARIATES: Final[tuple[str, ...]] = tuple(
+    dict.fromkeys((*TIME_VARYING_CONTINUOUS, *PREPAYMENT_TIME_VARYING_CONTINUOUS))
+)
+
 #: Every macro-derived covariate available, including the ones the default model does
 #: not use. This is the set variable selection runs on; ``TIME_VARYING_CONTINUOUS``
 #: holds what survived it.

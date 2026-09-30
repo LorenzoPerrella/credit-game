@@ -1,4 +1,4 @@
-"""The stress scenario and the fitted specification have to describe the same model.
+"""The stress scenario and the fitted specifications have to describe the same model.
 
 The validation found the adverse scenario shocking four series of which two fed no covariate in the
 final formula, while two of the model's four macro covariates -- ``equity_volatility``, the largest
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import pytest
 
-from creditsurv.config import TIME_VARYING_CONTINUOUS
+from creditsurv.config import STRESSED_COVARIATES
 from creditsurv.features import MACRO_DERIVED, MACRO_SOURCES, add_macro_family
 from creditsurv.models.lifetime_pd import ADVERSE
 
@@ -25,8 +25,13 @@ if TYPE_CHECKING:
 
 
 def test_every_shocked_series_feeds_a_covariate_the_model_reads() -> None:
-    """A shock with no path to the model moves nothing and reads as a stress."""
-    read = {source for name in TIME_VARYING_CONTINUOUS for source in MACRO_SOURCES[name]}
+    """A shock with no path to the model moves nothing and reads as a stress.
+
+    Against both hazards, because the lifetime PD chains two: a default model that no longer
+    reads inflation left the CPI shock inert, and the prepayment model is the only reader of
+    financial conditions. One set, so neither can drift alone.
+    """
+    read = {source for name in STRESSED_COVARIATES for source in MACRO_SOURCES[name]}
     inert = set(ADVERSE.shocks) - read
 
     assert not inert, f"the scenario shocks {sorted(inert)}, which no fitted covariate reads"
@@ -36,9 +41,7 @@ def test_every_macro_covariate_the_model_reads_is_moved_by_the_scenario() -> Non
     """A fitted covariate with no shocked source holds still under stress, which
     understates the model's sensitivity without any sign that it has."""
     unmoved = [
-        name
-        for name in TIME_VARYING_CONTINUOUS
-        if not set(MACRO_SOURCES[name]) & set(ADVERSE.shocks)
+        name for name in STRESSED_COVARIATES if not set(MACRO_SOURCES[name]) & set(ADVERSE.shocks)
     ]
 
     assert not unmoved, f"{unmoved} have no shocked source, so the scenario cannot move them"
