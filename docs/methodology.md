@@ -95,6 +95,16 @@ originated in even and in odd years, round by round.
 
 <!-- figure: selection_stability -->
 
+**Materiality**: a macro covariate whose effect is real and too small to carry. Every p-value on
+this book is 0.0000, so the test is the effect itself -- one standard deviation moving log
+survival time by less than 0.02, the threshold [rule 3](rules.md) fixed before any fit.
+
+<!-- table: selection_materiality -->
+
+No pair of continuous candidates was correlated beyond 0.8 in the end:
+<!-- value: selection.collinear --> such pairs, which is why the collinear table is empty and
+the variance inflation step above had the work to do.
+
 ??? info "What `nmds` would have done differently"
     It too would have removed *equity volatility* (`equity_volatility`) and *volatility change since origination* (`volatility_change`) on their signs. It would have kept
     *mortgage rate fall since origination* (`mortgage_rate_decline`), *inflation* (`inflation_rate`) and *equity return* (`equity_return`), which have no declared prior and meet no rule

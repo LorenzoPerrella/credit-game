@@ -175,13 +175,33 @@ def inflation(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     )
 
 
+def materiality(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+    """Step 10: macro covariates whose effect is real and too small to keep.
+
+    An effect, not a p-value, because every p-value on this book is 0.0000 -- the threshold is
+    0.02 of log survival time per standard deviation, declared in rule 3 before any fit.
+    """
+    table = views["selection_materiality"]
+    return pd.DataFrame(
+        {
+            "Step": table["step"],
+            "Removed": table["removed"].map(names.label),
+            "Effect of one sd": table["effect_1sd"].map("{:+.4f}".format),
+            "Threshold": table["threshold"].map("{:.2f}".format),
+            "Covariates left": table["remaining"],
+        }
+    )
+
+
 def adverse_legs(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     """Built from the scenario itself, so the table cannot describe a path the model never saw."""
-    from creditsurv.config import TIME_VARYING_CONTINUOUS
+    from creditsurv.config import STRESSED_COVARIATES
     from creditsurv.features import MACRO_SOURCES
     from creditsurv.models.lifetime_pd import ADVERSE, scenario_legs
 
-    legs = scenario_legs(ADVERSE, {name: MACRO_SOURCES[name] for name in TIME_VARYING_CONTINUOUS})
+    # Both hazards, not the default model's alone: the lifetime PD chains two, and a table that
+    # named only one would report five of the scenario's shocks as read by nothing.
+    legs = scenario_legs(ADVERSE, {name: MACRO_SOURCES[name] for name in STRESSED_COVARIATES})
     return names.readable(legs)
 
 
@@ -216,6 +236,7 @@ TABLES: Final[dict[str, Table]] = registry(
     Table("coefficients", ("coefficients",), coefficient_table),
     Table("selection_elimination", ("selection_elimination",), elimination),
     Table("selection_inflation", ("selection_inflation",), inflation),
+    Table("selection_materiality", ("selection_materiality",), materiality),
     Table("adverse_legs", (), adverse_legs),
     Table("variables_loan", (), _glossary(names.Kind.LOAN)),
     Table("variables_macro", (), _glossary(names.Kind.MACRO)),
@@ -300,6 +321,26 @@ VALUES: Final[dict[str, Value]] = registry(
     Value("views.fit", (), _fit),
     Value("views.generated", (), _generated),
     Value("figures.floor", (), lambda _: _count(figures.EXPOSURE_FLOOR)),
+    Value(
+        "selection.collinear",
+        ("selection_collinear",),
+        lambda s: _count(len(s["selection_collinear"])),
+    ),
+    Value(
+        "selection.fits",
+        ("selection_fits",),
+        lambda s: _count(len(s["selection_fits"])),
+    ),
+    Value(
+        "selection.minutes",
+        ("selection_fits",),
+        lambda s: _count(round(s["selection_fits"]["minutes"].sum())),
+    ),
+    Value(
+        "selection.cached",
+        ("selection_fits",),
+        lambda s: _count(int(s["selection_fits"]["cached"].sum())),
+    ),
     Value("model.rho", ("coefficients",), lambda s: f"{math.exp(_shape(s)['coef']):.4f}"),
     Value("model.rho_z", ("coefficients",), lambda s: _count(_shape(s)["coef"] / _shape(s)["se"])),
     Value(

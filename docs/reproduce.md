@@ -70,6 +70,14 @@ The out-of-time ratio is <!-- value: backtest.ae -->.
 
 A placeholder that names nothing, or a view the manifest does not list, fails the build.
 
+## What a selection costs
+
+The record the last selection wrote counts its own work: <!-- value: selection.fits --> fits,
+<!-- value: selection.minutes --> minutes of them, of which <!-- value: selection.cached --> came
+back from the cache rather than being estimated again. Every fit is saved the moment it succeeds,
+so a run that is interrupted resumes at the fit it was on, and a fit whose specification and rows
+are unchanged is never paid for twice.
+
 ## Constraints worth knowing before a long run
 
 !!! danger "Irreversible"
