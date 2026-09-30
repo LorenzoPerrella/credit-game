@@ -104,18 +104,28 @@ originated in even and in odd years, round by round.
 
 ## The distribution family
 
-<!-- figure: families_vs_km -->
+**The Weibull**, chosen by rule 2 of [the rules](rules.md) and applied by `creditsurv family`.
+Both families went through their own selection -- not one specification fitted twice, because
+every rule of steps 8 and 9 reads the family's own coefficients -- and the two selected models
+were then measured against the **Aalen-Johansen** cumulative incidence of default, which
+accounts for prepayment as a competing risk, over the 222 loan ages carrying at least the
+exposure floor:
 
-The Weibull and the log-logistic, each fitted to the same specification on the same
-episodes, chained along the loans' realised covariate paths, against Kaplan-Meier with its
-Greenwood band. The band is a hundredth of a percentage point wide on 48 million loans, so
-every smooth curve lies outside it: what carries information is the size of the gap.
+| Family | Mean absolute gap | Worst |
+|---|---|---|
+| Weibull | 0.1027 pp | 0.1607 pp |
+| Log-logistic | 0.1498 pp | 0.2531 pp |
 
-On the selected specification the log-logistic has the better likelihood and sits slightly
-closer to Kaplan-Meier, but turns *financial conditions* (`financial_conditions`) against its declared prior. **The Weibull is kept for now**: changing the
-family is a new selection, not a swap, because every rule in steps 8 and 9 reads the
-family's coefficients; the gain against Kaplan-Meier is small; and the log-logistic's
-falling hazard at long ages is an extrapolation choice that should be made for its own sake.
+Neither turns a declared sign, so neither is excluded, and the 0.047 pp between them is inside
+the 0.1 pp tie the rule declared -- where the Weibull is kept because its hazard does not fall
+at long ages, which is where the data ends and the extrapolation begins. It is also the closer
+of the two, so the tie-break decides nothing here.
+
+The likelihood is deliberately not the criterion, and not because it was inconvenient: it
+changed its mind between two specifications of this same model, by 623,126 AIC points one way
+and 83,961 the other. AIC on 72 million episodes measures fit where the data is dense -- the
+first few years -- which is not where a lifetime PD spends its time. The age-by-age gap is in
+[the family record](reports/family.md).
 The reasoning, with the numbers, is in [variable
 selection](variable_selection.md#the-distribution-family-and-why-the-weibull-was-kept-against-a-better-likelihood).
 

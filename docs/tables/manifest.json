@@ -1,7 +1,7 @@
 {
   "acceptance_by_segment": {
     "title": "Acceptance criteria by segment",
-    "description": "Actual over expected 0.80 to 1.25 overall and in every decile, Gini above 0.45, for every group. On the months after 2024-12, which the model never saw.",
+    "description": "Actual over expected 0.80 to 1.25 overall and in every decile, Gini above 0.45, for every group. On the months after 2021-12, which the model never saw.",
     "source": "fit",
     "rows": 31,
     "columns": [
@@ -18,14 +18,14 @@
       "gini_passed",
       "deciles_passed"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "ae_by_age_band": {
     "title": "Actual against expected by loan age",
     "description": "Defaults against expectation by seasoning band. On the training half, the data the model was fitted to.",
     "source": "fit",
-    "rows": 210,
+    "rows": 207,
     "columns": [
       "segment",
       "group",
@@ -37,12 +37,12 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "ae_by_decile": {
     "title": "Actual against expected by decile of predicted risk",
-    "description": "Deciles of the whole training half's exposure. On the training half, the data the model was fitted to.",
+    "description": "Deciles of the whole training half's exposure, cut on the hazards of every loan-month up to 2021-12. On the training half, the data the model was fitted to.",
     "source": "fit",
     "rows": 310,
     "columns": [
@@ -56,14 +56,14 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "ae_by_vintage": {
     "title": "Actual against expected by vintage year",
     "description": "Defaults against expectation by year of origination. On the training half, the data the model was fitted to.",
     "source": "fit",
-    "rows": 726,
+    "rows": 645,
     "columns": [
       "segment",
       "group",
@@ -75,14 +75,14 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "ae_by_year": {
     "title": "Actual against expected by calendar year",
     "description": "Defaults against the model's expectation, year of observation by segment. On the training half, the data the model was fitted to.",
     "source": "fit",
-    "rows": 754,
+    "rows": 661,
     "columns": [
       "segment",
       "group",
@@ -94,14 +94,14 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "backtest_by_decile": {
     "title": "Backtest by decile of predicted risk",
-    "description": "Deciles of the test window's exposure. On the months after 2024-12, which the model never saw.",
+    "description": "Deciles of the test window's exposure. On the months after 2021-12, which the model never saw.",
     "source": "fit",
-    "rows": 308,
+    "rows": 309,
     "columns": [
       "segment",
       "group",
@@ -113,14 +113,14 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "backtest_by_month": {
     "title": "Backtest by month",
-    "description": "Defaults against expectation by month of observation. On the months after 2024-12, which the model never saw.",
+    "description": "Defaults against expectation by month of observation. On the months after 2021-12, which the model never saw.",
     "source": "fit",
-    "rows": 465,
+    "rows": 1581,
     "columns": [
       "segment",
       "group",
@@ -132,8 +132,8 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "book_by_segment": {
     "title": "The book by month and segment",
@@ -152,7 +152,7 @@
       "cpr"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   },
   "coefficients": {
     "title": "Coefficients",
@@ -171,50 +171,27 @@
       "one_sd",
       "effect_1sd"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "covariates_over_time": {
     "title": "Macro covariates over time",
-    "description": "The exposure-weighted mean of each time-varying covariate across the loans observed in each month, training half and test window together.",
+    "description": "The exposure-weighted mean of each time-varying covariate across the loans observed in each month, up to the reporting date.",
     "source": "fit",
-    "rows": 2289,
+    "rows": 1656,
     "columns": [
       "month",
       "covariate",
       "mean"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
-  },
-  "families_vs_km": {
-    "title": "Distribution families against Kaplan-Meier",
-    "description": "Each family's fit of the same specification, chained along the realised covariate paths. On the training half, the data the model was fitted to.",
-    "source": "fit",
-    "rows": 624,
-    "columns": [
-      "group",
-      "age",
-      "at_risk",
-      "defaults",
-      "observed_hazard",
-      "km_survival",
-      "km_lower",
-      "km_upper",
-      "expected",
-      "predicted_hazard",
-      "predicted_survival",
-      "deviation",
-      "distribution"
-    ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "km_vs_model": {
     "title": "Kaplan-Meier against the model, by segment",
     "description": "Survival by loan age, observed and predicted along each loan's realised covariate path, with the Greenwood band. On the training half, the data the model was fitted to.",
     "source": "fit",
-    "rows": 8943,
+    "rows": 7852,
     "columns": [
       "segment",
       "group",
@@ -230,8 +207,8 @@
       "predicted_survival",
       "deviation"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "lending_by_segment": {
     "title": "Lending by vintage year and segment",
@@ -248,11 +225,11 @@
       "amount_share"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   },
   "macro_series": {
     "title": "Macroeconomic series",
-    "description": "The monthly FRED series every macro covariate is built from, before lags.",
+    "description": "The monthly FRED series every macro covariate is built from, before any lag.",
     "source": "fred",
     "rows": 4956,
     "columns": [
@@ -261,13 +238,13 @@
       "value"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   },
   "scenarios_by_segment": {
     "title": "Scenarios by segment",
     "description": "Twelve-month PD, and lifetime PD over 36 months under the baseline and the adverse path, weighted by the lending each profile stands for.",
     "source": "fit",
-    "rows": 26,
+    "rows": 27,
     "columns": [
       "segment",
       "group",
@@ -277,21 +254,21 @@
       "lifetime_pd_adverse",
       "adverse_multiple"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "selection_collinear": {
     "title": "Selection: collinear",
     "description": "Pairs correlated beyond 0.8, reported and not resolved.",
     "source": "selection",
-    "rows": 1,
+    "rows": 0,
     "columns": [
       "first",
       "second",
       "correlation"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   },
   "selection_correlation": {
     "title": "Selection: correlation",
@@ -304,7 +281,7 @@
       "correlation"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   },
   "selection_elimination": {
     "title": "Selection: elimination",
@@ -320,7 +297,7 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   },
   "selection_fits": {
     "title": "Selection: fits",
@@ -341,7 +318,7 @@
       "cached"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   },
   "selection_inflation": {
     "title": "Selection: inflation",
@@ -355,7 +332,22 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
+  },
+  "selection_materiality": {
+    "title": "Selection: materiality",
+    "description": "Macro covariates removed at step 10 for an effect under 0.02 of log survival time per standard deviation, the threshold rule 3 declared before any fit.",
+    "source": "selection",
+    "rows": 2,
+    "columns": [
+      "step",
+      "removed",
+      "effect_1sd",
+      "threshold",
+      "remaining"
+    ],
+    "fit": null,
+    "generated": "2026-09-30 06:12 UTC"
   },
   "selection_screening": {
     "title": "Selection: screening",
@@ -375,13 +367,13 @@
       "lr_statistic"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   },
   "selection_stability": {
     "title": "Selection: stability",
     "description": "Standardised effects on the training half and on each half of the book.",
     "source": "selection",
-    "rows": 36,
+    "rows": 25,
     "columns": [
       "covariate",
       "dimension",
@@ -392,13 +384,13 @@
       "round"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   },
   "term_structure_by_segment": {
     "title": "PD term structure by segment",
     "description": "Cumulative and marginal PD over 60 months for the origination book dated to today, on the baseline path.",
     "source": "fit",
-    "rows": 1560,
+    "rows": 1620,
     "columns": [
       "segment",
       "group",
@@ -407,8 +399,8 @@
       "cumulative_pd",
       "marginal_pd"
     ],
-    "fit": "d7f4330a45e813ce",
-    "generated": "2026-09-17 13:33 UTC"
+    "fit": "a2468aaf023fe0ec",
+    "generated": "2026-09-30 05:08 UTC"
   },
   "underwriting_by_vintage": {
     "title": "Underwriting by vintage",
@@ -424,7 +416,7 @@
       "q75"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:42 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   },
   "vintage_curves": {
     "title": "Cumulative default by vintage",
@@ -442,6 +434,6 @@
       "cumulative_default_pct"
     ],
     "fit": null,
-    "generated": "2026-09-17 14:10 UTC"
+    "generated": "2026-09-30 06:12 UTC"
   }
 }
