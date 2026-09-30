@@ -194,7 +194,14 @@ def portfolio() -> None:
 
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.ingest import load_manifest
-    from creditsurv.data.panel import AGE, EVENT, WEIGHT, default_rate_by_observation_month
+    from creditsurv.data.panel import (
+        AGE,
+        EVENT,
+        OUTCOME,
+        WEIGHT,
+        default_rate_by_observation_month,
+        ended_in,
+    )
     from creditsurv.data.store import DEFAULT_POLICY, cells_path, load_cells
     from creditsurv.portfolio import (
         book_summary,
@@ -239,11 +246,15 @@ def portfolio() -> None:
 
     # Every number docs/portfolio.md quotes (S7). The modelled figures are the cells' own,
     # once the book has been aggregated, so they are the ones every report works from.
+    # The cell table records the three-state `outcome`, not the boolean these views read:
+    # `ended_in` is the one place that knows both spellings, and the views want defaults.
     cells = (
-        load_cells(DEFAULT_POLICY, columns=["origination_month", AGE, WEIGHT, EVENT])
+        load_cells(DEFAULT_POLICY, columns=["origination_month", AGE, WEIGHT, OUTCOME])
         if cells_path(DEFAULT_POLICY).exists()
         else None
     )
+    if cells is not None:
+        cells[EVENT] = ended_in(cells)
     performance_rows = sum(int(entry["perf"]) for entry in load_manifest().values())
     summary = book_summary(lending, outstanding, performance_rows=performance_rows, cells=cells)
     if cells is not None:
@@ -1106,7 +1117,15 @@ def views(
     from creditsurv.config import tables_dir
     from creditsurv.data.aggregate import MoratoriumPolicy
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import AGE, EVENT, WEIGHT, CellBlocks, cells_to_episodes
+    from creditsurv.data.panel import (
+        AGE,
+        EVENT,
+        OUTCOME,
+        WEIGHT,
+        CellBlocks,
+        cells_to_episodes,
+        ended_in,
+    )
     from creditsurv.data.store import (
         cells_path,
         find_fits,
@@ -1257,7 +1276,8 @@ def views(
 
     if portfolio:
         typer.echo("The book by segment, the lending, the vintage curves and the macro series...")
-        cells = load_cells(moratorium, columns=["origination_month", AGE, WEIGHT, EVENT])
+        cells = load_cells(moratorium, columns=["origination_month", AGE, WEIGHT, OUTCOME])
+        cells[EVENT] = ended_in(cells)
         write_views(
             portfolio_views(cells, load_macro_panel(), policy=MoratoriumPolicy(moratorium)),
             destination,

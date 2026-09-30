@@ -713,3 +713,25 @@ def test_the_views_command_scores_from_the_cell_file(
     assert len({entry["fit"] for entry in manifest.values() if entry["fit"]}) == 1
     curves = load_view("km_vs_model", tmp_path / "tables")
     assert {"segment", "group", "age", "km_survival", "predicted_survival"} <= set(curves.columns)
+
+
+def test_every_selection_table_the_record_writes_has_a_description(tmp_path: Path) -> None:
+    """The views read the selection's CSVs by name, and a table without a description used to
+    stop the run: `creditsurv views` died on KeyError: 'materiality' after step 10 was added,
+    an hour of scanning thrown away at the last call of the command.
+
+    Two things, therefore. Every file the record writes is described, which this test ties
+    together so a new step cannot be added without one; and a name that still slips through
+    names itself instead of raising, because a missing sentence is not worth a run.
+    """
+    from creditsurv.reporting.selection import TABLE_FILES
+    from creditsurv.views.selection import _DESCRIBED, selection_views
+
+    assert set(TABLE_FILES) | {"fits"} <= set(_DESCRIBED), "a table the record writes, undescribed"
+
+    (tmp_path / "selection_materiality.csv").write_text("step,removed,effect_1sd\n1,vix,0.004\n")
+    (tmp_path / "selection_nameless.csv").write_text("a\n1\n")
+    views = selection_views(tmp_path)
+
+    assert [view.name for view in views] == ["selection_materiality"]
+    assert "0.02" in views[0].description
