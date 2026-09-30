@@ -33,11 +33,12 @@ from creditsurv.config import (
 DEFAULT_CAUSE: Final = "default"
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
     import pandas as pd
 
     from creditsurv.backtest.splits import Split
+    from creditsurv.data.panel import CellBlocks
     from creditsurv.models.aft import FitResult, Likelihood
 
 #: The reporting date every command cuts at, unless one is given: the end of the
@@ -629,12 +630,11 @@ def windows(
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import (
         WEIGHT,
-        CellBlocks,
         cells_to_episodes,
         ended_in,
         month_ordinal,
     )
-    from creditsurv.data.store import cells_path, fit_fingerprint, load_cells_window, save_fit
+    from creditsurv.data.store import fit_fingerprint, load_cells_window, save_fit
     from creditsurv.models.aft import fit_streamed
     from creditsurv.models.anchoring import ANCHOR_WINDOW, anchor_on_window
     from creditsurv.reporting import windows as windows_report
@@ -649,13 +649,9 @@ def windows(
 
     def fitted_to(cut: pd.Period, start: FitResult | None) -> FitResult:
         """The model estimated on everything up to ``cut``, read from the cell file."""
-        source = CellBlocks(
-            str(cells_path(moratorium)),
-            macro,
-            tuple(covariates),
-            rows=block_rows,
-            months=(None, month_ordinal(cut)),
-        ).prepared()
+        source = _cell_source(
+            moratorium, macro, covariates, block_rows=block_rows, until=month_ordinal(cut)
+        )
         result = fit_streamed(
             source,
             covariates,
@@ -844,10 +840,9 @@ def family(
     from creditsurv.data.panel import (
         PREPAYMENT_CAUSE,
         WEIGHT,
-        CellBlocks,
         month_ordinal,
     )
-    from creditsurv.data.store import cells_identity, cells_path, outcomes_by_age
+    from creditsurv.data.store import cells_identity, outcomes_by_age
     from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
     from creditsurv.models.nonparametric import (
         cumulative_incidence,
@@ -905,14 +900,9 @@ def family(
             )
             raise typer.BadParameter(message)
         covariates = covariates_of(described)
-        source = CellBlocks(
-            str(cells_path(moratorium)),
-            macro,
-            tuple(covariates),
-            rows=block_rows,
-            months=(None, cut),
-            cause=cause,
-        ).prepared()
+        source = _cell_source(
+            moratorium, macro, covariates, block_rows=block_rows, until=cut, cause=cause
+        )
         typer.echo(f"  reading the {distribution} {cause} hazards by age...")
         return hazard_by_age(source(), fitted, covariates, weights_col=WEIGHT)
 
@@ -1132,13 +1122,11 @@ def views(
         EVENT,
         OUTCOME,
         WEIGHT,
-        CellBlocks,
         cells_to_episodes,
         ended_in,
         month_ordinal,
     )
     from creditsurv.data.store import (
-        cells_path,
         find_fits,
         load_cells,
         load_cells_window,
@@ -1195,14 +1183,9 @@ def views(
 
         macro = load_macro_panel()
         cut = month_ordinal(reporting_date)
-        source = CellBlocks(
-            str(cells_path(moratorium)),
-            macro,
-            tuple(covariates),
-            rows=block_rows,
-            months=(None, cut),
-            model_only=False,
-        ).prepared()
+        source = _cell_source(
+            moratorium, macro, covariates, block_rows=block_rows, until=cut, model_only=False
+        )
 
         models: dict[str, tuple[Fitted, list[str]]] = {DISTRIBUTION: (fitted, covariates)}
         for distribution in CONVERGENT_DISTRIBUTIONS:
@@ -1343,8 +1326,8 @@ def select(
 
     from creditsurv.config import MACRO_CANDIDATES
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import WEIGHT, CellBlocks, month_ordinal
-    from creditsurv.data.store import cells_identity, cells_path
+    from creditsurv.data.panel import WEIGHT, month_ordinal
+    from creditsurv.data.store import cells_identity
     from creditsurv.models.procedure import (
         BASE_CATEGORICAL,
         CANDIDATE_CATEGORICAL,
@@ -1374,14 +1357,9 @@ def select(
     #
     # Nothing of the test half is read either way: the window stops at the reporting date.
     cut = month_ordinal(reporting_date)
-    source = CellBlocks(
-        str(cells_path(moratorium)),
-        load_macro_panel(),
-        tuple(candidates),
-        rows=block_rows,
-        months=(None, cut),
-        cause=cause,
-    ).prepared()
+    source = _cell_source(
+        moratorium, load_macro_panel(), candidates, block_rows=block_rows, until=cut, cause=cause
+    )
 
     # One pass for steps 5 and 6, which need a weighted covariance of the **continuous**
     # candidates and nothing else -- a covariance of a treatment-coded level is not a thing
@@ -1496,6 +1474,43 @@ def check_calendar(moratorium: MoratoriumOption = "exclude") -> None:
     typer.echo(f"Written: {destination}")
 
 
+def _cell_source(
+    moratorium: str,
+    macro: pd.DataFrame,
+    covariates: Iterable[str],
+    *,
+    block_rows: int,
+    until: int | None,
+    cause: str = DEFAULT_CAUSE,
+    model_only: bool = True,
+) -> CellBlocks:
+    """The cell file described for the window a command reads it in, ready to be handed out.
+
+    Five commands said the same nine arguments, and what they had in common was the whole
+    convention: the table for this moratorium policy, the macro panel beside it, the
+    covariates as a tuple, batches of `block_rows`, and **every month up to the cut and none
+    after it** -- which is what keeps the test window out of an estimation sample. `until=None`
+    is the one caller that wants the whole table, `fit` without an `--as-of`, and it has to say
+    so rather than pass a cut it made up.
+
+    `prepared()` is part of the convention too: it reads the file's episode width and
+    categorical levels once here rather than in each of four worker processes, which was
+    3 GB of a peak when they each read them.
+    """
+    from creditsurv.data.panel import CellBlocks as Blocks
+    from creditsurv.data.store import cells_path
+
+    return Blocks(
+        str(cells_path(moratorium)),
+        macro,
+        tuple(covariates),
+        rows=block_rows,
+        months=(None, until),
+        cause=cause,
+        model_only=model_only,
+    ).prepared()
+
+
 def _fit_streamed(
     *,
     as_of: str,
@@ -1514,8 +1529,8 @@ def _fit_streamed(
     import pandas as pd
 
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import WEIGHT, CellBlocks, month_ordinal
-    from creditsurv.data.store import cells_path, fit_fingerprint, save_fit
+    from creditsurv.data.panel import WEIGHT, month_ordinal
+    from creditsurv.data.store import fit_fingerprint, save_fit
     from creditsurv.models.aft import fit_streamed
 
     formula = default_formula()
@@ -1523,15 +1538,14 @@ def _fit_streamed(
     if as_of:
         reporting_date = pd.Period(as_of, freq="M")
         cut = month_ordinal(reporting_date)
-    source = CellBlocks(
-        str(cells_path(moratorium)),
+    source = _cell_source(
+        moratorium,
         load_macro_panel(),
-        tuple(default_covariates()),
-        rows=block_rows,
-        months=(None, cut),
+        default_covariates(),
+        block_rows=block_rows,
+        until=cut,
         cause=cause,
     )
-    source = source.prepared()
     typer.echo(f"Reading {source.source} in {workers} process(es)...")
     result = fit_streamed(
         source,
