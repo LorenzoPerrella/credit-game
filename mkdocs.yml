@@ -85,6 +85,7 @@ nav:
       - The selection record, log-logistic: reports/selection_loglogistic.md
       - The selection record, prepayment: reports/selection_weibull_prepayment.md
       - The distribution family: reports/family.md
+      - Windows, anchoring and grades: reports/windows.md
       - Methodology report: reports/methodology.md
   - Model:
       - In short: model.md

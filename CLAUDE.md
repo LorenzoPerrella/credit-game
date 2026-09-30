@@ -303,6 +303,13 @@ loans and says nothing on 48 million. Expect more of these.
 - **An out-of-time actual-over-expected cannot be read alone.** In sample it ran from
   0.27 to 2.78 by year, so the backtest publishes that dispersion beside it, and the
   acceptance criteria in `backtest/runner.py` are declared before any run.
+- **The Jeffreys interval on a grade goes the same way.** The master scale asks that a grade's
+  predicted twelve-month PD fall inside the 95% interval around what its loans did, and **0 of 8
+  pass** -- on relative errors of 5% in grade 5 (0.005657 predicted against 0.005381), 8% in
+  grade 7 and 30% in grade 4. With 5 million obligor-years in a grade the interval is a few parts
+  in a thousand wide, so it is testing the arithmetic of the average, not the model. The rule was
+  declared before the run and stands; what has to be published beside it is the **magnitude** of
+  each miss, exactly as for the Kaplan-Meier band.
 
 **A marginal relationship is evidence that a covariate is correlated with the outcome,
 never that it is identified in a model.** This was got wrong twice — see
