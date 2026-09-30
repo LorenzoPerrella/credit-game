@@ -591,15 +591,22 @@ def test_the_two_moratorium_treatments_are_not_equivalent(tmp_path: Path) -> Non
     assert len(kept) > len(lost), "censoring gives up the exposure after the accommodation"
 
 
-def test_text_keys_stay_categorical_through_the_concatenation() -> None:
-    """A quarter declaring different levels must not turn a column back into strings.
+def test_a_quarter_arrives_with_every_level_it_could_hold() -> None:
+    """A quarter carries the whole level set, not the part it happened to see.
 
-    pandas keeps a categorical through ``concat`` only when the levels agree, and the
-    exact key's five text columns over ~66 million cells would otherwise be gigabytes of
-    Python strings. So the levels are unified, and sorted, before the quarters are stacked.
+    That is what lets the table be written one quarter at a time: the pieces share a schema, so
+    parquet can append them. Before, the levels were collected from the quarters and unified
+    afterwards, which needs every quarter resident at once -- 11.3 GB of peak at 91.6 million
+    cells, and about 21 GB at the 200 million the finer bands would need.
+
+    Two properties, and the second is the one that bites. The dtypes of two quarters are equal
+    even though neither saw all three levels; and a value the declaration does not know raises,
+    because `pd.Categorical` turns it into a NaN and the loan-months would leave the table
+    without a word.
     """
-    from creditsurv.data.aggregate import _compact, _concatenate
+    from creditsurv.data.aggregate import CATEGORICAL_LEVELS, _compact, _concatenate
 
+    levels = {"occupancy": CATEGORICAL_LEVELS["occupancy"]}
     first = _compact(
         pd.DataFrame(
             {
@@ -607,28 +614,27 @@ def test_text_keys_stay_categorical_through_the_concatenation() -> None:
                 "origination_month": [24_000, 24_001],
                 "loan_months": [3, 4],
             }
-        )
+        ),
+        levels,
     )
     second = _compact(
         pd.DataFrame(
             {"occupancy": ["second_home"], "origination_month": [24_002], "loan_months": [5]}
-        )
+        ),
+        levels,
     )
 
-    combined = _concatenate([first, second])
+    assert first["occupancy"].dtype == second["occupancy"].dtype
+    assert list(first["occupancy"].cat.categories) == list(CATEGORICAL_LEVELS["occupancy"])
+    assert first["origination_month"].dtype == "int32"
 
+    combined = _concatenate([first, second])
     assert isinstance(combined["occupancy"].dtype, pd.CategoricalDtype)
-    assert list(combined["occupancy"].cat.categories) == [
-        "investment_property",
-        "owner_occupied",
-        "second_home",
-    ]
-    assert combined["occupancy"].tolist() == [
-        "owner_occupied",
-        "investment_property",
-        "second_home",
-    ]
-    assert combined["origination_month"].dtype == "int32"
+    assert list(combined["occupancy"].cat.categories) == list(CATEGORICAL_LEVELS["occupancy"])
+    assert combined["loan_months"].tolist() == [3, 4, 5]
+
+    with pytest.raises(ValueError, match="outside its declared levels"):
+        _compact(pd.DataFrame({"occupancy": ["a_new_kind_of_home"], "loan_months": [1]}), levels)
 
 
 def test_cells_are_categorical_as_built_and_as_saved(tmp_path: Path) -> None:
@@ -1009,3 +1015,79 @@ def test_every_cell_reader_says_how_to_build_the_cells(
         with pytest.raises(FileNotFoundError, match="uv run creditsurv aggregate") as raised:
             reader("exclude")
         assert "No aggregated cells" in str(raised.value), reader.__name__
+
+
+def test_the_declared_levels_are_the_levels_the_sql_can_produce() -> None:
+    """`CATEGORICAL_LEVELS` says what a mapped column can hold, and the SQL decides it.
+
+    Two things have to agree, so the test reads the literals back out of the `CASE`
+    expressions and compares them both ways. A mapping that gains a level without the
+    declaration gaining it would write a quarter whose value is not in its own dtype -- pandas
+    turns that into a NaN, silently, and the loan-months would vanish from the table rather
+    than from a log.
+
+    `region` is the one mapped column whose levels are not literals: it is built from
+    `_STATE_TO_REGION`, so its own values are the source. `term_years` has none because it is
+    not text -- the mapping returns 15 or 30 and the column is an `int32`.
+    """
+    from creditsurv.data.aggregate import (
+        _CATEGORICAL,
+        _STATE_TO_REGION,
+        CATEGORICAL_LEVELS,
+    )
+
+    assert set(CATEGORICAL_LEVELS) | {"term_years"} == set(_CATEGORICAL)
+
+    for name, declared in CATEGORICAL_LEVELS.items():
+        if name == "region":
+            assert declared == tuple(sorted(set(_STATE_TO_REGION.values())))
+            continue
+        in_the_sql = sorted(set(re.findall(r"THEN\s+'([^']+)'", _CATEGORICAL[name])))
+        assert list(declared) == in_the_sql, name
+
+    # Sorted, because the level unification this replaced sorted, and the order is what
+    # parquet's dictionary encoding is built from.
+    for name, declared in CATEGORICAL_LEVELS.items():
+        assert list(declared) == sorted(declared), name
+
+
+def test_writing_the_cells_a_quarter_at_a_time_gives_the_table_that_was_concatenated(
+    tmp_path: Path,
+) -> None:
+    """`write_cells` and `build_cells` are the same table, and this is what keeps them so.
+
+    The streamed path exists because the held one does not fit: at 91.6 million cells the
+    concatenation is two live copies of 4.76 GB and the write adds a third, for a measured 11.3
+    GB, and at the 200 million the finer bands of `docs/rules.md` would need it wants about 21
+    on a 16 GB machine. But a second path that agrees with the first only approximately is worse
+    than one that is slow, so they are compared row for row, dtype for dtype, and the levels of
+    every categorical are compared too -- that being the thing the streamed path has to know in
+    advance rather than discover.
+    """
+    from creditsurv.data.aggregate import build_cells, write_cells
+    from creditsurv.data.store import load_cells
+
+    origination = [origination_row(f"F{i:09d}") for i in range(30)]
+    performance = [
+        performance_row(f"F{i:09d}", "201503", str(age)) for i in range(30) for age in range(4)
+    ]
+    _ingested(tmp_path, origination, performance)
+    sources = _sources(tmp_path)
+
+    held = build_cells(*sources)
+    written = write_cells(*sources)
+    streamed = load_cells("exclude")
+
+    assert written == len(held)
+    keys = [column for column in held.columns if column != "loan_months"]
+    pd.testing.assert_frame_equal(
+        streamed.sort_values(keys).reset_index(drop=True),
+        held.sort_values(keys).reset_index(drop=True),
+        check_categorical=True,
+        check_dtype=True,
+    )
+    for column in held.columns:
+        if isinstance(held[column].dtype, pd.CategoricalDtype):
+            assert list(streamed[column].cat.categories) == list(held[column].cat.categories), (
+                column
+            )

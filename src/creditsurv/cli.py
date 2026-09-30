@@ -360,12 +360,12 @@ def aggregate(
 
     from creditsurv.data.aggregate import (
         MoratoriumPolicy,
-        build_cells,
         cardinality_report,
         credit_adjacent_exits,
         incomplete_cases,
+        write_cells,
     )
-    from creditsurv.data.store import save_cells
+    from creditsurv.data.store import cells_path
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -395,10 +395,11 @@ def aggregate(
         return
 
     policy = MoratoriumPolicy(moratorium)
-    cells = build_cells(policy=policy)
-    path = save_cells(cells, policy.value)
-    typer.echo(f"{len(cells):,} cells covering {int(cells['loan_months'].sum()):,} loan-months")
-    typer.echo(f"Moratorium policy: {policy.value}. Saved to {path}")
+    # Written a quarter at a time rather than concatenated: the held table peaked at 11.3 GB on
+    # 91.6 million cells and wants about 21 at the 200 million finer bands would need.
+    written = write_cells(policy=policy)
+    typer.echo(f"{written:,} cells. Moratorium policy: {policy.value}.")
+    typer.echo(f"Saved to {cells_path(policy.value)}")
 
 
 #: The moratorium option, shared by every command that reads cells. One definition, so the

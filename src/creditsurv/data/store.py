@@ -24,7 +24,7 @@ import pandas as pd
 from creditsurv.config import processed_dir
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from pathlib import Path
 
     import duckdb
@@ -53,15 +53,53 @@ def save_cells(cells: pd.DataFrame, policy: str = DEFAULT_POLICY) -> Path:
     losing a quarter to a reboot: an aggregation is hours of work, and a crash while
     writing should leave the previous table intact rather than half of a new one.
     """
+    with cells_writer(policy) as write:
+        write(cells)
+    return cells_path(policy)
+
+
+@contextmanager
+def cells_writer(policy: str = DEFAULT_POLICY) -> Iterator[Callable[[pd.DataFrame], None]]:
+    """Append pieces of the cell table, atomically, holding one piece at a time.
+
+    The same sibling-file-then-move as :func:`save_cells`, and for the same reason, but the
+    caller hands over a quarter at a time instead of the table. That is the difference between
+    11.3 GB of peak and one quarter resident: the aggregation used to keep every quarter's frame
+    so the categorical levels could be unified across them, then concatenate -- two live copies
+    of 4.76 GB at 91.6 million cells -- and then let Arrow make a third while writing. At 200
+    million cells that is about 21 GB before the write, on a 16 GB machine.
+
+    Every piece must arrive with the same schema, which is what `CATEGORICAL_LEVELS` is for: a
+    quarter given only its own levels would write a different dictionary and parquet would
+    refuse the append.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
     path = cells_path(policy)
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(path.name + ".partial")
+    writer: pq.ParquetWriter | None = None
+
+    def write(piece: pd.DataFrame) -> None:
+        nonlocal writer
+        table = pa.Table.from_pandas(piece, preserve_index=False)
+        if writer is None:
+            writer = pq.ParquetWriter(partial, table.schema)
+        writer.write_table(table)
+
     try:
-        cells.to_parquet(partial)
+        yield write
+        if writer is None:
+            message = "Nothing was written: the cell table would have no schema."
+            raise ValueError(message)
+        writer.close()
+        writer = None
         partial.replace(path)
     finally:
+        if writer is not None:
+            writer.close()
         partial.unlink(missing_ok=True)
-    return path
 
 
 @contextmanager

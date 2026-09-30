@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import pairwise
@@ -37,6 +37,7 @@ import duckdb
 import pandas as pd
 
 from creditsurv.data.ingest import completed_files
+from creditsurv.data.store import cells_writer
 from creditsurv.features import BIN_EDGES
 
 _LOGGER: Final = logging.getLogger(__name__)
@@ -538,6 +539,41 @@ _CATEGORICAL: Final[dict[str, str]] = {
         "WHEN TRY_CAST(number_of_borrowers AS INTEGER) BETWEEN 2 AND 5 THEN 'two_or_more' END"
     ),
 }
+#: Every level a mapped categorical can take, **declared** rather than discovered.
+#:
+#: They are string literals inside the `CASE` expressions of `_CATEGORICAL`, which carry no
+#: `ELSE` branch because an unmapped code has to drop the row. Writing them out is what lets the
+#: cell table be **written one quarter at a time**: a quarter can be given the whole level set as
+#: it is aggregated, where before the levels were collected from the quarters and unified
+#: afterwards -- which needs every quarter resident at once, and cost 11.3 GB of peak at 91.6
+#: million cells.
+#:
+#: Sorted, and sorted for a reason: the unification it replaces sorted too, so the dictionary
+#: encoding parquet writes is the one it wrote before and the table is unchanged byte for byte.
+#:
+#: `term_years` is absent because it is not text -- the mapping returns 15 or 30 and the column is
+#: an `int32`. `tests/test_aggregate.py` reads the literals back out of the SQL and holds them to
+#: this in both directions, so a mapping cannot gain a level without this gaining it too.
+CATEGORICAL_LEVELS: Final[dict[str, tuple[str, ...]]] = {
+    "borrower_count": ("one", "two_or_more"),
+    "buyer_type": ("first_time", "repeat"),
+    "channel": ("broker_or_correspondent", "retail"),
+    "delinquency_state": ("current", "one_month", "three_or_more", "two_months"),
+    "harp": ("harp", "standard"),
+    "loan_size": ("conforming", "super_conforming"),
+    "mortgage_insurance": ("insured", "uninsured"),
+    "occupancy": ("investment_property", "owner_occupied", "second_home"),
+    "property_type": (
+        "condominium",
+        "manufactured_or_coop",
+        "planned_unit_development",
+        "single_family",
+    ),
+    "purpose": ("cash_out_refinance", "purchase", "rate_term_refinance"),
+    "region": ("Midwest", "Northeast", "South", "West"),
+    "units": ("one_unit", "two_to_four_units"),
+}
+
 
 #: Fields taking exactly one value across the whole dataset. Recorded rather than
 #: quietly omitted, so the next reader does not spend an afternoon adding them back.
@@ -859,6 +895,24 @@ def _cells_for_quarter(
     return frame
 
 
+def _levels_for(spec: CellSpec, quarters: Sequence[str]) -> dict[str, tuple[str, ...]]:
+    """Every text column's full level set for this build, known before a row is read.
+
+    Three sources, and the third is the only one that is not a declaration: the mapped
+    categoricals in the key come from :data:`CATEGORICAL_LEVELS`, the outcome from the three
+    causes the aggregation writes, and ``vintage`` from the quarters being aggregated -- which
+    are the files on disk, so they are known at the top of the run rather than discovered by it.
+    """
+    from creditsurv.data.panel import CENSORED, DEFAULT_CAUSE, PREPAYMENT_CAUSE
+
+    levels = {
+        name: CATEGORICAL_LEVELS[name] for name in spec.categorical if name in CATEGORICAL_LEVELS
+    }
+    levels["outcome"] = tuple(sorted((DEFAULT_CAUSE, PREPAYMENT_CAUSE, CENSORED)))
+    levels["vintage"] = tuple(sorted(quarters))
+    return levels
+
+
 def build_cells(
     perf_source: PathSpec = None,
     orig_source: PathSpec = None,
@@ -884,24 +938,71 @@ def build_cells(
         raise FileNotFoundError(message)
 
     spec.validate()
+    return _concatenate(list(_quarters_of_cells(perf, orig, spec, policy, connection)))
+
+
+def _quarters_of_cells(
+    perf: list[str],
+    orig: list[str],
+    spec: CellSpec,
+    policy: MoratoriumPolicy,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> Iterator[pd.DataFrame]:
+    """One quarter's cells at a time, each already in its final types and levels.
+
+    Vintage is in the key and constant within a quarter, so the pieces are disjoint: nothing
+    downstream needs a second group-by, and nothing needs to see two of them at once.
+    """
     con = connection or _connect()
-    frames = []
+    levels = _levels_for(spec, [Path(path).stem for path in perf])
     for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
         vintage = Path(perf_path).stem
-        cells = _compact(_cells_for_quarter(con, perf_path, orig_path, vintage, spec, policy))
-        frames.append(cells)
+        cells = _compact(
+            _cells_for_quarter(con, perf_path, orig_path, vintage, spec, policy), levels
+        )
         _LOGGER.info(
             "%s: %d cells from %d loan-months", vintage, len(cells), int(cells["loan_months"].sum())
         )
-
-    # Vintage is in the key and constant within a quarter, so the pieces are already
-    # disjoint: concatenating needs no second group-by.
-    combined = _concatenate(frames)
-    _LOGGER.info("Collapsed to %d cells", len(combined))
-    return combined
+        yield cells
 
 
-def _compact(cells: pd.DataFrame) -> pd.DataFrame:
+def write_cells(
+    perf_source: PathSpec = None,
+    orig_source: PathSpec = None,
+    *,
+    spec: CellSpec = DEFAULT_SPEC,
+    policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """Aggregate the panel and write it, holding one quarter at a time. Returns the cells written.
+
+    What :func:`build_cells` does, without ever holding the table. It used to keep every
+    quarter's frame -- so the categorical levels could be unified across them -- then
+    concatenate, which is two live copies of 4.76 GB at 91.6 million cells, and then let Arrow
+    make a third while writing: the measured peak was **11.3 GB**. At 200 million cells the
+    concatenation alone wants about 21 GB, on a 16 GB machine, which is what put the finer bands
+    of `docs/rules.md` out of reach before any fit was attempted.
+
+    The levels come from :data:`CATEGORICAL_LEVELS` instead, so a quarter arrives with the whole
+    schema and parquet can append it.
+    """
+    perf = _resolve(perf_source, "perf")
+    orig = _resolve(orig_source, "orig")
+    if not perf or not orig:
+        message = "No ingested quarters found. Run `creditsurv ingest` first."
+        raise FileNotFoundError(message)
+
+    spec.validate()
+    written = 0
+    with cells_writer(policy.value) as write:
+        for cells in _quarters_of_cells(perf, orig, spec, policy, connection):
+            write(cells)
+            written += len(cells)
+    _LOGGER.info("Collapsed to %d cells", written)
+    return written
+
+
+def _compact(cells: pd.DataFrame, levels: Mapping[str, tuple[str, ...]]) -> pd.DataFrame:
     """One quarter's cells, in the types they should have come back in.
 
     DuckDB returns text as Python strings, one object per value. On the quarter-keyed
@@ -909,10 +1010,27 @@ def _compact(cells: pd.DataFrame) -> pd.DataFrame:
     over some 66 million cells. So they become categorical as each quarter arrives,
     before a table of strings can exist, and the origination month -- an ordinal near
     24,000 -- is kept as a 32-bit integer.
+
+    ``levels`` gives each text column the **whole** set it can hold, not the part this quarter
+    happened to see. That is what lets the quarters be written one at a time: they share a
+    schema, so parquet can append them. Collecting the levels from the quarters instead and
+    unifying them afterwards needs every quarter resident at once, which is where the 11.3 GB
+    peak came from.
     """
     for column in cells.columns:
         if cells[column].dtype == object:
-            cells[column] = cells[column].astype("category")
+            declared = levels.get(column)
+            cells[column] = pd.Categorical(
+                cells[column], categories=None if declared is None else list(declared)
+            )
+            unmapped = cells[column].isna().sum() if declared is not None else 0
+            if unmapped:
+                message = (
+                    f"{unmapped} cells of {column!r} hold a value outside its declared levels "
+                    f"{tuple(declared or ())}. A level was added to the mapping and not to "
+                    "CATEGORICAL_LEVELS."
+                )
+                raise ValueError(message)
     if "origination_month" in cells.columns:
         cells["origination_month"] = cells["origination_month"].astype("int32")
     return cells
