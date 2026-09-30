@@ -239,6 +239,54 @@ something unfittable rather than because it earned its place. Any such covariate
 `selection_*.md`, and one that stays for this reason is a candidate for a family whose
 likelihood does not have the flaw.
 
+## 12. A banded covariate is read as bands, not as a line through them
+
+**Written on 2026-09-30, after the first backtest of this branch and before the fit that answers
+it.** The backtest is a finding; what follows is a change to an input, declared here first, and
+judged by the criteria section 5 already fixed rather than by any new one.
+
+**What the backtest found.** In sample -- on the very rows the model was fitted to -- the actual
+over expected rises monotonically across deciles of predicted risk: 0.594, 0.577, 0.604, 0.670,
+0.761, 0.859, 0.977, 1.098, 1.204, 1.000. The model predicts a ratio of **74.4x** between the
+riskiest tenth and the safest; the book realises **125.3x**. The ranking is right -- the Gini is
+0.54 out of time -- and the **spacing is compressed by about 40%**. One multiplier cannot mend
+that: it shifts every decile by the same factor and the error is a slope.
+
+**Why the form is the cause.** `credit_score`, `original_ltv` and `debt_to_income` are already
+bands in the cell key -- five, four and four of them -- and they entered the formula as **linear
+terms on the band's midpoint**. The model therefore asserts that log survival time is a straight
+line from the 620 band to the 790 band. It is not: forty points of score lost at 620 are worth
+more than forty lost at 760, and with 45.7% of the exposure in the top band the line follows the
+middle and flattens both tails.
+
+**The rule.** Each banded loan covariate enters as a **factor, one coefficient a band**, with the
+band carrying the most loan-months as the reference. Measured on the cell table before this rule
+was written, and therefore not chosen to suit any result:
+
+| Covariate | Bands | Reference band | Its share of exposure |
+|---|---|---|---|
+| `credit_score` | 5 | **790** | 45.67% |
+| `original_ltv` | 4 | **50** | 43.00% |
+| `debt_to_income` | 4 | **19** | 35.70% |
+
+`term_years` is left alone: it has two levels, where a factor and a line are the same model.
+
+Seven parameters, no new covariate, and **no cells** -- the bands are the key already, which is
+what makes this cheap enough to do at all. No monotonicity is imposed, because imposing the shape
+one expects is how a form comes to flatter a model rather than describe it.
+
+**What this rule does not claim.** The covariate *set* was chosen by steps 5 to 10 under the
+linear form, so a set re-decided under bands could differ -- a covariate that survived on a
+straight line might not on a bend, or the reverse. This rule changes how three covariates are
+read, not who is in the model, and the re-selection under the new form is owed. Until it is run,
+the published specification is *the set chosen under the linear form, read as bands*, and the
+report says so.
+
+**How it is judged.** By section 5, unchanged: actual over expected between 0.80 and 1.25 overall
+and in every decile, Gini above 0.45, and the share of calendar years in band. The test window is
+not read until the windows report is regenerated, and the comparison published is against the
+numbers above, which are already recorded.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.
@@ -250,3 +298,4 @@ likelihood does not have the flaw.
   in one model.
 - Letting the payment state into any model of the remaining life.
 - Removing a covariate without fitting the model that remains.
+- Reading a banded covariate as a line through its midpoints.
