@@ -25,7 +25,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping
+    from collections.abc import Callable, Iterable
 
     import pandas as pd
 
@@ -728,24 +728,6 @@ def term_label(term: str) -> str:
     return label(term)
 
 
-def former_names(kind: Kind | None = None) -> dict[str, str]:
-    """Former name to current name, for the variables of ``kind``."""
-    return {
-        entry.former: entry.name
-        for entry in _VARIABLES
-        if entry.former is not None and (kind is None or entry.kind is kind)
-    }
-
-
-def former_levels() -> dict[str, dict[str, str]]:
-    """For each categorical, former code to current code."""
-    return {
-        entry.name: {level.former: level.code for level in entry.levels if level.former}
-        for entry in _VARIABLES
-        if entry.levels
-    }
-
-
 def glossary(kinds: Iterable[Kind] = tuple(Kind)) -> list[dict[str, str]]:
     """One row per variable, for the site's Variables page."""
     wanted = set(kinds)
@@ -763,11 +745,6 @@ def glossary(kinds: Iterable[Kind] = tuple(Kind)) -> list[dict[str, str]]:
         for entry in _VARIABLES
         if entry.kind in wanted
     ]
-
-
-def labelled(values: Mapping[str, object]) -> dict[str, object]:
-    """A mapping keyed by variable names, keyed by labels instead."""
-    return {label(str(name)): value for name, value in values.items()}
 
 
 # ----- presentation -----------------------------------------------------------------------------

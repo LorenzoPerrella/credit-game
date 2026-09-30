@@ -104,19 +104,6 @@ MACRO_SOURCES: Final[dict[str, tuple[str, ...]]] = {
     "refinance_incentive": ("mortgage_rate_30y", "mortgage_rate_15y"),
 }
 
-#: Exact linear identities among the derived covariates. A design holding every member of
-#: one of these is singular by construction, not nearly so, and the fit either fails or
-#: returns whatever the pseudo-inverse chose.
-#:
-#: The note rate against the market rate is the only one: the incentive to refinance now is
-#: the spread the loan was written at plus the fall in the market rate since. Which two of the
-#: three a specification carries is a modelling decision, declared in docs/rules.md; the
-#: correlation pass would not catch it, since two of the three are already in the model
-#: before the third arrives.
-MACRO_IDENTITIES: Final[tuple[tuple[str, ...], ...]] = (
-    ("refinance_incentive", "origination_spread", "mortgage_rate_decline"),
-)
-
 
 def lag_macro(macro: pd.DataFrame, *, lag_months: int = MACRO_LAG_MONTHS) -> pd.DataFrame:
     """Shift revised series forward so only published information is used.
@@ -565,7 +552,9 @@ def add_macro_family(
     # Same benchmark switch by term, for the same reason: a fifteen-year loan is refinanced
     # against the fifteen-year rate.
     #
-    # Only two of the three may enter a model: see MACRO_IDENTITIES.
+    # `refinance_incentive`, `origination_spread` and `mortgage_rate_decline` are three
+    # differences among the same two rates, so any two of them determine the third and only
+    # two may enter a model -- rule 9 of `docs/rules.md`, enforced by the selection.
     if "note_rate" in episodes.columns and "mortgage_rate_30y" in available:
         note = episodes["note_rate"].to_numpy(dtype=float)
 

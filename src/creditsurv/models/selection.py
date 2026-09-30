@@ -417,45 +417,6 @@ def shape_depends_on_covariates(
     )
 
 
-def cox_snell_residuals(
-    result: FitResult,
-    encoded: pd.DataFrame,
-    covariates: Sequence[str],
-    *,
-    sample_size: int = 2000,
-    seed: int = 0,
-) -> pd.Series:
-    """Cox-Snell residuals for a sample of the fitted episodes.
-
-    If the model is correct these behave like a unit-exponential sample, so their
-    own cumulative hazard traces the 45-degree line. Unlike an AIC ranking, that
-    is a statement about the fit which does not depend on choosing a comparison
-    family.
-
-    Sampled rather than exhaustive: the cumulative hazard has to be evaluated at a
-    different time for every row, and lifelines predicts a full row-by-time grid,
-    so the full panel would mean a matrix with hundreds of thousands of columns. A
-    few thousand rows is ample for the diagnostic, which is read as a plot.
-    """
-    rows = encoded
-    if len(rows) > sample_size:
-        rows = rows.sample(sample_size, random_state=seed)
-
-    frame = rows.loc[:, list(covariates)]
-    times = rows["lower_bound"].to_numpy(dtype=float)
-    hazard = np.array(
-        [
-            float(
-                result.fitter.predict_cumulative_hazard(
-                    frame.iloc[[position]], times=[times[position]]
-                ).to_numpy()[0, 0]
-            )
-            for position in range(len(frame))
-        ]
-    )
-    return pd.Series(hazard, index=rows.index, name="cox_snell")
-
-
 # --------------------------------------------------------------------------------------
 # Variable selection
 # --------------------------------------------------------------------------------------
@@ -518,22 +479,6 @@ PREPAYMENT_SIGNS: Final[dict[str, int]] = {
     "ltv_change": +1,  # leverage that has risen blocks a refinance
     "house_price_growth": -1,  # rising prices free equity and enable cash-out
     "unemployment_change": +1,  # a weaker labour market prepays less
-}
-
-#: Covariates deliberately left out of ``EXPECTED_SIGNS``, with the reason. Listed so
-#: the omission reads as a decision rather than an oversight.
-#:
-#: ``mortgage_rate_decline`` is the near miss. The sign above is the dominant channel -- rates
-#: below the note rate mean refinancing is available and the payment burden is
-#: easier -- but the opposite channel is real: the borrowers who *cannot* refinance
-#: when everyone else can are adversely selected, and they are the ones left in the
-#: book. The constraint is kept because the first channel dominates in the
-#: literature, and this note is here because it is a prior, not a finding.
-AMBIGUOUS_SIGNS: Final[dict[str, str]] = {
-    "yield_curve_slope": "a steep curve is both cheap short funding and an expected slowdown",
-    "inflation_rate": "erodes the real debt, squeezes the real income",
-    "inflation_change": "the same two channels, measured against the loan's own start",
-    "debt_to_income": "kept as negative, but it is measured at origination and never updated",
 }
 
 

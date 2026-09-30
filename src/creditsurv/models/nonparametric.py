@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 import pandas as pd
 from lifelines import KaplanMeierFitter
-from lifelines.statistics import logrank_test
 from scipy.stats import norm
 
 from creditsurv.data.panel import (
@@ -42,8 +41,6 @@ from creditsurv.models.aft import episode_hazards
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
-
-    from lifelines.statistics import StatisticalResult
 
     from creditsurv.models.aft import FitResult
 
@@ -93,23 +90,6 @@ def kaplan_meier_by_stratum(panel: pd.DataFrame, stratum: str) -> dict[str, Kapl
         fitter.fit(rows["duration"], event_observed=rows[EVENT].astype(bool))
         curves[name] = fitter
     return curves
-
-
-def logrank_by_stratum(panel: pd.DataFrame, stratum: str) -> StatisticalResult:
-    """Test whether survival differs across the levels of ``stratum``."""
-    loans = to_loan_level(panel)
-    levels = list(loans.groupby(stratum, observed=True).groups)
-    if len(levels) != 2:
-        message = f"logrank_by_stratum compares exactly two groups; {stratum!r} has {len(levels)}."
-        raise ValueError(message)
-
-    first, second = (loans[loans[stratum] == level] for level in levels)
-    return logrank_test(
-        first["duration"],
-        second["duration"],
-        event_observed_A=first[EVENT].astype(bool),
-        event_observed_B=second[EVENT].astype(bool),
-    )
 
 
 def turnbull(panel: pd.DataFrame, *, weights_col: str | None = None) -> KaplanMeierFitter:

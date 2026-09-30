@@ -208,16 +208,6 @@ MACRO_SERIES: Final[tuple[SeriesSpec, ...]] = (
     ),
 )
 
-#: ``SP500`` and ``DJIA`` are unusable here: FRED keeps only ten years of them, so
-#: both start in 2016 and would leave seventeen vintages with no equity covariate at
-#: all. ``NASDAQCOM`` reaches back to 1999 and is the substitute. ``TDSP``, the
-#: household debt service ratio, is the most directly relevant series of the lot and
-#: is excluded for the same reason: it begins in 2005.
-EXCLUDED_SERIES: Final[dict[str, str]] = {
-    "SP500": "FRED retains ten years only; starts 2016",
-    "DJIA": "FRED retains ten years only; starts 2016",
-    "TDSP": "starts 2005, leaving six vintages uncovered",
-}
 
 #: Series used only to sanity-check observed default rates against a published aggregate.
 #: Never a model covariate: it is an outcome, not a driver.

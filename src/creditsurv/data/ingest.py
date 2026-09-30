@@ -47,9 +47,6 @@ _LOGGER: Final = logging.getLogger(__name__)
 #: Where the downloaded archives live.
 ARCHIVE_DIRNAME: Final = "FREDDIE MAC"
 
-#: Rows per parse batch. Large enough to keep pyarrow busy, small enough that peak
-#: memory is measured in hundreds of megabytes rather than gigabytes.
-_BATCH_ROWS: Final = 500_000
 
 _ARCHIVE_PATTERN: Final = re.compile(r"historical_data_(\d{4})\.zip$")
 

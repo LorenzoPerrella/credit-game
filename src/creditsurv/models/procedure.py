@@ -77,38 +77,6 @@ CANDIDATE_CATEGORICAL: Final[dict[str, str]] = {
     "buyer_type": "repeat",
 }
 
-#: The payment state is **not** a candidate, and the reason is a measurement rather than a
-#: preference. It entered the key in September 2026 and was a candidate until the first
-#: selection tried to fit it: SLSQP reached coefficients of 1e+80 and an objective of -4.7e275,
-#: and no damped Newton step could lower the objective from the warm start.
-#:
-#: Why it cannot be fitted is arithmetic, not optimisation. Default is three missed payments,
-#: so a loan that opens the month two payments behind is one month from the definition:
-#:
-#: =============  ===============  ==========  ==================
-#: State a month   Loan-months      Defaults    Monthly rate
-#: ago
-#: =============  ===============  ==========  ==================
-#: current         2,740,161,293       22,276   **0.0008%**
-#: one month          23,871,219       20,206   0.085%
-#: three or more       4,269,824      109,964   2.58%
-#: two months          5,337,846    1,518,761   **28.45%**
-#: =============  ===============  ==========  ==================
-#:
-#: Two months behind is 0.2% of the exposure and **91% of every default in the book**, at a
-#: rate 35,000 times the current state's. A coefficient for it is a number the likelihood
-#: pushes as far as the clipping allows, and the model that came out would answer "will this
-#: loan default next month" -- which is a behavioural score, not a lifetime PD. A lifetime PD
-#: also has to *project* its covariates over the remaining life, and there is no way to
-#: project a payment state: it is the outcome, one month early.
-#:
-#: It stays in the cell key, where it costs 1.19x and pays for itself in the views: it says
-#: where the defaults are, which is worth publishing. The model does not read it.
-DELINQUENCY_STATE_NOT_A_CANDIDATE: Final = (
-    "step 7: 91% of defaults occur at two months behind, a 28.45% monthly rate against "
-    "0.0008% for a current loan. The state is the event one month early, and a lifetime PD "
-    "cannot project it forward."
-)
 
 #: The loan block the selection starts from and protects from variance inflation, fixed
 #: here as ``config.MACRO_CANDIDATES`` fixes the macro block. ``config.STATIC_CONTINUOUS``,

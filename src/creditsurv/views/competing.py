@@ -139,19 +139,6 @@ def anchoring_view(
     )
 
 
-def window_view(results: Sequence[Mapping[str, object]]) -> View:
-    """One row per backtest cut: the window, its exposure, and how the model did on it."""
-    return View(
-        "backtest_windows",
-        "The backtest, cut three times",
-        "Each cut estimated on everything up to it and judged on the 24 months after, so "
-        "no window is scored by a model that saw it: a tightening cycle, a pandemic under "
-        "a moratorium regime, and a rate shock.",
-        pd.DataFrame(list(results)),
-        source="fit",
-    )
-
-
 def grade_view(
     hazard: np.ndarray,
     cells: pd.DataFrame,
