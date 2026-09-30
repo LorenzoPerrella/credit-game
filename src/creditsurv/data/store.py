@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import pickle
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final, cast
 
 import pandas as pd
@@ -23,8 +24,10 @@ import pandas as pd
 from creditsurv.config import processed_dir
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
     from pathlib import Path
+
+    import duckdb
 
 _LOGGER: Final = logging.getLogger(__name__)
 
@@ -61,12 +64,30 @@ def save_cells(cells: pd.DataFrame, policy: str = DEFAULT_POLICY) -> Path:
     return path
 
 
-def load_cells(
-    policy: str = DEFAULT_POLICY, *, columns: Sequence[str] | None = None
-) -> pd.DataFrame:
-    """Read the cells built under ``policy``, or say how to build them.
+@contextmanager
+def _reader() -> Iterator[duckdb.DuckDBPyConnection]:
+    """A DuckDB connection for reading the cell file, closed when the caller is done.
 
-    ``columns`` reads only those.
+    Through :func:`creditsurv.data.aggregate._connect`, which is the one place that sets the
+    temporary directory away from the working tree: DuckDB spills into the process's own
+    directory by default, and the first query here that did left 20 GB inside the repository.
+    The readers are unlikely to spill -- they select or group in one pass -- but a connection
+    that cannot is cheaper than remembering which ones can.
+    """
+    from creditsurv.data.aggregate import _connect
+
+    con = _connect()
+    try:
+        yield con
+    finally:
+        con.close()
+
+
+def _cells_or_say_how(policy: str) -> Path:
+    """The cell file, or the two commands that build it.
+
+    Every reader here needs the same sentence, and two of them used to go without it and
+    raise whatever DuckDB says about a missing file instead.
     """
     path = cells_path(policy)
     if not path.exists():
@@ -76,14 +97,46 @@ def load_cells(
             f"  uv run creditsurv aggregate --moratorium {policy}"
         )
         raise FileNotFoundError(message)
-    cells = pd.read_parquet(path, columns=None if columns is None else list(columns))
-    # A table saved before its text keys were categorical comes back as Python strings.
-    # Categorised here, once, over the whole table -- which is also what keeps the levels
-    # of every later slice identical.
+    return path
+
+
+def _categorised(cells: pd.DataFrame) -> pd.DataFrame:
+    """Text columns as categoricals, in place.
+
+    A table saved before its text keys were categorical comes back as Python strings, and on
+    this key that is five columns over tens of millions of rows. Done once over whatever was
+    read, which is also what keeps the levels of every later slice identical.
+    """
     for column in cells.columns:
         if cells[column].dtype == object:
             cells[column] = cells[column].astype("category")
     return cells
+
+
+def _observed_between(first: int | None, last: int | None) -> str:
+    """A ``WHERE`` on the **observation** month, which is not a column.
+
+    It is ``origination_month + age``, so parquet cannot be asked for it by name and the
+    filter cannot be pushed down; DuckDB evaluates it while reading. Bounds are month
+    ordinals, ``year * 12 + month - 1``, inclusive.
+    """
+    bounds = []
+    if first is not None:
+        bounds.append(f"origination_month + age >= {int(first)}")
+    if last is not None:
+        bounds.append(f"origination_month + age <= {int(last)}")
+    return f"WHERE {' AND '.join(bounds)}" if bounds else ""
+
+
+def load_cells(
+    policy: str = DEFAULT_POLICY, *, columns: Sequence[str] | None = None
+) -> pd.DataFrame:
+    """Read the cells built under ``policy``, or say how to build them.
+
+    ``columns`` reads only those.
+    """
+    path = _cells_or_say_how(policy)
+    return _categorised(pd.read_parquet(path, columns=None if columns is None else list(columns)))
 
 
 def load_cells_window(
@@ -103,30 +156,12 @@ def load_cells_window(
     few gigabytes as a frame, and two years of observation are about 3% of them. The whole
     table is read only where the whole table is the question.
     """
-    import duckdb
 
-    path = cells_path(policy)
-    if not path.exists():
-        message = (
-            f"No aggregated cells at {path}. Build them first:\n"
-            "  uv run creditsurv ingest\n"
-            f"  uv run creditsurv aggregate --moratorium {policy}"
-        )
-        raise FileNotFoundError(message)
-
-    bounds = []
-    if first is not None:
-        bounds.append(f"origination_month + age >= {int(first)}")
-    if last is not None:
-        bounds.append(f"origination_month + age <= {int(last)}")
-    where = f"WHERE {' AND '.join(bounds)}" if bounds else ""
-    cells: pd.DataFrame = (
-        duckdb.connect().execute(f"SELECT * FROM read_parquet('{path}') {where}").df()
-    )
-    for column in cells.columns:
-        if cells[column].dtype == object:
-            cells[column] = cells[column].astype("category")
-    return cells
+    path = _cells_or_say_how(policy)
+    where = _observed_between(first, last)
+    with _reader() as con:
+        cells: pd.DataFrame = con.execute(f"SELECT * FROM read_parquet('{path}') {where}").df()
+    return _categorised(cells)
 
 
 def load_largest_cells(
@@ -138,23 +173,16 @@ def load_largest_cells(
     say how much of it each accounts for -- which is what the projections are scored on. A
     few hundred rows out of 91.6 million: the ordering and the limit belong in the reader.
     """
-    import duckdb
 
-    path = cells_path(policy)
-    cells: pd.DataFrame = (
-        duckdb.connect()
-        .execute(
+    path = _cells_or_say_how(policy)
+    with _reader() as con:
+        cells: pd.DataFrame = con.execute(
             f"""
             SELECT * FROM read_parquet('{path}')
             WHERE age = {int(age)} ORDER BY loan_months DESC LIMIT {int(limit)}
             """
-        )
-        .df()
-    )
-    for column in cells.columns:
-        if cells[column].dtype == object:
-            cells[column] = cells[column].astype("category")
-    return cells
+        ).df()
+    return _categorised(cells)
 
 
 def outcomes_by_age(
@@ -167,28 +195,18 @@ def outcomes_by_age(
     and a non-parametric curve is a statement about sums, so there is no reason to hold them
     to compute one.
     """
-    import duckdb
 
-    path = cells_path(policy)
-    bounds = []
-    if first is not None:
-        bounds.append(f"origination_month + age >= {int(first)}")
-    if last is not None:
-        bounds.append(f"origination_month + age <= {int(last)}")
-    where = f"WHERE {' AND '.join(bounds)}" if bounds else ""
-    frame: pd.DataFrame = (
-        duckdb.connect()
-        .execute(
+    path = _cells_or_say_how(policy)
+    where = _observed_between(first, last)
+    with _reader() as con:
+        frame: pd.DataFrame = con.execute(
             f"""
             SELECT age, outcome, SUM(loan_months) AS loan_months
             FROM read_parquet('{path}') {where}
             GROUP BY ALL ORDER BY age
             """
-        )
-        .df()
-    )
-    frame["outcome"] = frame["outcome"].astype("category")
-    return frame
+        ).df()
+    return _categorised(frame)
 
 
 def cells_identity(policy: str = DEFAULT_POLICY) -> str:

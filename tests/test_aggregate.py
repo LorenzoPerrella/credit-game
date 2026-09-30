@@ -982,3 +982,30 @@ def test_a_cached_fit_can_be_found_by_what_it_is_rather_than_by_its_hash(
     assert [fingerprint for fingerprint, _ in report_only] == ["aaaa0000"]
     assert [fingerprint for fingerprint, _ in selection_only] == ["bbbb0000"]
     assert find_fits(as_of="2024-12") == []
+
+
+def test_every_cell_reader_says_how_to_build_the_cells(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All five readers of the cell file, asked for a table that is not there.
+
+    Two of them used to go without the sentence and let DuckDB say whatever it says about a
+    missing file, which is the one moment a reader has something useful to tell you: the two
+    commands that build the thing. They share one helper now, so the answer cannot drift and a
+    sixth reader cannot be added without it.
+    """
+    from creditsurv.data.store import (
+        cells_path,
+        load_cells,
+        load_cells_window,
+        load_largest_cells,
+        outcomes_by_age,
+    )
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    assert not cells_path("exclude").exists()
+
+    for reader in (load_cells, load_cells_window, load_largest_cells, outcomes_by_age):
+        with pytest.raises(FileNotFoundError, match="uv run creditsurv aggregate") as raised:
+            reader("exclude")
+        assert "No aggregated cells" in str(raised.value), reader.__name__
