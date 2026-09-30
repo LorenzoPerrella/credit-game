@@ -507,14 +507,41 @@ CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
 }
 
 
+#: The banded loan covariates, and the band each one's coefficients read against.
+#:
+#: Rule 12 of `docs/rules.md`: these are bands in the cell key already -- five, four and four --
+#: and reading them as a **line through the band midpoints** compressed the model's risk spread by
+#: 40%. In sample, actual over expected ran 0.594 in the safest decile to 1.204 in the ninth, and
+#: the model predicted 74.4x between the extremes where the book realises 125.3x. One coefficient
+#: a band instead, at the cost of seven parameters and no cells.
+#:
+#: The reference is the band carrying the most loan-months, measured on the table before the rule
+#: was written: 45.67%, 43.00% and 35.70% of exposure. `term_years` is not here because two levels
+#: make a factor and a line the same model.
+#:
+#: The levels are numbers, not strings, and the formula must say so: `Treatment('790.0')` is not a
+#: level of a float column and formulaic refuses it.
+BANDED_REFERENCE: Final[dict[str, float]] = {
+    "credit_score": 790.0,
+    "original_ltv": 50.0,
+    "debt_to_income": 19.0,
+}
+
+
 def default_formula() -> str:
     """Formulaic specification for the full model.
 
-    Categorical reference levels are stated explicitly so coefficients remain
-    comparable across refits even if a level goes missing from a training slice.
+    Reference levels are stated explicitly so coefficients remain comparable across refits even
+    if a level goes missing from a training slice -- for the bands of rule 12 as well as for the
+    categoricals, and there the level is a number.
     """
-    continuous = " + ".join(STATIC_CONTINUOUS + TIME_VARYING_CONTINUOUS + ORDINAL)
-    categorical = " + ".join(
+    linear = [
+        name
+        for name in STATIC_CONTINUOUS + TIME_VARYING_CONTINUOUS + ORDINAL
+        if name not in BANDED_REFERENCE
+    ]
+    banded = [f"C({name}, Treatment({band}))" for name, band in BANDED_REFERENCE.items()]
+    categorical = [
         f"C({name}, Treatment('{reference}'))" for name, reference in CATEGORICAL_REFERENCE.items()
-    )
-    return f"{continuous} + {categorical}"
+    ]
+    return " + ".join([*linear, *banded, *categorical])
