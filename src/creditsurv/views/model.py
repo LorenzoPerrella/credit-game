@@ -108,8 +108,7 @@ def acceptance_by_segment(test: pd.DataFrame, hazard: np.ndarray) -> pd.DataFram
     """
     weight = test[WEIGHT].to_numpy(dtype=float)
     events = weight * test[EVENT].to_numpy(dtype=bool)
-    labelled: list[tuple[str, pd.Series | None]] = [(ALL, None)]
-    labelled += [(segment.name, segment.label(test)) for segment in available(test)]
+    labelled = _segments_of(test)
 
     rows = []
     for name, labels in labelled:
@@ -150,6 +149,41 @@ def acceptance_by_segment(test: pd.DataFrame, hazard: np.ndarray) -> pd.DataFram
     return pd.DataFrame(rows)
 
 
+#: The five in-sample views, titled and described once.
+#:
+#: Both paths publish them -- `calibration_views` from a held frame and `in_sample_views` from
+#: the streamed accumulation -- and the site reads them by name, so the names and the prose have
+#: to be one thing. They were written twice, and the two copies had already drifted: only one of
+#: them said what the deciles were cut on.
+def _in_sample_described(as_of: str) -> dict[str, tuple[str, str]]:
+    in_sample = "On the training half, the data the model was fitted to."
+    return {
+        "km_vs_model": (
+            "Kaplan-Meier against the model, by segment",
+            "Survival by loan age, observed and predicted along each loan's realised "
+            f"covariate path, with the Greenwood band. {in_sample}",
+        ),
+        "ae_by_year": (
+            "Actual against expected by calendar year",
+            f"Defaults against the model's expectation, year of observation by segment. "
+            f"{in_sample}",
+        ),
+        "ae_by_vintage": (
+            "Actual against expected by vintage year",
+            f"Defaults against expectation by year of origination. {in_sample}",
+        ),
+        "ae_by_age_band": (
+            "Actual against expected by loan age",
+            f"Defaults against expectation by seasoning band. {in_sample}",
+        ),
+        "ae_by_decile": (
+            "Actual against expected by decile of predicted risk",
+            f"Deciles of the whole training half's exposure, cut on the hazards of every "
+            f"loan-month up to {as_of}. {in_sample}",
+        ),
+    }
+
+
 def calibration_views(
     split: Split,
     *,
@@ -159,71 +193,28 @@ def calibration_views(
 ) -> list[View]:
     """Non-parametric against parametric, in-sample and out of time, by every segment."""
     train, test = split.train, split.test
-    in_sample = "On the training half, the data the model was fitted to."
-    out_of_time = f"On the months after {split.as_of}, which the model never saw."
-    views = [
-        View(
-            "km_vs_model",
-            "Kaplan-Meier against the model, by segment",
-            f"Survival by loan age, observed and predicted along each loan's realised "
-            f"covariate path, with the Greenwood band. {in_sample}",
-            _by_segment(train, lambda groups: survival_by_age(train, train_hazard, groups=groups)),
-            source="fit",
+    described = _in_sample_described(str(split.as_of))
+    tables = {
+        "km_vs_model": _by_segment(
+            train, lambda groups: survival_by_age(train, train_hazard, groups=groups)
         ),
-        View(
-            "ae_by_year",
-            "Actual against expected by calendar year",
-            f"Defaults against the model's expectation, year of observation by segment. "
-            f"{in_sample}",
-            _actual_expected_by_segment(train, train_hazard, "year", calendar_years(train)),
-            source="fit",
+        "ae_by_year": _actual_expected_by_segment(
+            train, train_hazard, "year", calendar_years(train)
         ),
-        View(
-            "ae_by_vintage",
-            "Actual against expected by vintage year",
-            f"Defaults against expectation by year of origination. {in_sample}",
-            _actual_expected_by_segment(train, train_hazard, "vintage_year", _vintage_years(train)),
-            source="fit",
+        "ae_by_vintage": _actual_expected_by_segment(
+            train, train_hazard, "vintage_year", _vintage_years(train)
         ),
-        View(
-            "ae_by_age_band",
-            "Actual against expected by loan age",
-            f"Defaults against expectation by seasoning band. {in_sample}",
-            _actual_expected_by_segment(train, train_hazard, "age_band", age_bands(train)),
-            source="fit",
+        "ae_by_age_band": _actual_expected_by_segment(
+            train, train_hazard, "age_band", age_bands(train)
         ),
-        View(
-            "ae_by_decile",
-            "Actual against expected by decile of predicted risk",
-            f"Deciles of the whole training half's exposure. {in_sample}",
-            _actual_expected_by_segment(
-                train, train_hazard, "decile", deciles(train_hazard, train)
-            ),
-            source="fit",
+        "ae_by_decile": _actual_expected_by_segment(
+            train, train_hazard, "decile", deciles(train_hazard, train)
         ),
-        View(
-            "backtest_by_month",
-            "Backtest by month",
-            f"Defaults against expectation by month of observation. {out_of_time}",
-            _actual_expected_by_segment(test, test_hazard, "month", _months(test)),
-            source="fit",
-        ),
-        View(
-            "backtest_by_decile",
-            "Backtest by decile of predicted risk",
-            f"Deciles of the test window's exposure. {out_of_time}",
-            _actual_expected_by_segment(test, test_hazard, "decile", deciles(test_hazard, test)),
-            source="fit",
-        ),
-        View(
-            "acceptance_by_segment",
-            "Acceptance criteria by segment",
-            f"Actual over expected 0.80 to 1.25 overall and in every decile, Gini above 0.45, "
-            f"for every group. {out_of_time}",
-            acceptance_by_segment(test, test_hazard),
-            source="fit",
-        ),
-    ]
+    }
+    views = [View(name, *described[name], tables[name], source="fit") for name in described]
+    # The out-of-time block is the same three views the streamed path publishes, so it is the
+    # same function: this one used to repeat them verbatim, names, titles and prose.
+    views += backtest_views(test, test_hazard, as_of=str(split.as_of))
     if families:
         pieces = [
             survival_by_age(train, hazard).assign(distribution=name)
@@ -233,8 +224,8 @@ def calibration_views(
             View(
                 "families_vs_km",
                 "Distribution families against Kaplan-Meier",
-                f"Each family's fit of the same specification, chained along the realised "
-                f"covariate paths. {in_sample}",
+                "Each family's fit of the same specification, chained along the realised "
+                "covariate paths. On the training half, the data the model was fitted to.",
                 pd.concat(pieces, ignore_index=True),
                 source="fit",
             )
@@ -380,10 +371,7 @@ def projection_views(
     )
     twelve = conditional_pd(survival, horizon_months=12)
 
-    labelled: list[tuple[str, pd.Series | None]] = [(ALL, None)]
-    labelled += [
-        (segment.name, segment.label(book).set_axis(book[LOAN_ID])) for segment in available(book)
-    ]
+    labelled = _segments_of(book, index=book[LOAN_ID])
     structure, scenario_rows = [], []
     for name, labels in labelled:
         groups = (
@@ -452,9 +440,20 @@ def projection_views(
 # --------------------------------------------------------------------------------------
 
 
-def _segments_of(frame: pd.DataFrame) -> list[tuple[str, pd.Series | None]]:
-    """Every segment the frame can be opened by, the whole book first."""
-    return [(ALL, None), *((segment.name, segment.label(frame)) for segment in available(frame))]
+def _segments_of(
+    frame: pd.DataFrame, *, index: pd.Series | None = None
+) -> list[tuple[str, pd.Series | None]]:
+    """Every segment the frame can be opened by, the whole book first.
+
+    `index` re-axes each label, which the loan-level path needs: its tables are keyed on the
+    loan identifier rather than on the frame's own position. That was the only difference
+    between the two places this was written out by hand, so it is an argument now instead of
+    a second copy.
+    """
+    labels = [(segment.name, segment.label(frame)) for segment in available(frame)]
+    if index is not None:
+        labels = [(name, label.set_axis(index)) for name, label in labels]
+    return [(ALL, None), *labels]
 
 
 def _risk_sets_by_segment(
@@ -616,32 +615,7 @@ _DIMENSION: Final[dict[str, str]] = {
 
 def in_sample_views(accumulated: Mapping[str, pd.DataFrame], *, as_of: str) -> list[View]:
     """The accumulated tables as the views the site publishes, names and columns unchanged."""
-    in_sample = "On the training half, the data the model was fitted to."
-    described = {
-        "km_vs_model": (
-            "Kaplan-Meier against the model, by segment",
-            "Survival by loan age, observed and predicted along each loan's realised "
-            f"covariate path, with the Greenwood band. {in_sample}",
-        ),
-        "ae_by_year": (
-            "Actual against expected by calendar year",
-            f"Defaults against the model's expectation, year of observation by segment. "
-            f"{in_sample}",
-        ),
-        "ae_by_vintage": (
-            "Actual against expected by vintage year",
-            f"Defaults against expectation by year of origination. {in_sample}",
-        ),
-        "ae_by_age_band": (
-            "Actual against expected by loan age",
-            f"Defaults against expectation by seasoning band. {in_sample}",
-        ),
-        "ae_by_decile": (
-            "Actual against expected by decile of predicted risk",
-            f"Deciles of the whole training half's exposure, cut on the hazards of every "
-            f"loan-month up to {as_of}. {in_sample}",
-        ),
-    }
+    described = _in_sample_described(as_of)
     views = [
         View(name, title, description, accumulated[name], source="fit")
         for name, (title, description) in described.items()
@@ -658,7 +632,7 @@ def in_sample_views(accumulated: Mapping[str, pd.DataFrame], *, as_of: str) -> l
                 "families_vs_km",
                 "Distribution families against Kaplan-Meier",
                 "Each family's own selected model, chained along the realised covariate "
-                f"paths. {in_sample}",
+                "paths. On the training half, the data the model was fitted to.",
                 pd.concat(
                     [table.assign(distribution=name) for name, table in families.items()],
                     ignore_index=True,
