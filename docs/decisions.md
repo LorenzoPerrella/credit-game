@@ -6,8 +6,8 @@ worked is not much use to the next person who has to decide the same things.
 
 ## Rules set before the results
 
-Four decisions were written down before the fits they govern, so that no result could pick
-them:
+Twelve rules are written down before the fits they govern, so that no result can pick them --
+`docs/rules.md` holds them all, with the measurement behind each. These four are the oldest:
 
 | Decided in advance | Why it had to be in advance |
 |---|---|
@@ -98,11 +98,44 @@ them:
     the network by a test, so the day the endpoint honours the parameter the suite says so
     rather than the limitation quietly outliving its reason.
 
+## What the last stage decided, and what it could not
+
+Prepayment, the family, HARP and payment history are closed, each by the thing named above as
+what would close it -- the detail and the measured numbers are on the
+[validation response](validation.md#what-the-next-stage-closed). Three decisions inside that
+stage are worth recording for the same reason this log exists.
+
+**The event definition is three-state now, and `panel.CENSORED` names the third.** Default,
+prepayment, neither. The third state had no name for a while, which is how it stayed invisible
+while two commands went on asking the cell table for a boolean `event` column that no longer
+existed -- a fault that could not reach the tests, because both commands read the production
+table rather than a fixture.
+
+**A covariate may be in the model because removing it left something unfittable.** Rule 11, and
+the prepayment model has one: without *unemployment change since origination* the polish stops
+912 standard errors out with every step it wants refused below the parent's optimum, and the same
+happens from SLSQP, from L-BFGS-B and from a cold start. That is a statement about lifelines'
+likelihood, not about the covariate, and the elimination table says so rather than reporting a
+clean removal.
+
+**A banded covariate is read as bands.** Rule 12, written after the first backtest of the stage
+and before the fit that answered it, which is the only order that makes it a rule rather than a
+preference: the in-sample deciles said the risk spread was compressed by 40%, three covariates
+that are already bands in the key were entering as a straight line through their midpoints, and
+reading them as bands recovered 10.2% of the gap. What it did **not** do is close it, and the
+measurement of why -- resolution inside the bands, which costs cells against a declared ceiling --
+is what the next two stages are for.
+
 ## Where this goes next
 
-The findings still open -- decile calibration, the family, prepayment, HARP, point-in-time
-macro -- are listed on the [validation response](validation.md#still-open). The next stage
-keeps to survival models: prepayment as a competing risk with cumulative incidence, payment
-history, HARP as a level of the key, a family rule and a materiality threshold for macro
-covariates written before the fits, and a calibration anchored on a window of its own and
-tested on several.
+Two branches, in this order, and the order is the finding. A compiled numerical core comes
+first: not only because a fit is slow but because four worker processes each hold a batch, and
+one engine holding one copy is what makes a larger key fittable at all. Then the finer bands,
+a re-selection under them, and a re-calibration.
+
+The cell ceiling will be **re-declared from the measured capacity of that engine, before the
+table is rebuilt**, rather than raised to admit what it needs to admit. It was set at 150
+million from what the machine could do in September 2026, when a fit held the panel at 15 GB;
+fits now stream at 4.7, and the aggregation no longer grows its peak with the table. Revising a
+capacity limit on new capacity measurements is a different act from moving a threshold to pass a
+test, and the difference is whether the number is written before or after the thing it decides.

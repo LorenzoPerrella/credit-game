@@ -4,7 +4,8 @@
 
 | | |
 |---|---|
-| Family | Weibull accelerated failure time, shape <!-- value: model.rho --> |
+| Family | Weibull accelerated failure time, shape <!-- value: model.rho --> -- chosen by [rule 2](rules.md), not by likelihood |
+| Competing risk | Prepayment, modelled; lifetime PD is a cumulative incidence |
 | Twelve-month PD, origination book today | **<!-- value: scenario.pd_12m -->** |
 | Lifetime PD over 36 months, baseline | <!-- value: scenario.baseline --> |
 | Lifetime PD over 36 months, adverse | <!-- value: scenario.adverse --> |
@@ -12,11 +13,31 @@
 
 ```mermaid
 flowchart TD
-    A["At origination<br/>credit score, loan-to-value, debt-to-income, term<br/>purpose, occupancy, insurance, first-time buyer"] --> M
-    B["Along the loan's life, lagged three months<br/>house prices, unemployment, financial conditions<br/>policy rate, sentiment, housing starts, inflation"] --> M
-    M["log survival time"] --> Q["the monthly hazard at each age"]
-    Q --> R["term structure and lifetime PD"]
+    A["At origination<br/>credit score, loan-to-value, debt-to-income, term<br/>purpose, occupancy, insurance, buyer, HARP"] --> M
+    B["Along the loan's life, lagged three months<br/>house prices, unemployment, policy rate,<br/>yield curve, sentiment, housing starts"] --> M
+    A --> P
+    B2["Along the loan's life<br/>the fall in the market rate, house prices,<br/>volatility, equity return, financial conditions"] --> P
+    M["default: log survival time"] --> Q["the monthly default hazard<br/>at each age"]
+    P["prepayment: log survival time"] --> S["the monthly prepayment hazard<br/>at each age"]
+    Q --> R["cumulative incidence of default:<br/>term structure and lifetime PD"]
+    S --> R
 ```
+
+**Two hazards, not one, and the lifetime PD is a cumulative incidence.** A loan that repays
+cannot later default, so treating repayment as censoring assumes it is uninformative about
+default -- and on this book it is the opposite of uninformative: there are 33,797,300
+prepayments against 1,671,207 defaults, twenty times as many exits through the door the model
+used to ignore. The lifetime PD is therefore the Aalen-Johansen quantity, the share that has
+left through default by a given age with the competition accounted for, rather than `1 - S` from
+a single hazard, which overstates it at long horizons.
+
+The prepayment model is selected by the same procedure under its own declared priors -- a credit
+score that lengthens survival shortens the time to repayment, so the two sets of priors cannot be
+one -- and what survives says what one would hope: the fall in the market rate since origination
+at -0.198 per standard deviation and equity volatility at -0.215 are its largest effects, while
+inflation, its change, volatility change and sentiment were all eliminated for turning their
+signs. A refinancing is decided by the rate on offer, not by the business cycle at large. The
+record is in the [prepayment selection](reports/selection_weibull_prepayment.md).
 
 ## Reading a coefficient
 
@@ -56,8 +77,11 @@ when losses arrive.
 
 ## Scenarios
 
-The adverse path is shaped like 2008 rather than scaled to it, and it moves only the series
-the model reads. The baseline is a random walk from the last observation: **not a forecast**,
+The adverse path is shaped like 2008 rather than scaled to it, and it moves every series a
+model reads and no series one does not -- across **both** hazards, which is eleven of them. That
+is not a tidiness point: when the default model lost inflation to a sign reversal, the scenario
+went on shocking the consumer price index for a model that could not feel it, while four of the
+eight covariates of the hazard competing with default stood still under stress. The baseline is a random walk from the last observation: **not a forecast**,
 but what makes the relative effect of a scenario readable without a view on the economy.
 
 <!-- table: adverse_legs -->

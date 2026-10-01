@@ -369,7 +369,14 @@ def test_a_number_the_views_provide_is_placed_on_a_page_never_typed() -> None:
 
     for page in CURRENT_PAGES:
         markdown = (project_root() / "docs" / f"{page}.md").read_text()
-        typed = [name for name, text in numbers.items() if text in markdown]
+        # On a word boundary, because a substring match reads a number inside a longer one: the
+        # Gini threshold 0.45 is in the actual-over-expected 0.4581 of a backtest window, which
+        # is a different number from a different report and not a typed value at all.
+        typed = [
+            name
+            for name, text in numbers.items()
+            if re.search(rf"(?<![\d.]){re.escape(text)}(?![\d])", markdown)
+        ]
         assert not typed, f"docs/{page}.md types {typed} instead of placing them"
 
 
