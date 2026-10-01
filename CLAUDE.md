@@ -76,18 +76,30 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
 - **Never leave a long run unsaved.** One run completed a 154-minute fit and was then
   killed writing its reports, keeping nothing. That is why the cache exists.
 
-**Where a fit's time actually goes, measured.** On a 250,000-row block of the production table
-with 19 parameters: expanding the design 41 ms, a value 28 ms, a value with its gradient 66 ms,
-**a Hessian 1,381 ms -- 49 times the value**, because autograd takes it forward-over-reverse.
-A cold fit is 50 to 100 SLSQP evaluations and two to six Newton steps, so **the optimiser's
-path is ~85% of a fit and the Hessian ~15%**: speed lives in the evaluation, not in Newton.
+**Where a fit's time actually goes, measured -- and the first two figures of this were wrong
+for a year.** On a 250,000-cell batch of the production table at the **26** parameters rule 12
+produced: expanding the design 39.6 ms, a value with its gradient **234.9 ms**, a Hessian
+**1,373 ms**. The earlier reading of 66 ms was taken at **19** parameters, before the band
+factors, and was never retaken: it is 3.6x light, and it is where the apparent mystery of an
+evaluation reading ~180 s on the training half came from. The Hessian is **5.8 times a
+value-and-gradient**, not the 49 times a value that used to be quoted -- `minimize` is always
+called with `jac=True`, so nothing in the optimiser's path ever buys a value alone. And the cost
+per row **rises with the block size**, 0.83 to 1.33 µs a row from 49,000 to 968,000, because at
+26 columns a million-row block allocates 208 MB of design and ~700 MB of tape per evaluation.
+`docs/reports/engine.md` carries the table and the scaling to the whole training half.
 
 And the evaluation is not arithmetic-bound. Profiled, a value-and-gradient spent **42% in
 autograd's tape, 32% in `pandas.take` and 20% copying**, with the likelihood's own exp and log a
 minority. The pandas half was waste -- the design and the masks the likelihood filters by do not
 change between evaluations -- and `_Slicer` removed it: **1.9x on every evaluation**. What is
 left is autograd, and reducing that means owning an analytic gradient, which is the second
-implementation of lifelines' likelihood this engine exists to avoid.
+implementation of lifelines' likelihood this engine exists to avoid. **That line was crossed
+deliberately on `perf/fit-engine`**, with the equivalence tests as the contract: every column of
+the design is a function of the loan combination (3,001 of them) or of the calendar key (153,309)
+and never of both, so `eta = A[i] + B[j]`, the interval is always one month and exact
+observations never occur -- which leaves one exponential a row and makes an analytic Hessian
+cost three times a gradient instead of 5.8. Measured 18x and 41x; see
+`docs/reports/engine.md`.
 
 ## lifelines' optimiser stops short of the optimum
 

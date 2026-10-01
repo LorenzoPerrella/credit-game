@@ -95,4 +95,6 @@ nav:
       - Backtest report: reports/backtesting.md
   - Validation response: validation.md
   - Decision log: decisions.md
-  - Reproduce: reproduce.md
+  - Reproduce:
+      - In short: reproduce.md
+      - The fit engine's envelope: reports/engine.md
