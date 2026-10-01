@@ -104,8 +104,11 @@ implementation of lifelines' likelihood this engine exists to avoid. **That line
 deliberately on `perf/fit-engine`**, with the equivalence tests as the contract: every column of
 the design is a function of the loan combination (3,001 of them) or of the calendar key (153,309)
 and never of both, so `eta = A[i] + B[j]`, the interval is always one month and exact
-observations never occur -- which leaves one exponential a row and makes an analytic Hessian
-cost three times a gradient instead of 5.8. Measured 18x and 41x; see
+observations never occur. Measured on the real cardinalities, one thread: a value-and-gradient
+over 53.3 million rows in **10.2 s** and one with the Hessian in **29.9**, against 57.8 and 396
+-- **5.1x and 11.8x** -- with the whole training half resident in 0.81 GB of fifteen-byte rows.
+An earlier draft projected 18x and 41x from a prototype that computed the interval probability
+with one exponential, which matches lifelines only where no clip binds; see
 `docs/reports/engine.md`.
 
 ## lifelines' optimiser stops short of the optimum

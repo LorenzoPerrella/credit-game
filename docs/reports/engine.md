@@ -96,35 +96,55 @@ whole per-row state is `(i: u16, j: u32, one event bit, weight: u32)` -- about 1
 
 ## What that arithmetic costs, measured
 
-A chunked NumPy implementation of the above, on arrays of the real cardinalities, 2²⁰ rows a
-chunk, single-threaded:
+`creditsurv.models.kernel` writes the likelihood out: a row depends on exactly two scalars --
+its own `eta` and the shape's single coefficient -- so its derivatives are six numbers whatever
+the parameter count, and they are carried through a second-order forward chain rather than a
+tape. The gradient is two scatter-adds into the two tables; the curvature is those plus a cross
+accumulator and three small matrix products. On arrays of the real cardinalities, one thread:
 
-| rows | value+gradient | with the Hessian | per row, v+g | per row, with H | footprint |
+| rows | value+gradient | with the Hessian | per row, v+g | per row, with H | rows and tables |
 |---|---|---|---|---|---|
-| 242,419 | 10.4 ms | 46.3 ms | 43 ns | 191 ns | — |
-| 5,000,000 | 284.6 ms | 821.3 ms | 57 ns | 164 ns | 0.28 GB |
-| 53,273,105 | **2.82 s** | **8.67 s** | 53 ns | 163 ns | **0.98 GB** |
+| 242,419 | 0.061 s | 0.171 s | 253 ns | 705 ns | 0.01 GB |
+| 53,273,105 | **10.2 s** | **29.9 s** | 192 ns | 562 ns | **0.81 GB** |
 
-Per row, against the table at the top: **18x** on a value-and-gradient and **41x** on a
-value-and-gradient-and-Hessian. The cost per row is flat in the number of rows -- 43, 57, 53
-ns -- where the present engine's rises by 1.6x, because nothing here is allocated per
-evaluation. A Hessian stops being 5.8 times a value-and-gradient and becomes 3.1.
+Against the table at the top -- 970 ns a row for a value-and-gradient and 6,634 with a Hessian
+-- that is **5.1x** and **11.8x**. A pass over the training half goes from 57.8 s to 11.4, and
+from 396 s to 33.5 with the curvature, so a Newton fit of a dozen iterations is about seven
+minutes on one core where a cold SLSQP path is an hour.
 
-Three honest qualifications. The curvature scalars in the prototype are placeholders with
-the right **cost** -- the same number of passes and accumulations -- not the final algebra;
-deriving that exactly, and holding it to autograd, is the work itself. The indices are drawn
-at random, which is the worst case for the gathers `A[i]`, `B[j]` and `X_cal[j]`; the real
-table is written in key order, so the real thing should be faster rather than slower. And
-this is one thread: the present engine's 57.8 s is also one worker.
+**Two numbers in an earlier draft of this report were wrong, and they were wrong in the
+flattering direction.** It projected 18x and 41x from a prototype that computed the interval
+probability as a single exponential, `d = H(a+1) - H(a)`. That is algebraically equivalent to
+what lifelines computes only where no clip binds; reproducing the clips needs three cumulative
+hazards and two survivals, and the prototype's 53 ns a row became 192. The projection was an
+estimate of arithmetic that does not reproduce the thing being replaced.
 
-What it changes downstream: with an exact Hessian at three times the cost of a gradient,
-Newton from the first step replaces a 50-to-121-evaluation SLSQP path, and a fit becomes
-about ten to fifteen iterations of 8.7 s.
+Two things the profile settled rather than the design. **The second derivatives are optional**:
+they are six of the eleven multiplications a chain rule performs and nine of the fourteen a
+product does, and carrying them through a gradient-only evaluation cost 420 ns a row against
+212. And **the chunk size hardly matters**: swept from 2,048 to 1,048,576 rows the figure reads
+289, 347, 241, 212, 217 and 265 ns, so small chunks pay numpy's per-call overhead, large ones
+leave cache, and neither is worth more than about 30%. What the chunking is for is a working set
+that does not grow with the table.
+
+The row itself is **fifteen bytes** -- four for each index, two for the age, one for the exit and
+four for the weight, which is a count of loan-months and therefore an integer -- against the 208
+bytes a row an expanded 26-column design costs. The whole training half is 0.81 GB of rows and
+tables, with a peak of 1.31 GB including the chunk's working set.
 
 ## The gate for compiling anything
 
-The compiled kernel is measured **against the NumPy above**, not against autograd. Measuring
-it against autograd would credit a compiled language with removing a tape that NumPy already
-removed. It must be at least three times faster on value-and-gradient-and-Hessian over the
-whole training half, and hold resident memory under 1 GB, or it is abandoned and the number
-is reported here.
+The compiled kernel is measured **against the NumPy above**, not against autograd. Measuring it
+against autograd would credit a compiled language with removing a tape that NumPy already
+removed.
+
+The profile says where the remaining time goes, and it is not arithmetic: `_times` -- one array
+multiply -- was 46% of a call, because the chain rule performs about 180 of them per chunk where
+the mathematics needs perhaps 40, and each one allocates and traverses an array. The primitives
+themselves are 1.3 ns a row for an exponential, 0.3 for a multiply, 1.7 for a gather and 3.1 for
+a scatter-add into 153,309 bins. A fused loop holds the six jet components in registers, lets
+the compiler delete the structural zeros outright, and traverses the fifteen bytes of a row once.
+
+So the gate: **value+gradient+Hessian over the whole training half at least three times faster
+than 29.9 s, with resident memory no higher than the 1.31 GB measured here.** If it misses, it
+is abandoned and the number is reported here.
