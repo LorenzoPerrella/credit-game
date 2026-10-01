@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 #: Default weight column, produced by the aggregation.
-WEIGHT: Final = "n"
+WEIGHT: Final = "loan_months"
 
 #: A category holding this much of the exposure leaves nothing to estimate from the
 #: rest. Deliberately 99% rather than the 90% one might reach for: a covariate that is

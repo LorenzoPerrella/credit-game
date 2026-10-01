@@ -32,11 +32,11 @@ flowchart LR
 | **D6** `super_conforming_flag` | Mapped from what the field holds | -- | [Data dictionary](data_dictionary.md) |
 | **M1** calendar two months late | The exact origination month in the cell key | 0 of 1,536,686 defaults filed in a different month; the correlation peaks at lag zero | [Data preparation](data_preparation.md#the-grouping-key) |
 | **M2** two grids of cut points | One production grid, held by a test to a subset of the exploratory one | -- | [Data preparation](data_preparation.md#cut-points) |
-| **M3** loan characteristics kept out of the key | `has_mi` and `first_time_buyer` in the key and screened into the model | 1.19 times the cells, where sixteen had been claimed | [Variable selection](variable_selection.md#running-it-creditsurv-select) |
-| **F1, S5** the specification could not be regenerated; levels as calendar effects | `creditsurv select` runs steps 5 to 9 and produces the specification, which a test holds the configuration to; gap forms offered beside levels; the reversal rule runs | 7 macro covariates kept; `vix` and `inflation` removed by the procedure | [Methodology](methodology.md#how-the-covariates-were-chosen), [selection record](reports/selection.md) |
+| **M3** loan characteristics kept out of the key | Mortgage insurance and buyer type in the key and screened into the model | 1.19 times the cells, where sixteen had been claimed | [Variable selection](variable_selection.md#running-it-creditsurv-select) |
+| **F1, S5** the specification could not be regenerated; levels as calendar effects | `creditsurv select` runs steps 5 to 9 and produces the specification, which a test holds the configuration to; gap forms offered beside levels; the reversal rule runs | 7 macro covariates kept; equity volatility and inflation removed by the procedure | [Methodology](methodology.md#how-the-covariates-were-chosen), [selection record](reports/selection.md) |
 | **S1** a backtest with no criterion | Acceptance criteria declared before the run; in-sample actual over expected by year beside the out-of-time figure | Overall ratio and Gini pass; **deciles fail** | [Calibration & backtest](calibration.md) |
-| **S2** scenario misaligned | The adverse path moves only series the model reads, and its table is built from the scenario | Adverse lifetime PD 2.39 times baseline | [Model](model.md#scenarios) |
-| **S3** family and shape untested | Distribution comparison with a sign check, and the shape test on `occupancy`, both run | The log-logistic leads on likelihood; the shape varies with occupancy | [Methodology](methodology.md#the-distribution-family) |
+| **S2** scenario misaligned | The adverse path moves only series a model reads, and every series a model reads -- now across **both** hazards, since the lifetime PD chains two. Its table is built from the scenario rather than described beside it | 11 series shocked, 11 covariates moved, neither set larger than the other | [Model](model.md#scenarios) |
+| **S3** family and shape untested | Distribution comparison with a sign check, and the shape test on occupancy, both run | The log-logistic leads on likelihood; the shape varies with occupancy | [Methodology](methodology.md#the-distribution-family) |
 | **S4, S6, S7** lags, marginal effects, figures | Every macro series lagged; marginal effects and event count fixed; figures aligned across documents | -- | [Data](data.md), [portfolio](portfolio.md) |
 
 The measured column records the figures of the re-estimation that closed the findings.
@@ -52,17 +52,50 @@ The current figures are on the pages linked beside them.
   values no likelihood can take, which also took a screening fit from 76 minutes to 30.
 - **The selection's inputs no longer come from its output**, and `report` starts its fit
   where the selection ended.
+- **lifelines' clipped likelihood is unbounded below, and every optimiser finds it.** The
+  interval probability is clipped at 1e-25 while the left-truncation term is added unclipped, so
+  the objective -- a mean negative log-likelihood, which cannot be negative -- can fall below
+  anything a likelihood can take. It needs no extreme parameter: on the prepayment model the
+  truncation term has only to reach 0.0176 on the mean, the order of the hazard itself. A
+  nested fit is now handed its parent's optimum as a floor, that region is returned as infinite
+  with a zero gradient so every method backtracks from it, and the shape is bounded at 3 on the
+  log scale, where 125 converged fits on this book put it between 1.07 and 1.62.
+- **A fit was not reproducible.** One queue served every worker process, so the parent added
+  their shares in the order they arrived; floating-point addition is not associative, and the
+  optimiser turned the last digit into a different search. Two runs of one fit agreed to every
+  printed digit for eighty evaluations, split at 0.065288491918 against 0.065288491919, and were
+  five significant figures apart forty later. The shares are added in the parts' own order now,
+  and a test compares three runs bit for bit.
+- **A diagnosis that did not survive its own test**, recorded because it is easy to reach
+  again: that a polish stalling 557 standard errors out means a flat direction. The two
+  quantities the comparison needed are identically equal, so the ratio reads one whatever the
+  curvature. What the stall meant was the floor above.
+
+## What the next stage closed
+
+Four of the five open items are closed, each by the thing the decision log said would close it.
+
+| | How it closed | Measured |
+|---|---|---|
+| **Prepayment** | A competing risk with a model of its own, selected by the same procedure under rule 6's priors. Lifetime PD is a cumulative incidence rather than `1 - S` | 33,797,300 prepayments beside 1,671,207 defaults; 17 covariates from 24 candidates |
+| **Weibull or log-logistic** | Rule 2, written before either fit and applied by `creditsurv family`: each family's **own** selected model against the Aalen-Johansen incidence. Neither turns a declared sign, so neither is excluded | Weibull 0.1027 pp mean gap against the log-logistic's 0.1498, over 222 loan ages |
+| **HARP** | A level in the key. The missing debt-to-income and the programme are the same set, so the ratio stays missing and the level absorbs the constant that fills it -- the dummy-variable adjustment, not an imputation | 238,849,701 loan-months, 8.6% of the book, 135,070 defaults |
+| **Payment history** | The state of the month **before** is in the key, since the state during the month is the event by definition | 1,518,761 of 1,671,207 defaults open the month two payments behind |
+
+And the level is anchored on a window of its own, which was the other half of the plan: one
+multiplier of 1.1831 estimated on 2022-01 to 2024-12 takes the test window's actual over
+expected from 1.134 to **0.958** with the Gini untouched at 0.541, because it moves the level
+and nothing else.
 
 ## Still open
 
 | | Why it is open |
 |---|---|
-| **Decile calibration** | The declared criterion fails: out of time, actual over expected runs from <!-- value: backtest.deciles --> across the deciles |
-| **Weibull or log-logistic** | The log-logistic has the better likelihood but turns `nfci_lagged` against its prior; switching means a selection run with log-logistic fits |
-| **Prepayment** | Independent censoring, so lifetime PD is overstated at long horizons |
-| **HARP** | Outside the model; covering it needs a level of its own in the key |
-| **Point-in-time macro** | FRED serves revised series |
+| **Decile calibration** | Still failing, and now diagnosed rather than merely reported. The model's **risk spread is compressed**: in sample it predicts 74.4x between the riskiest tenth of exposure and the safest where the book realises 125.3x, so actual over expected rises monotonically from 0.59 to 1.20 across the deciles. A multiplier cannot mend it, because the error is a slope. Rule 12 found the first cause -- three banded covariates read as a straight line through their midpoints -- and reading them as bands recovered **10.2%** of the gap. The rest is resolution: the key carries five score bands with 45.67% of the exposure in the top one, finer bands cost 2.276x the base key, and with the HARP level that rule 8 makes obligatory that is 154 million cells against the 150 million ceiling rule 7 declared |
+| **The level across regimes** | Actual over expected runs 0.458, 0.823 and 1.420 across the three declared cuts, in opposite directions. This is the identification restriction, not a fit: `period = cohort + age` holds identically, so calendar time enters only through six macro covariates, and a regime driven by another channel -- a moratorium suppressing the event in 2019-20, affordability in 2023-24 -- mis-levels the model. The anchoring is the declared remedy and it works on the window it is estimated on; by construction it cannot cover a regime it has not seen |
+| **Point-in-time macro** | FRED serves revised series. ALFRED's vintages were attempted and need an API key, so the limit is documented rather than closed |
 
-These are the subject of the next stage of the model: prepayment as a competing risk,
-payment history, HARP inside the key, a family rule written before the fits, and a
-calibration anchored on a window of its own. See the [decision log](decisions.md).
+The two calibration items are what the next two branches are for: a compiled numerical core, so
+that a larger key can be fitted at all, and then the finer bands and a re-selection under them.
+The ceiling itself will be re-declared from the measured capacity of that engine, before the
+table is rebuilt, rather than raised to fit what it needs to admit.

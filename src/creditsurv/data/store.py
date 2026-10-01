@@ -16,14 +16,18 @@ import hashlib
 import json
 import logging
 import pickle
-from typing import TYPE_CHECKING, Final
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Final, cast
 
 import pandas as pd
 
 from creditsurv.config import processed_dir
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Sequence
     from pathlib import Path
+
+    import duckdb
 
 _LOGGER: Final = logging.getLogger(__name__)
 
@@ -49,19 +53,80 @@ def save_cells(cells: pd.DataFrame, policy: str = DEFAULT_POLICY) -> Path:
     losing a quarter to a reboot: an aggregation is hours of work, and a crash while
     writing should leave the previous table intact rather than half of a new one.
     """
+    with cells_writer(policy) as write:
+        write(cells)
+    return cells_path(policy)
+
+
+@contextmanager
+def cells_writer(policy: str = DEFAULT_POLICY) -> Iterator[Callable[[pd.DataFrame], None]]:
+    """Append pieces of the cell table, atomically, holding one piece at a time.
+
+    The same sibling-file-then-move as :func:`save_cells`, and for the same reason, but the
+    caller hands over a quarter at a time instead of the table. That is the difference between
+    11.3 GB of peak and one quarter resident: the aggregation used to keep every quarter's frame
+    so the categorical levels could be unified across them, then concatenate -- two live copies
+    of 4.76 GB at 91.6 million cells -- and then let Arrow make a third while writing. At 200
+    million cells that is about 21 GB before the write, on a 16 GB machine.
+
+    Every piece must arrive with the same schema, which is what `CATEGORICAL_LEVELS` is for: a
+    quarter given only its own levels would write a different dictionary and parquet would
+    refuse the append.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
     path = cells_path(policy)
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(path.name + ".partial")
+    writer: pq.ParquetWriter | None = None
+
+    def write(piece: pd.DataFrame) -> None:
+        nonlocal writer
+        table = pa.Table.from_pandas(piece, preserve_index=False)
+        if writer is None:
+            writer = pq.ParquetWriter(partial, table.schema)
+        writer.write_table(table)
+
     try:
-        cells.to_parquet(partial)
+        yield write
+        if writer is None:
+            message = "Nothing was written: the cell table would have no schema."
+            raise ValueError(message)
+        writer.close()
+        writer = None
         partial.replace(path)
     finally:
+        if writer is not None:
+            writer.close()
         partial.unlink(missing_ok=True)
-    return path
 
 
-def load_cells(policy: str = DEFAULT_POLICY) -> pd.DataFrame:
-    """Read the cells built under ``policy``, or say how to build them."""
+@contextmanager
+def _reader() -> Iterator[duckdb.DuckDBPyConnection]:
+    """A DuckDB connection for reading the cell file, closed when the caller is done.
+
+    Through :func:`creditsurv.data.book.connect`, which is the one place that sets the
+    temporary directory away from the working tree: DuckDB spills into the process's own
+    directory by default, and the first query here that did left 20 GB inside the repository.
+    The readers are unlikely to spill -- they select or group in one pass -- but a connection
+    that cannot is cheaper than remembering which ones can.
+    """
+    from creditsurv.data.book import connect
+
+    con = connect()
+    try:
+        yield con
+    finally:
+        con.close()
+
+
+def _cells_or_say_how(policy: str) -> Path:
+    """The cell file, or the two commands that build it.
+
+    Every reader here needs the same sentence, and two of them used to go without it and
+    raise whatever DuckDB says about a missing file instead.
+    """
     path = cells_path(policy)
     if not path.exists():
         message = (
@@ -70,14 +135,116 @@ def load_cells(policy: str = DEFAULT_POLICY) -> pd.DataFrame:
             f"  uv run creditsurv aggregate --moratorium {policy}"
         )
         raise FileNotFoundError(message)
-    cells = pd.read_parquet(path)
-    # A table saved before its text keys were categorical comes back as Python strings.
-    # Categorised here, once, over the whole table -- which is also what keeps the levels
-    # of every later slice identical.
+    return path
+
+
+def _categorised(cells: pd.DataFrame) -> pd.DataFrame:
+    """Text columns as categoricals, in place.
+
+    A table saved before its text keys were categorical comes back as Python strings, and on
+    this key that is five columns over tens of millions of rows. Done once over whatever was
+    read, which is also what keeps the levels of every later slice identical.
+    """
     for column in cells.columns:
         if cells[column].dtype == object:
             cells[column] = cells[column].astype("category")
     return cells
+
+
+def _observed_between(first: int | None, last: int | None) -> str:
+    """A ``WHERE`` on the **observation** month, which is not a column.
+
+    It is ``origination_month + age``, so parquet cannot be asked for it by name and the
+    filter cannot be pushed down; DuckDB evaluates it while reading. Bounds are month
+    ordinals, ``year * 12 + month - 1``, inclusive.
+    """
+    bounds = []
+    if first is not None:
+        bounds.append(f"origination_month + age >= {int(first)}")
+    if last is not None:
+        bounds.append(f"origination_month + age <= {int(last)}")
+    return f"WHERE {' AND '.join(bounds)}" if bounds else ""
+
+
+def load_cells(
+    policy: str = DEFAULT_POLICY, *, columns: Sequence[str] | None = None
+) -> pd.DataFrame:
+    """Read the cells built under ``policy``, or say how to build them.
+
+    ``columns`` reads only those.
+    """
+    path = _cells_or_say_how(policy)
+    return _categorised(pd.read_parquet(path, columns=None if columns is None else list(columns)))
+
+
+def load_cells_window(
+    policy: str = DEFAULT_POLICY,
+    *,
+    first: int | None = None,
+    last: int | None = None,
+) -> pd.DataFrame:
+    """The cells observed between two month ordinals, read without the rest of the table.
+
+    ``first`` and ``last`` are ``year * 12 + month - 1``, inclusive, on the **observation**
+    month -- which is ``origination_month + age`` and therefore not a column, so the filter
+    cannot be pushed into parquet by name. DuckDB evaluates it while reading instead, and
+    what comes back is the window alone.
+
+    That is the difference between a backtest window and the book: 91.6 million cells are a
+    few gigabytes as a frame, and two years of observation are about 3% of them. The whole
+    table is read only where the whole table is the question.
+    """
+
+    path = _cells_or_say_how(policy)
+    where = _observed_between(first, last)
+    with _reader() as con:
+        cells: pd.DataFrame = con.execute(f"SELECT * FROM read_parquet('{path}') {where}").df()
+    return _categorised(cells)
+
+
+def load_largest_cells(
+    policy: str = DEFAULT_POLICY, *, age: int = 0, limit: int = 500
+) -> pd.DataFrame:
+    """The ``limit`` heaviest cells at one loan age, read without the rest of the table.
+
+    At age zero these are the origination profiles the book was written in, and their weights
+    say how much of it each accounts for -- which is what the projections are scored on. A
+    few hundred rows out of 91.6 million: the ordering and the limit belong in the reader.
+    """
+
+    path = _cells_or_say_how(policy)
+    with _reader() as con:
+        cells: pd.DataFrame = con.execute(
+            f"""
+            SELECT * FROM read_parquet('{path}')
+            WHERE age = {int(age)} ORDER BY loan_months DESC LIMIT {int(limit)}
+            """
+        ).df()
+    return _categorised(cells)
+
+
+def outcomes_by_age(
+    policy: str = DEFAULT_POLICY, *, first: int | None = None, last: int | None = None
+) -> pd.DataFrame:
+    """Loan-months by loan age and outcome, aggregated inside the parquet reader.
+
+    Everything the Aalen-Johansen estimator needs -- the exposure at each age and the exits
+    of each kind among it -- as a few hundred rows. The cells themselves are 91.6 million,
+    and a non-parametric curve is a statement about sums, so there is no reason to hold them
+    to compute one.
+    """
+
+    path = _cells_or_say_how(policy)
+    where = _observed_between(first, last)
+    with _reader() as con:
+        frame: pd.DataFrame = con.execute(
+            f"""
+            SELECT age, outcome, SUM(loan_months) AS loan_months
+            FROM read_parquet('{path}') {where}
+            GROUP BY ALL ORDER BY age
+            """
+        ).df()
+    return _categorised(frame)
 
 
 def cells_identity(policy: str = DEFAULT_POLICY) -> str:
@@ -130,6 +297,36 @@ def save_fit(result: object, fingerprint: str, description: dict[str, object]) -
         pickle.dump(result, handle, protocol=pickle.HIGHEST_PROTOCOL)
     path.with_suffix(".json").write_text(json.dumps(description, indent=2, default=str) + "\n")
     return path
+
+
+def find_fits(**criteria: object) -> list[tuple[str, dict[str, object]]]:
+    """Every cached fit whose description matches ``criteria``, most recent first.
+
+    The fingerprint is a hash of everything that determines a fit, **including the row and
+    loan-month counts**, so a caller that wants a fit it did not make has to know the counts
+    to name it -- which meant expanding the rows to count them, to find the model that would
+    have scored them. The descriptions are written beside the pickles for exactly this: the
+    directory of hashed filenames is unusable otherwise, and it is also searchable.
+
+    A criterion of ``None`` requires the key to be **absent**, which is how a report's fit is
+    told from a selection's: one carries ``purpose`` and the other does not.
+    """
+    directory = processed_dir() / FITS_DIRNAME
+    if not directory.exists():
+        return []
+    found: list[tuple[float, str, dict[str, object]]] = []
+    for path in directory.glob("*.json"):
+        try:
+            described = cast("dict[str, object]", json.loads(path.read_text()))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if any(
+            (key in described) if wanted is None else (described.get(key) != wanted)
+            for key, wanted in criteria.items()
+        ):
+            continue
+        found.append((path.stat().st_mtime, path.stem, described))
+    return [(fingerprint, described) for _, fingerprint, described in sorted(found, reverse=True)]
 
 
 def load_fit(fingerprint: str) -> object | None:

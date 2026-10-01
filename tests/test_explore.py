@@ -51,7 +51,7 @@ def test_fill_rate_flags_a_mostly_empty_column() -> None:
 
 def test_frequency_table_is_weighted_by_exposure() -> None:
     """One cell of sixty thousand loan-months outweighs ten cells of six."""
-    frame = pd.DataFrame({"grade": ["A", "B"], "n": [60000, 60]})
+    frame = pd.DataFrame({"grade": ["A", "B"], "loan_months": [60000, 60]})
 
     table = frequency_table(frame, "grade").set_index("level")
 
@@ -62,7 +62,7 @@ def test_frequency_table_is_weighted_by_exposure() -> None:
 def test_frequency_table_always_shows_a_missing_row() -> None:
     """A table that omits it leaves the reader unable to tell "none missing" from
     "not checked"."""
-    frame = pd.DataFrame({"grade": ["A", "B"], "n": [10, 10]})
+    frame = pd.DataFrame({"grade": ["A", "B"], "loan_months": [10, 10]})
 
     table = frequency_table(frame, "grade")
 
@@ -77,10 +77,10 @@ def test_concentration_uses_ninety_nine_percent_not_ninety() -> None:
         {
             "lopsided": ["owner", "investor"],
             "degenerate": ["yes", "no"],
-            "n": [870, 130],
+            "loan_months": [870, 130],
         }
     )
-    degenerate = pd.DataFrame({"degenerate": ["yes", "no"], "n": [9950, 50]})
+    degenerate = pd.DataFrame({"degenerate": ["yes", "no"], "loan_months": [9950, 50]})
 
     lopsided_report = concentration_report(frame, ["lopsided"]).set_index("column")
     degenerate_report = concentration_report(degenerate, ["degenerate"]).set_index("column")
@@ -96,7 +96,7 @@ def test_default_rate_is_events_over_exposure() -> None:
         {
             "band": ["low", "low", "high", "high"],
             "event": [True, False, True, False],
-            "n": [10, 9990, 10, 990],
+            "loan_months": [10, 9990, 10, 990],
         }
     )
 
@@ -110,7 +110,7 @@ def test_default_rate_is_events_over_exposure() -> None:
 def test_correlation_is_weighted() -> None:
     """An unweighted matrix describes the distribution of cells, which is an artefact
     of the binning, rather than of loan-months, which is the data."""
-    frame = pd.DataFrame({"x": [0.0, 1.0, 2.0], "y": [0.0, 1.0, 2.0], "n": [1, 1, 1000]})
+    frame = pd.DataFrame({"x": [0.0, 1.0, 2.0], "y": [0.0, 1.0, 2.0], "loan_months": [1, 1, 1000]})
 
     correlation = weighted_correlation(frame, ["x", "y"])
 
@@ -120,7 +120,11 @@ def test_correlation_is_weighted() -> None:
 
 def test_correlation_weighting_changes_the_answer() -> None:
     frame = pd.DataFrame(
-        {"x": [0.0, 1.0, 2.0, 3.0], "y": [0.0, 1.0, 2.0, -9.0], "n": [1000, 1000, 1000, 1]}
+        {
+            "x": [0.0, 1.0, 2.0, 3.0],
+            "y": [0.0, 1.0, 2.0, -9.0],
+            "loan_months": [1000, 1000, 1000, 1],
+        }
     )
 
     weighted = cell(weighted_correlation(frame, ["x", "y"]), "x", "y")
@@ -155,7 +159,7 @@ def test_survival_by_stratum_separates_a_riskier_group() -> None:
             "grade": ["good"] * 6 + ["bad"] * 6,
             "age": [0, 0, 6, 6, 12, 12] * 2,
             "event": [True, False] * 6,
-            "n": [1, 999, 1, 999, 1, 999, 50, 950, 50, 950, 50, 950],
+            "loan_months": [1, 999, 1, 999, 1, 999, 50, 950, 50, 950, 50, 950],
         }
     )
 
@@ -193,7 +197,7 @@ def test_survival_is_a_decreasing_probability() -> None:
             "grade": ["x"] * 20,
             "age": np.repeat(np.arange(10), 2),
             "event": [True, False] * 10,
-            "n": rng.integers(50, 500, 20),
+            "loan_months": rng.integers(50, 500, 20),
         }
     )
 

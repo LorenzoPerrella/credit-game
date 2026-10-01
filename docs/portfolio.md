@@ -41,7 +41,7 @@ The share of each year's loans, by segment. Pick one from the menu.
 
 <!-- figure: lending_mix -->
 
-??? example "A finding this view produced: `channel` cannot be used at four levels"
+??? example "A finding this view produced: the origination channel cannot be used at four levels"
     Until 2008 roughly half of originations are coded `T`, third party not specified; from
     2009 the code vanishes and broker and correspondent absorb it entirely.
 
@@ -101,7 +101,8 @@ treats it as censoring.
 ## Vintage curves
 
 Cumulative default by loan age, one line per vintage year, estimated by Kaplan-Meier on each
-vintage's own risk sets. A curve ends where fewer than <!-- value: figures.floor --> loan-months remain at risk.
+vintage's own risk sets. A curve ends where fewer than <!-- value: figures.floor -->
+loan-months remain at risk.
 
 <!-- figure: vintage_curves -->
 

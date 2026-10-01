@@ -52,8 +52,8 @@ def test_identical_loans_collapse_into_one_cell(tmp_path: Path) -> None:
     # Episodes are monthly because the time-varying covariates are, so age is not
     # collapsed and the compression comes from identical loans instead.
     assert len(cells) == 3
-    assert set(cells["n"]) == {20}
-    assert int(cells["n"].sum()) == 60
+    assert set(cells["loan_months"]) == {20}
+    assert int(cells["loan_months"].sum()) == 60
 
 
 def test_weights_account_for_every_loan_month(tmp_path: Path) -> None:
@@ -65,7 +65,7 @@ def test_weights_account_for_every_loan_month(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells["n"].sum()) == 24
+    assert int(cells["loan_months"].sum()) == 24
 
 
 def test_default_is_flagged_once_and_the_loan_is_cut(tmp_path: Path) -> None:
@@ -82,9 +82,9 @@ def test_default_is_flagged_once_and_the_loan_is_cut(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells["n"].sum()) == 3, "the loan should stop at its first defaulted month"
-    assert int(cells.loc[cells["event"], "n"].sum()) == 1
-    assert int(cells.loc[cells["event"], "age"].iloc[0]) == 2
+    assert int(cells["loan_months"].sum()) == 3, "the loan should stop at its first defaulted month"
+    assert int(cells.loc[cells["outcome"] == "default", "loan_months"].sum()) == 1
+    assert int(cells.loc[cells["outcome"] == "default", "age"].iloc[0]) == 2
 
 
 def test_an_reo_code_counts_even_when_delinquency_is_alphanumeric(tmp_path: Path) -> None:
@@ -102,21 +102,38 @@ def test_an_reo_code_counts_even_when_delinquency_is_alphanumeric(tmp_path: Path
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells.loc[cells["event"], "n"].sum()) == 1
+    assert int(cells.loc[cells["outcome"] == "default", "loan_months"].sum()) == 1
 
 
-def test_prepayment_is_censoring_not_an_event(tmp_path: Path) -> None:
-    origination = [origination_row("F000000001")]
+def test_the_three_outcomes_are_told_apart(tmp_path: Path) -> None:
+    """Default, a voluntary payoff, and the loan leaving the dataset are three things.
+
+    Prepayment is a competing risk now, so it has to be the borrower's own decision to repay:
+    a reperforming sale (16) and a removal (96) are neither default nor repayment. They end
+    observation, as they did, but as censoring.
+    """
+    origination = [origination_row(f"F00000000{i}") for i in range(1, 5)]
     performance = [
         performance_row("F000000001", "201503", "0"),
-        performance_row("F000000001", "201504", "1", zero_balance="01"),
+        performance_row("F000000001", "201504", "1", delinquency="3"),
+        performance_row("F000000002", "201503", "0"),
+        performance_row("F000000002", "201504", "1", zero_balance="01", upb="0"),
+        performance_row("F000000003", "201503", "0"),
+        performance_row("F000000003", "201504", "1", zero_balance="16", upb="0"),
+        performance_row("F000000004", "201503", "0"),
+        performance_row("F000000004", "201504", "1", zero_balance="96", upb="0"),
     ]
     _ingested(tmp_path, origination, performance)
 
     cells = build_cells(*_sources(tmp_path))
+    by_outcome = cells.groupby(cells["outcome"].astype(str))["loan_months"].sum()
 
-    assert not cells["event"].any()
-    assert int(cells["n"].sum()) == 2
+    assert int(by_outcome.get("default", 0)) == 1
+    assert int(by_outcome.get("prepayment", 0)) == 1
+    # Eight loan-months in, two of them ending in an event: the other six are still at risk
+    # as far as the likelihood is concerned, including the two sold and removed.
+    assert int(by_outcome.get("none", 0)) == 6
+    assert int(cells["loan_months"].sum()) == 8
 
 
 def test_sentinel_values_drop_the_loan(tmp_path: Path) -> None:
@@ -130,7 +147,7 @@ def test_sentinel_values_drop_the_loan(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells["n"].sum()) == 1
+    assert int(cells["loan_months"].sum()) == 1
 
 
 def test_negative_ages_are_dropped(tmp_path: Path) -> None:
@@ -143,7 +160,7 @@ def test_negative_ages_are_dropped(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells["n"].sum()) == 1
+    assert int(cells["loan_months"].sum()) == 1
     assert int(cells["age"].min()) == 0
 
 
@@ -164,7 +181,7 @@ def test_binning_puts_neighbouring_loans_in_one_cell(tmp_path: Path) -> None:
     cells = build_cells(*_sources(tmp_path))
 
     assert len(cells) == 1
-    assert int(cells["n"].iloc[0]) == 2
+    assert int(cells["loan_months"].iloc[0]) == 2
 
 
 def test_term_is_reduced_to_fifteen_or_thirty_years(tmp_path: Path) -> None:
@@ -246,11 +263,11 @@ def test_a_narrower_spec_collapses_harder(tmp_path: Path) -> None:
     wide = build_cells(*_sources(tmp_path))
     narrow = build_cells(
         *_sources(tmp_path),
-        spec=CellSpec(continuous={"fico_s": (-3.0, 3.0)}, categorical=()),
+        spec=CellSpec(continuous={"credit_score": (-3.0, 3.0)}, categorical=()),
     )
 
     assert len(narrow) < len(wide)
-    assert int(narrow["n"].sum()) == int(wide["n"].sum()) == 24
+    assert int(narrow["loan_months"].sum()) == int(wide["loan_months"].sum()) == 24
 
 
 def test_the_event_flag_is_never_null(tmp_path: Path) -> None:
@@ -272,9 +289,9 @@ def test_the_event_flag_is_never_null(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert cells["event"].dtype == bool
-    assert not cells["event"].isna().any()
-    assert int(cells.loc[cells["event"], "n"].sum()) == 1
+    assert set(cells["outcome"].astype(str)) <= {"default", "prepayment", "none"}
+    assert not cells["outcome"].isna().any()
+    assert int(cells.loc[cells["outcome"] == "default", "loan_months"].sum()) == 1
 
 
 def test_no_categorical_mapping_has_an_else_branch() -> None:
@@ -284,9 +301,9 @@ def test_no_categorical_mapping_has_an_else_branch() -> None:
     refinance. Every branch is listed explicitly so an unmapped code becomes NULL and
     the loan is dropped, which is the honest outcome for a value nobody has looked at.
     """
-    from creditsurv.data.aggregate import _CATEGORICAL
+    from creditsurv.data.book import CATEGORICAL
 
-    for name, expression in _CATEGORICAL.items():
+    for name, expression in CATEGORICAL.items():
         # Only the code mappings. A CASE on a numeric condition -- "is the term under
         # 190 months", "is there mortgage insurance" -- has no unseen values to
         # absorb, so an ELSE there is a genuine two-way split.
@@ -309,7 +326,7 @@ def test_an_unmapped_code_drops_the_loan(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    assert int(cells["n"].sum()) == 1
+    assert int(cells["loan_months"].sum()) == 1
     assert set(cells["purpose"]) == {"purchase"}
 
 
@@ -337,8 +354,8 @@ def test_channel_is_collapsed_to_a_comparable_binary(tmp_path: Path) -> None:
         spec=CellSpec(continuous={}, categorical=("channel",)),
     )
 
-    assert set(cells["channel"]) == {"retail", "third_party"}
-    assert int(cells.loc[cells["channel"] == "third_party", "n"].sum()) == 3
+    assert set(cells["channel"]) == {"retail", "broker_or_correspondent"}
+    assert int(cells.loc[cells["channel"] == "broker_or_correspondent", "loan_months"].sum()) == 3
 
 
 def test_the_default_formula_only_names_covariates_the_cells_carry() -> None:
@@ -388,7 +405,7 @@ def test_a_modified_loan_is_cut_at_the_modification(tmp_path: Path) -> None:
     """
     import duckdb
 
-    from creditsurv.data.aggregate import _state_of_the_book_sql
+    from creditsurv.data.book import state_of_the_book_sql
 
     performance = [
         performance_row("F15Q1000001", "201503", "0"),
@@ -402,7 +419,7 @@ def test_a_modified_loan_is_cut_at_the_modification(tmp_path: Path) -> None:
     _ingested(tmp_path, [origination_row("F15Q1000001")], performance)
 
     perf, orig = _sources(tmp_path)
-    book = duckdb.connect().execute(_state_of_the_book_sql(), [perf, orig]).df()
+    book = duckdb.connect().execute(state_of_the_book_sql(), [perf, orig]).df()
     book = book.sort_values("period_key")
 
     assert book["age"].tolist() == [0, 1, 2], "history should stop before the modification"
@@ -419,7 +436,7 @@ def test_truncation_follows_calendar_time_not_age(tmp_path: Path) -> None:
     """
     import duckdb
 
-    from creditsurv.data.aggregate import _state_of_the_book_sql
+    from creditsurv.data.book import state_of_the_book_sql
 
     performance = [
         performance_row("F15Q1000001", "201503", "0"),
@@ -433,7 +450,7 @@ def test_truncation_follows_calendar_time_not_age(tmp_path: Path) -> None:
     _ingested(tmp_path, [origination_row("F15Q1000001")], performance)
 
     perf, orig = _sources(tmp_path)
-    book = duckdb.connect().execute(_state_of_the_book_sql(), [perf, orig]).df()
+    book = duckdb.connect().execute(state_of_the_book_sql(), [perf, orig]).df()
     book = book.sort_values("period_key")
 
     assert book["age"].tolist() == [0, 1, 2, 3, 4]
@@ -447,10 +464,10 @@ def test_the_eliminated_covariates_are_out_of_the_model() -> None:
     silent reversal of a documented decision, and nothing else in the suite would
     notice it.
 
-    The formula is read as names, not as text: ``vix`` is inside ``vix_gap`` and
-    ``inflation`` inside ``inflation_gap``, so a level eliminated beside its own gap form
-    would read as still fitted. And a candidate is anything a cell carries -- the
-    selection screens loan characteristics and categoricals too, not only macro series.
+    The formula is read as names, not as text: ``equity_volatility`` is inside ``volatility_change``
+    and ``inflation_rate`` inside ``inflation_change``, so a level eliminated beside its own gap
+    form would read as still fitted. And a candidate is anything a cell carries -- the selection
+    screens loan characteristics and categoricals too, not only macro series.
     """
     from creditsurv.config import ELIMINATED, default_formula
     from creditsurv.data.aggregate import DEFAULT_SPEC
@@ -482,8 +499,8 @@ def test_the_production_grid_is_a_subset_of_the_documented_one() -> None:
         stray = [edge for edge in edges if edge not in documented]
         assert not stray, f"{name} cuts at {stray}, which BIN_EDGES does not justify"
 
-    assert 43.0 in PRODUCTION_EDGES["dti"], "the documented underwriting threshold is 43"
-    assert 80.0 in PRODUCTION_EDGES["orig_ltv"], "the mortgage-insurance threshold"
+    assert 43.0 in PRODUCTION_EDGES["debt_to_income"], "the documented underwriting threshold is 43"
+    assert 80.0 in PRODUCTION_EDGES["original_ltv"], "the mortgage-insurance threshold"
 
 
 def _moratorium_quarter() -> tuple[list[str], list[str]]:
@@ -518,7 +535,7 @@ def test_a_statutory_payment_holiday_is_not_a_default(tmp_path: Path) -> None:
     """
     import duckdb
 
-    from creditsurv.data.aggregate import MoratoriumPolicy, _state_of_the_book_sql
+    from creditsurv.data.book import MoratoriumPolicy, state_of_the_book_sql
 
     _ingested(tmp_path, *_moratorium_quarter())
     perf, orig = _sources(tmp_path)
@@ -526,14 +543,14 @@ def test_a_statutory_payment_holiday_is_not_a_default(tmp_path: Path) -> None:
     holiday, stopped = "F15Q1000001", "F15Q1000002"
 
     def book(policy: MoratoriumPolicy) -> pd.DataFrame:
-        frame = duckdb.connect().execute(_state_of_the_book_sql(policy), [perf, orig]).df()
+        frame = duckdb.connect().execute(state_of_the_book_sql(policy), [perf, orig]).df()
         return frame.sort_values(["loan_identifier", "period_key"])
 
     def event_ages(frame: pd.DataFrame, loan: str) -> list[int]:
         # Per loan, always. The first version of this test pooled both loans and read
         # the unmarked borrower's default at age 2 as a failure of the exclusion.
         rows = frame[frame["loan_identifier"] == loan]
-        return [int(age) for age in rows.loc[rows["event"], "age"]]
+        return [int(age) for age in rows.loc[rows["outcome"] == "default", "age"]]
 
     def last_age(frame: pd.DataFrame, loan: str) -> int:
         return int(frame.loc[frame["loan_identifier"] == loan, "age"].max())
@@ -562,50 +579,63 @@ def test_the_two_moratorium_treatments_are_not_equivalent(tmp_path: Path) -> Non
     argued: EXCLUDE keeps the exposure and catches the later default, CENSOR does not."""
     import duckdb
 
-    from creditsurv.data.aggregate import MoratoriumPolicy, _state_of_the_book_sql
+    from creditsurv.data.book import MoratoriumPolicy, state_of_the_book_sql
 
     _ingested(tmp_path, *_moratorium_quarter())
     perf, orig = _sources(tmp_path)
     connection = duckdb.connect()
 
-    kept = connection.execute(_state_of_the_book_sql(MoratoriumPolicy.EXCLUDE), [perf, orig]).df()
-    lost = connection.execute(_state_of_the_book_sql(MoratoriumPolicy.CENSOR), [perf, orig]).df()
+    kept = connection.execute(state_of_the_book_sql(MoratoriumPolicy.EXCLUDE), [perf, orig]).df()
+    lost = connection.execute(state_of_the_book_sql(MoratoriumPolicy.CENSOR), [perf, orig]).df()
 
     assert len(kept) > len(lost), "censoring gives up the exposure after the accommodation"
 
 
-def test_text_keys_stay_categorical_through_the_concatenation() -> None:
-    """A quarter declaring different levels must not turn a column back into strings.
+def test_a_quarter_arrives_with_every_level_it_could_hold() -> None:
+    """A quarter carries the whole level set, not the part it happened to see.
 
-    pandas keeps a categorical through ``concat`` only when the levels agree, and the
-    exact key's five text columns over ~66 million cells would otherwise be gigabytes of
-    Python strings. So the levels are unified, and sorted, before the quarters are stacked.
+    That is what lets the table be written one quarter at a time: the pieces share a schema, so
+    parquet can append them. Before, the levels were collected from the quarters and unified
+    afterwards, which needs every quarter resident at once -- 11.3 GB of peak at 91.6 million
+    cells, and about 21 GB at the 200 million the finer bands would need.
+
+    Two properties, and the second is the one that bites. The dtypes of two quarters are equal
+    even though neither saw all three levels; and a value the declaration does not know raises,
+    because `pd.Categorical` turns it into a NaN and the loan-months would leave the table
+    without a word.
     """
     from creditsurv.data.aggregate import _compact, _concatenate
+    from creditsurv.data.book import CATEGORICAL_LEVELS
 
+    levels = {"occupancy": CATEGORICAL_LEVELS["occupancy"]}
     first = _compact(
         pd.DataFrame(
             {
-                "occupancy": ["owner_occupied", "investor"],
-                "orig_month": [24_000, 24_001],
-                "n": [3, 4],
+                "occupancy": ["owner_occupied", "investment_property"],
+                "origination_month": [24_000, 24_001],
+                "loan_months": [3, 4],
             }
-        )
+        ),
+        levels,
     )
     second = _compact(
-        pd.DataFrame({"occupancy": ["second_home"], "orig_month": [24_002], "n": [5]})
+        pd.DataFrame(
+            {"occupancy": ["second_home"], "origination_month": [24_002], "loan_months": [5]}
+        ),
+        levels,
     )
 
-    combined = _concatenate([first, second])
+    assert first["occupancy"].dtype == second["occupancy"].dtype
+    assert list(first["occupancy"].cat.categories) == list(CATEGORICAL_LEVELS["occupancy"])
+    assert first["origination_month"].dtype == "int32"
 
+    combined = _concatenate([first, second])
     assert isinstance(combined["occupancy"].dtype, pd.CategoricalDtype)
-    assert list(combined["occupancy"].cat.categories) == [
-        "investor",
-        "owner_occupied",
-        "second_home",
-    ]
-    assert combined["occupancy"].tolist() == ["owner_occupied", "investor", "second_home"]
-    assert combined["orig_month"].dtype == "int32"
+    assert list(combined["occupancy"].cat.categories) == list(CATEGORICAL_LEVELS["occupancy"])
+    assert combined["loan_months"].tolist() == [3, 4, 5]
+
+    with pytest.raises(ValueError, match="outside its declared levels"):
+        _compact(pd.DataFrame({"occupancy": ["a_new_kind_of_home"], "loan_months": [1]}), levels)
 
 
 def test_cells_are_categorical_as_built_and_as_saved(tmp_path: Path) -> None:
@@ -620,7 +650,7 @@ def test_cells_are_categorical_as_built_and_as_saved(tmp_path: Path) -> None:
 
     cells = build_cells(*_sources(tmp_path))
 
-    for column in ("vintage", "purpose", "occupancy", "has_mi", "first_time_buyer"):
+    for column in ("vintage", "purpose", "occupancy", "mortgage_insurance", "buyer_type"):
         assert isinstance(cells[column].dtype, pd.CategoricalDtype), column
     save_cells(cells, "exclude")
     pd.testing.assert_frame_equal(load_cells("exclude"), cells)
@@ -637,7 +667,7 @@ def test_the_loans_left_out_are_counted_by_what_they_lack_and_how_they_default(
     origination = [
         origination_row("F000000001"),
         origination_row("F000000002"),
-        origination_row("F000000003", dti="999"),
+        origination_row("F000000003", debt_to_income="999"),
         origination_row("F000000004", purpose="9"),
     ]
     performance = [
@@ -650,7 +680,7 @@ def test_the_loans_left_out_are_counted_by_what_they_lack_and_how_they_default(
 
     assert row["loans"] == 4
     assert row["dropped"] == 2
-    assert row["no_dti"] == 1
+    assert row["no_debt_to_income"] == 1
     assert row["no_purpose"] == 1
     assert row["default_rate_kept"] == pytest.approx(0.0)
     assert row["default_rate_dropped"] == pytest.approx(0.5)
@@ -750,14 +780,315 @@ def test_the_super_conforming_flag_is_mapped_from_what_the_field_holds(tmp_path:
     mapping would have dropped 98% of the book had the flag ever entered a key."""
     from creditsurv.data.aggregate import PRODUCTION_EDGES
 
-    origination = [
-        origination_row(f"F{i:09d}", super_conforming="Y" if i < 2 else "N") for i in range(6)
-    ]
+    origination = [origination_row(f"F{i:09d}", loan_size="Y" if i < 2 else "N") for i in range(6)]
     performance = [performance_row(f"F{i:09d}", "201503", "0") for i in range(6)]
     _ingested(tmp_path, origination, performance)
 
-    spec = CellSpec(continuous=PRODUCTION_EDGES, categorical=("super_conforming",))
+    spec = CellSpec(continuous=PRODUCTION_EDGES, categorical=("loan_size",))
     cells = build_cells(*_sources(tmp_path), spec=spec)
 
-    loans = cells.groupby("super_conforming", observed=True)["n"].sum().to_dict()
-    assert loans == {"N": 4, "Y": 2}
+    loans = cells.groupby("loan_size", observed=True)["loan_months"].sum().to_dict()
+    assert loans == {"conforming": 4, "super_conforming": 2}
+
+
+def test_a_harp_refinance_is_kept_with_its_ratio_missing_and_its_level_set(
+    tmp_path: Path,
+) -> None:
+    """The open question closed. HARP loans report no debt-to-income, and the
+    complete-case rule dropped every one of them: 18% of the 2009Q2 to 2019Q1 vintages, at
+    three times the default rate of the loans kept.
+
+    They come in with a level of their own and the ratio still missing. Missing, not
+    filled: what the model does with it is decided on the model's side, where a level
+    absorbs it -- see ``features.NOT_REPORTED``.
+    """
+    origination = [
+        origination_row("F000000001", harp="Y", debt_to_income=""),
+        origination_row("F000000002", harp="N", debt_to_income="32"),
+        # No ratio and no HARP: still dropped, since nothing explains the gap.
+        origination_row("F000000003", harp="N", debt_to_income=""),
+    ]
+    performance = [
+        performance_row(loan, f"2015{month:02d}", str(month - 3))
+        for loan in ("F000000001", "F000000002", "F000000003")
+        for month in (3, 4)
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path))
+
+    by_level = cells.groupby("harp", observed=True)["loan_months"].sum()
+    assert by_level.to_dict() == {"harp": 2, "standard": 2}
+    refinanced = cells[cells["harp"] == "harp"]
+    assert refinanced["debt_to_income"].isna().all(), "nothing is imputed in the cells"
+    assert cells[cells["harp"] == "standard"]["debt_to_income"].notna().all()
+
+
+def test_the_payment_state_is_the_month_before_not_the_month_itself(tmp_path: Path) -> None:
+    """A loan 90 days late has already defaulted, so the state during the month is the
+    event. The month before is what a servicer knows when the month opens.
+    """
+    origination = [origination_row("F000000001")]
+    performance = [
+        performance_row("F000000001", "201503", "0", delinquency="0"),
+        performance_row("F000000001", "201504", "1", delinquency="1"),
+        performance_row("F000000001", "201505", "2", delinquency="2"),
+        performance_row("F000000001", "201506", "3", delinquency="3"),
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path))
+
+    state = dict(zip(cells["age"], cells["delinquency_state"].astype(str), strict=True))
+    # Age 0 has no earlier month: the loan opens current, which is not a missing value.
+    assert state == {0: "current", 1: "current", 2: "one_month", 3: "two_months"}
+    defaulted = cells[cells["outcome"] == "default"]
+    assert list(defaulted["age"]) == [3]
+    assert list(defaulted["delinquency_state"].astype(str)) == ["two_months"]
+
+
+def test_an_unreadable_payment_state_drops_the_month_rather_than_reading_as_current(
+    tmp_path: Path,
+) -> None:
+    """``RA`` is a real value of the field -- an REO acquisition -- and casting it to a
+    number first would turn it into the same NULL as "this is the loan's first month",
+    which reads as up to date. Every other mapping here drops a code nobody has looked at,
+    and so does this one.
+    """
+    origination = [origination_row("F000000001")]
+    performance = [
+        performance_row("F000000001", "201503", "0", delinquency="0"),
+        performance_row("F000000001", "201504", "1", delinquency="RA"),
+        performance_row("F000000001", "201505", "2", delinquency="0"),
+    ]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path))
+
+    assert sorted(cells["age"]) == [0, 1], "the month after RA has no readable state"
+
+
+def test_the_note_rate_enters_the_key_as_a_band(tmp_path: Path) -> None:
+    """It is there for the spread and the refinancing incentive, both of which are the
+    rate against a market rate of a month the key already carries. A band of the rate is
+    a band of both.
+
+    Not in the production key: measured at 2.13x on its own, it was the second rung the
+    give-up order of docs/rules.md reached. The extension still has to work -- the ceiling
+    is a function of the book, and a coarser grid or a bigger machine puts it back.
+    """
+    from creditsurv.data.aggregate import BASE_SPEC, Extension, extended
+
+    origination = [
+        origination_row("F000000001", rate="3.10"),
+        origination_row("F000000002", rate="3.40"),
+        origination_row("F000000003", rate="6.90"),
+    ]
+    performance = [performance_row(f"F00000000{i}", "201503", "0") for i in (1, 2, 3)]
+    _ingested(tmp_path, origination, performance)
+
+    cells = build_cells(*_sources(tmp_path), spec=extended(BASE_SPEC, Extension.ORIGINATION_SPREAD))
+
+    # 3.10 and 3.40 share the band (3.0, 3.5] and collapse into one cell, which is the
+    # whole reason the rate is banded rather than carried; 6.90 sits in (6.5, 7.0].
+    assert sorted(cells["note_rate"]) == [3.25, 6.75]
+    assert int(cells.loc[cells["note_rate"] == 3.25, "loan_months"].sum()) == 2
+
+
+def test_each_extension_of_the_key_switches_on_alone(tmp_path: Path) -> None:
+    """The cell count is the product of the band counts, so an extension has to be priced
+    before it is adopted -- which is only possible one at a time. The order they are given
+    up in is fixed in docs/rules.md, before the measurement.
+    """
+    from creditsurv.data.aggregate import BASE_SPEC, DEFAULT_SPEC, Extension, extended
+
+    assert Extension.HARP not in _GIVE_UP_ORDER(), "HARP is a correction, not a refinement"
+    assert set(DEFAULT_SPEC.categorical) >= set(BASE_SPEC.categorical)
+
+    harp_only = extended(BASE_SPEC, Extension.HARP)
+    assert "harp" in harp_only.categorical
+    assert "delinquency_state" not in harp_only.categorical
+    assert harp_only.continuous == BASE_SPEC.continuous
+
+    finer = extended(BASE_SPEC, Extension.FINE_BANDS)
+    assert finer.categorical == BASE_SPEC.categorical
+    assert len(finer.continuous["credit_score"]) > len(BASE_SPEC.continuous["credit_score"])
+
+    spread = extended(BASE_SPEC, Extension.ORIGINATION_SPREAD)
+    assert "note_rate" in spread.continuous
+
+    assert extended(BASE_SPEC, *Extension) == extended(BASE_SPEC, *reversed(list(Extension)))
+
+
+def _GIVE_UP_ORDER() -> tuple[object, ...]:
+    from creditsurv.data.aggregate import GIVE_UP_ORDER
+
+    return GIVE_UP_ORDER
+
+
+def test_a_window_of_the_cells_is_read_without_the_rest_of_the_table(tmp_path: Path) -> None:
+    """A backtest window is two years of observation, about 3% of the table, and the whole
+    table is a few gigabytes as a frame. The filter is on the observation month, which is
+    origination plus age and so not a column parquet can be asked about by name.
+    """
+    from creditsurv.data.store import load_cells_window, save_cells
+
+    origination = [origination_row(f"F{i:09d}") for i in range(4)]
+    performance = [
+        performance_row(f"F{i:09d}", f"2015{month:02d}", str(month - 3))
+        for i in range(4)
+        for month in (3, 4, 5, 6)
+    ]
+    _ingested(tmp_path, origination, performance)
+    cells = build_cells(*_sources(tmp_path))
+    save_cells(cells, "exclude")
+
+    april = 2015 * 12 + 4 - 1
+    window = load_cells_window("exclude", first=april, last=april + 1)
+    whole = load_cells_window("exclude")
+
+    observed = window["origination_month"] + window["age"]
+    assert set(observed) == {april, april + 1}
+    assert len(whole) == len(cells)
+    assert int(window["loan_months"].sum()) < int(whole["loan_months"].sum())
+    # Open at either end, as a development window is.
+    assert len(load_cells_window("exclude", last=april)) < len(whole)
+    assert len(load_cells_window("exclude", first=april)) < len(whole)
+
+
+def test_a_cached_fit_can_be_found_by_what_it_is_rather_than_by_its_hash(
+    tmp_path: Path,
+) -> None:
+    """The fingerprint hashes the row counts, so naming a fit means knowing them -- which
+    meant expanding the rows to count them, to find the model that would have scored them.
+    The descriptions beside the pickles are searchable, which is why they are written.
+    """
+    from creditsurv.data.store import find_fits, save_fit
+
+    save_fit(
+        {"a": 1},
+        "aaaa0000",
+        {"as_of": "2021-12", "moratorium": "exclude", "formula": "credit_score", "rows": 10},
+    )
+    save_fit(
+        {"b": 2},
+        "bbbb0000",
+        {
+            "purpose": "selection",
+            "as_of": "2021-12",
+            "moratorium": "exclude",
+            "formula": "credit_score",
+        },
+    )
+
+    both = find_fits(as_of="2021-12", formula="credit_score")
+    report_only = find_fits(as_of="2021-12", formula="credit_score", purpose=None)
+    selection_only = find_fits(purpose="selection")
+
+    assert {fingerprint for fingerprint, _ in both} == {"aaaa0000", "bbbb0000"}
+    assert [fingerprint for fingerprint, _ in report_only] == ["aaaa0000"]
+    assert [fingerprint for fingerprint, _ in selection_only] == ["bbbb0000"]
+    assert find_fits(as_of="2024-12") == []
+
+
+def test_every_cell_reader_says_how_to_build_the_cells(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All five readers of the cell file, asked for a table that is not there.
+
+    Two of them used to go without the sentence and let DuckDB say whatever it says about a
+    missing file, which is the one moment a reader has something useful to tell you: the two
+    commands that build the thing. They share one helper now, so the answer cannot drift and a
+    sixth reader cannot be added without it.
+    """
+    from creditsurv.data.store import (
+        cells_path,
+        load_cells,
+        load_cells_window,
+        load_largest_cells,
+        outcomes_by_age,
+    )
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    assert not cells_path("exclude").exists()
+
+    for reader in (load_cells, load_cells_window, load_largest_cells, outcomes_by_age):
+        with pytest.raises(FileNotFoundError, match="uv run creditsurv aggregate") as raised:
+            reader("exclude")
+        assert "No aggregated cells" in str(raised.value), reader.__name__
+
+
+def test_the_declared_levels_are_the_levels_the_sql_can_produce() -> None:
+    """`CATEGORICAL_LEVELS` says what a mapped column can hold, and the SQL decides it.
+
+    Two things have to agree, so the test reads the literals back out of the `CASE`
+    expressions and compares them both ways. A mapping that gains a level without the
+    declaration gaining it would write a quarter whose value is not in its own dtype -- pandas
+    turns that into a NaN, silently, and the loan-months would vanish from the table rather
+    than from a log.
+
+    `region` is the one mapped column whose levels are not literals: it is built from
+    `_STATE_TO_REGION`, so its own values are the source. `term_years` has none because it is
+    not text -- the mapping returns 15 or 30 and the column is an `int32`.
+    """
+    from creditsurv.data.book import (
+        _STATE_TO_REGION,
+        CATEGORICAL,
+        CATEGORICAL_LEVELS,
+    )
+
+    assert set(CATEGORICAL_LEVELS) | {"term_years"} == set(CATEGORICAL)
+
+    for name, declared in CATEGORICAL_LEVELS.items():
+        if name == "region":
+            assert declared == tuple(sorted(set(_STATE_TO_REGION.values())))
+            continue
+        in_the_sql = sorted(set(re.findall(r"THEN\s+'([^']+)'", CATEGORICAL[name])))
+        assert list(declared) == in_the_sql, name
+
+    # Sorted, because the level unification this replaced sorted, and the order is what
+    # parquet's dictionary encoding is built from.
+    for name, declared in CATEGORICAL_LEVELS.items():
+        assert list(declared) == sorted(declared), name
+
+
+def test_writing_the_cells_a_quarter_at_a_time_gives_the_table_that_was_concatenated(
+    tmp_path: Path,
+) -> None:
+    """`write_cells` and `build_cells` are the same table, and this is what keeps them so.
+
+    The streamed path exists because the held one does not fit: at 91.6 million cells the
+    concatenation is two live copies of 4.76 GB and the write adds a third, for a measured 11.3
+    GB, and at the 200 million the finer bands of `docs/rules.md` would need it wants about 21
+    on a 16 GB machine. But a second path that agrees with the first only approximately is worse
+    than one that is slow, so they are compared row for row, dtype for dtype, and the levels of
+    every categorical are compared too -- that being the thing the streamed path has to know in
+    advance rather than discover.
+    """
+    from creditsurv.data.aggregate import build_cells, write_cells
+    from creditsurv.data.store import load_cells
+
+    origination = [origination_row(f"F{i:09d}") for i in range(30)]
+    performance = [
+        performance_row(f"F{i:09d}", "201503", str(age)) for i in range(30) for age in range(4)
+    ]
+    _ingested(tmp_path, origination, performance)
+    sources = _sources(tmp_path)
+
+    held = build_cells(*sources)
+    written = write_cells(*sources)
+    streamed = load_cells("exclude")
+
+    assert written == len(held)
+    keys = [column for column in held.columns if column != "loan_months"]
+    pd.testing.assert_frame_equal(
+        streamed.sort_values(keys).reset_index(drop=True),
+        held.sort_values(keys).reset_index(drop=True),
+        check_categorical=True,
+        check_dtype=True,
+    )
+    for column in held.columns:
+        if isinstance(held[column].dtype, pd.CategoricalDtype):
+            assert list(streamed[column].cat.categories) == list(held[column].cat.categories), (
+                column
+            )

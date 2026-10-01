@@ -24,13 +24,13 @@ if TYPE_CHECKING:
 
     import pandas as pd
 
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
-FORMULA = "fico_s + cltv_drift + unemp_gap"
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
+FORMULA = "credit_score + ltv_change + unemployment_change"
 
 SMALL_PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.7,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=-0.06,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -129,7 +129,7 @@ def test_chunked_prediction_matches_a_single_call(encoded: pd.DataFrame) -> None
     """
     from creditsurv.models import aft
 
-    covariates = ["fico_s", "cltv_drift", "unemp_gap"]
+    covariates = ["credit_score", "ltv_change", "unemployment_change"]
     result = fit_aft(encoded, covariates, " + ".join(covariates))
 
     frame = encoded.loc[:, covariates]
@@ -164,7 +164,9 @@ def test_the_event_count_is_weighted_whenever_there_is_a_weight(encoded: pd.Data
     backtesting report from the same run said otherwise.
     """
     unweighted = fit_aft(encoded, COVARIATES, FORMULA)
-    weighted = fit_aft(encoded.assign(n=3), COVARIATES, FORMULA, weights_col="n")
+    weighted = fit_aft(
+        encoded.assign(loan_months=3), COVARIATES, FORMULA, weights_col="loan_months"
+    )
 
     assert unweighted.n_events == int(encoded["event"].sum())
     assert weighted.n_events == 3 * unweighted.n_events

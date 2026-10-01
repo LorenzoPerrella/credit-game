@@ -1,0 +1,6 @@
+step,removed,coef,p,reason,remaining
+1,unemployment_change (refused),-0.05408915933692689,0.0,"kept: without it the model cannot be fitted (The polish stopped 912 standard errors out, every step it wanted refused below the parent')",23
+2,volatility_change,0.0018321319100869724,0.0,"reversed sign: +0.001832 in the full model, -0.006683 beside the loan block alone",22
+3,inflation_change,-2.30769819052107,0.0,"reversed sign: -2.308 in the full model, +3.325 beside the loan block alone",21
+4,inflation_rate,-1.4945653923114708,0.0,"reversed sign: -1.495 in the full model, +3.041 beside the loan block alone",20
+5,consumer_sentiment,-0.005438985985227017,0.0,"reversed sign: -0.005439 in the full model, +0.005425 beside the loan block alone",19

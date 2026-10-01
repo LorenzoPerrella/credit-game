@@ -28,14 +28,14 @@ if TYPE_CHECKING:
 
     from creditsurv.models.aft import FitResult
 
-RAW_COVARIATES = ("fico_s", "cltv_drift", "unemp_gap")
+RAW_COVARIATES = ("credit_score", "ltv_change", "unemployment_change")
 COVARIATES = [name + BINNED_SUFFIX for name in RAW_COVARIATES]
 FORMULA = " + ".join(COVARIATES)
 
 PARAMS = replace(
     DEFAULT_PARAMS,
-    intercept=4.9,
-    continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+    intercept=0.14,
+    continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
     categorical={},
     prepayment_intercept=50.0,
 )
@@ -56,18 +56,18 @@ def grouped(encoded: pd.DataFrame) -> pd.DataFrame:
 def fits(encoded: pd.DataFrame, grouped: pd.DataFrame) -> tuple[FitResult, FitResult]:
     return (
         fit_aft(encoded, COVARIATES, FORMULA),
-        fit_aft(grouped, COVARIATES, FORMULA, weights_col="n"),
+        fit_aft(grouped, COVARIATES, FORMULA, weights_col="loan_months"),
     )
 
 
 def test_weights_account_for_every_episode(encoded: pd.DataFrame, grouped: pd.DataFrame) -> None:
     """Nothing may be dropped or double-counted by the collapse."""
-    assert int(grouped["n"].sum()) == len(encoded)
+    assert int(grouped["loan_months"].sum()) == len(encoded)
 
 
 def test_weights_are_integer_counts(grouped: pd.DataFrame) -> None:
-    assert grouped["n"].dtype == "int64"
-    assert (grouped["n"] > 0).all()
+    assert grouped["loan_months"].dtype == "int64"
+    assert (grouped["loan_months"] > 0).all()
 
 
 def test_binning_makes_the_collapse_worthwhile(
@@ -105,7 +105,7 @@ def test_grouped_fit_counts_the_same_events(fits: tuple[FitResult, FitResult]) -
 def test_exposure_weights_are_rejected(grouped: pd.DataFrame) -> None:
     """Weighting by amount answers a different question and breaks inference."""
     with_exposure = grouped.copy()
-    with_exposure["exposure"] = grouped["n"].astype(float) * 1234.56
+    with_exposure["exposure"] = grouped["loan_months"].astype(float) * 1234.56
 
     with pytest.raises(ValueError, match="frequency weights"):
         fit_aft(with_exposure, COVARIATES, FORMULA, weights_col="exposure")
@@ -113,12 +113,12 @@ def test_exposure_weights_are_rejected(grouped: pd.DataFrame) -> None:
 
 def test_non_positive_weights_are_rejected(grouped: pd.DataFrame) -> None:
     broken = grouped.copy()
-    broken.loc[broken.index[0], "n"] = 0
+    broken.loc[broken.index[0], "loan_months"] = 0
 
     with pytest.raises(ValueError, match="non-positive"):
-        fit_aft(broken, COVARIATES, FORMULA, weights_col="n")
+        fit_aft(broken, COVARIATES, FORMULA, weights_col="loan_months")
 
 
 def test_aggregation_requires_the_encoded_columns() -> None:
     with pytest.raises(PanelValidationError, match="missing column"):
-        aggregate_episodes(pd.DataFrame({"fico_s_binned": [1.0]}), COVARIATES)
+        aggregate_episodes(pd.DataFrame({"credit_score_binned": [1.0]}), COVARIATES)

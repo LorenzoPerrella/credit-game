@@ -94,7 +94,7 @@ def test_coefficient_chart_omits_intercepts(tmp_path: Path) -> None:
     what the first version of this chart did.
     """
     index = pd.MultiIndex.from_tuples(
-        [("lambda_", "Intercept"), ("lambda_", "fico_s"), ("rho_", "Intercept")],
+        [("lambda_", "Intercept"), ("lambda_", "credit_score"), ("rho_", "Intercept")],
         names=["param", "covariate"],
     )
     table = pd.DataFrame(
@@ -112,14 +112,14 @@ def test_coefficient_chart_omits_intercepts(tmp_path: Path) -> None:
 
 
 def test_formulaic_labels_are_made_readable() -> None:
-    label = charts._label("lambda_", "C(purpose, Treatment('purchase'))[T.refinance_cashout]")
+    label = charts._label("lambda_", "C(purpose, Treatment('purchase'))[T.cash_out_refinance]")
 
-    assert label == "purpose: refinance_cashout"
+    assert label == "Loan purpose: Cash-out refinance (against Purchase)"
 
 
 def test_intercept_labels_name_their_parameter_block() -> None:
     """Both blocks own an intercept, so two rows would otherwise read identically."""
-    assert charts._label("rho_", "Intercept") == "rho: Intercept"
+    assert charts._label("rho_", "Intercept") == "Shape: Intercept"
 
 
 def test_psi_handles_categorical_variables() -> None:
@@ -194,11 +194,11 @@ def test_time_varying_covariates_have_a_marginal_effect(
     from creditsurv.reporting.calibration import marginal_effects
     from fixtures import DEFAULT_PARAMS, build_panel
 
-    covariates = ["fico_s", "cltv_drift", "unemp_gap"]
+    covariates = ["credit_score", "ltv_change", "unemployment_change"]
     params = replace(
         DEFAULT_PARAMS,
-        intercept=4.9,
-        continuous={"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105},
+        intercept=0.14,
+        continuous={"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105},
         categorical={},
         prepayment_intercept=50.0,
     )
@@ -214,9 +214,9 @@ def test_time_varying_covariates_have_a_marginal_effect(
     ).set_index("covariate")
 
     changes = effects["change_pp"].astype(float)
-    for name in ("cltv_drift", "unemp_gap"):
+    for name in ("ltv_change", "unemployment_change"):
         assert abs(changes[name]) > 1e-6, f"{name} shows no effect"
-    assert effects.loc["cltv_drift", "kind"] == "time-varying"
+    assert effects.loc["ltv_change", "kind"] == "time-varying"
 
 
 def test_a_macro_level_moves_by_its_deviation_in_the_fitting_data(
@@ -224,11 +224,11 @@ def test_a_macro_level_moves_by_its_deviation_in_the_fitting_data(
 ) -> None:
     """The second silent zero in the same table.
 
-    Under the random-walk baseline a macro *level* is identical for every loan and flat
-    across the projection, so its deviation on the projected panel is zero and the row
-    was skipped. The validation found the table omitting ``vix`` -- the macro covariate
-    with the largest standardised effect -- for that reason alone. The step now comes from
-    the data the model was fitted to, and the table says which step it used.
+    Under the random-walk baseline a macro *level* is identical for every loan and flat across the
+    projection, so its deviation on the projected panel is zero and the row was skipped. The
+    validation found the table omitting ``equity_volatility`` -- the macro covariate with the
+    largest standardised effect -- for that reason alone. The step now comes from the data the model
+    was fitted to, and the table says which step it used.
     """
     from dataclasses import replace
 
@@ -237,11 +237,11 @@ def test_a_macro_level_moves_by_its_deviation_in_the_fitting_data(
     from creditsurv.reporting.calibration import covariate_steps, marginal_effects
     from fixtures import DEFAULT_PARAMS, build_panel
 
-    covariates = ["fico_s", "cltv_drift", "vix"]
+    covariates = ["credit_score", "ltv_change", "equity_volatility"]
     params = replace(
         DEFAULT_PARAMS,
-        intercept=4.9,
-        continuous={"fico_s": 0.34, "cltv_drift": -0.020},
+        intercept=0.14,
+        continuous={"credit_score": 0.0068, "ltv_change": -0.020},
         categorical={},
         prepayment_intercept=50.0,
     )
@@ -258,10 +258,12 @@ def test_a_macro_level_moves_by_its_deviation_in_the_fitting_data(
         fitted, book, macro_module, covariates, covariates, steps=steps
     ).set_index("covariate")
 
-    assert "vix" in effects.index, "a macro level must not drop out of the table"
-    assert effects.loc["vix", "kind"] == "time-varying"
-    vix = effects.loc[effects.index == "vix"]
-    assert float(vix["one_sd"].to_numpy(dtype=float)[0]) == pytest.approx(steps["vix"])
+    assert "equity_volatility" in effects.index, "a macro level must not drop out of the table"
+    assert effects.loc["equity_volatility", "kind"] == "time-varying"
+    vix = effects.loc[effects.index == "equity_volatility"]
+    assert float(vix["one_sd"].to_numpy(dtype=float)[0]) == pytest.approx(
+        steps["equity_volatility"]
+    )
     assert abs(float(vix["change_pp"].to_numpy(dtype=float)[0])) > 0.0
 
 
@@ -279,14 +281,18 @@ def test_a_saved_fit_comes_back_and_a_changed_specification_does_not(
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
 
-    described = {"as_of": "2024-12", "formula": "fico_s", "rows": 1000}
+    described = {"as_of": "2024-12", "formula": "credit_score", "rows": 1000}
     fingerprint = fit_fingerprint(**described)
     save_fit({"marker": 7}, fingerprint, described)
 
     assert load_fit(fingerprint) == {"marker": 7}
     assert fit_fingerprint(**described) == fingerprint, "the fingerprint must be stable"
 
-    for changed in ({"as_of": "2023-12"}, {"formula": "fico_s + dti"}, {"rows": 1001}):
+    for changed in (
+        {"as_of": "2023-12"},
+        {"formula": "credit_score + debt_to_income"},
+        {"rows": 1001},
+    ):
         other = fit_fingerprint(**{**described, **changed})
         assert other != fingerprint, f"{changed} must not share a cache entry"
         assert load_fit(other) is None
@@ -330,15 +336,15 @@ def test_the_distribution_reading_follows_the_numbers() -> None:
         {
             "distribution": ["loglogistic", "weibull"],
             "delta_aic": [0.0, 83961.0],
-            "signs_against_prior": ["nfci_lagged", ""],
+            "signs_against_prior": ["financial_conditions", ""],
         }
     )
 
     reading = _comparison_reading(regression, against, "weibull")
 
-    assert "**loglogistic** has the better likelihood, by 83,961 AIC points" in reading
-    assert "turns `nfci_lagged` against its declared prior" in reading
-    assert "Against Kaplan-Meier the **loglogistic** is closer" in reading
+    assert "**Log-logistic** has the better likelihood, by 83,961 AIC points" in reading
+    assert "turns *Financial conditions* against its declared prior" in reading
+    assert "Against Kaplan-Meier the **Log-logistic** is closer" in reading
     assert "kept against a better likelihood" in reading
     assert against.loc[0, "deviation_at_last_month"] == pytest.approx(-3.0)
     assert against.loc[0, "last_month"] == 3

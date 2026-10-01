@@ -41,12 +41,14 @@ number.
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import time
 import warnings
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import lifelines
 import numpy as np
@@ -57,12 +59,205 @@ from lifelines import exceptions, utils
 from scipy.optimize import minimize
 
 if TYPE_CHECKING:
+    from multiprocessing.queues import Queue
+
+    #: What the parent asks a worker for, and what a worker sends back.
+    Command = tuple[str, np.ndarray | None]
+    Prepared = tuple[pd.MultiIndex, np.ndarray, float, dict[str, np.ndarray]]
+    Answer = dict[str, Any] | tuple[float, np.ndarray] | np.ndarray
+    #: A worker's answer with the part it read, so the parent can add them in one order.
+    Tagged = tuple[int, Answer]
+
     from collections.abc import Callable, Iterable
 
     from lifelines.fitters import ParametericAFTRegressionFitter
     from scipy.optimize import OptimizeResult
 
 log = logging.getLogger(__name__)
+
+
+def _limits(columns: pd.MultiIndex, primary: str) -> list[tuple[float, float]]:
+    """A bound for every parameter: wide on the scale's coefficients, tight on the shape.
+
+    The two are not comparable. A scale coefficient of 100 is absurd but harmless to evaluate;
+    the shape sits in an exponent, and the same number overflows the cumulative hazard and takes
+    the objective with it.
+    """
+    shape = [
+        _SHAPE_BOUND if name != primary else _PARAMETER_BOUND
+        for name in columns.get_level_values(0)
+    ]
+    return [(-bound, bound) for bound in shape]
+
+
+def _check_interior(x: np.ndarray, limits: list[tuple[float, float]]) -> None:
+    """Refuse a point sitting on a bound: that is not a maximum of the likelihood.
+
+    The bounds keep the optimiser inside the region where lifelines' objective is a likelihood;
+    they are not constraints on the model, and on this book they cannot bind -- 125 converged
+    fits put the shape six times inside its own. A fit that ends on one is telling us the model
+    is not identified, and saying so is more use than a coefficient of exactly 100.
+    """
+    values = np.asarray(x, dtype=float)
+    edges = np.array([bound for _, bound in limits])
+    at_bound = np.flatnonzero(np.abs(values) >= edges * 0.99)
+    if at_bound.size:
+        message = (
+            f"Parameter(s) {at_bound.tolist()} reached their bound "
+            f"({edges[at_bound].tolist()}), so the fit is at the edge of where the likelihood "
+            "can be evaluated rather than at a maximum. The specification is not identified."
+        )
+        raise exceptions.ConvergenceError(message)
+
+
+def _methods(first: str, prefer: str | None) -> tuple[str, ...]:
+    """The optimisers to try, in order, starting with the one that last worked.
+
+    A fit whose design defeats SLSQP is usually beside another one just like it -- the
+    backward elimination refits nearly the same model at every step -- and walking the whole
+    chain each time is expensive: on the prepayment model, SLSQP spent 25 minutes failing,
+    L-BFGS-B 40 more, and trust-constr then took an hour to answer. Starting from what worked
+    last time saves the first two on every fit after the first.
+    """
+    ordered = (first, *_FALLBACK_METHODS)
+    if prefer is None or prefer.lower() not in {name.lower() for name in ordered}:
+        return ordered
+    rest = [name for name in ordered if name.lower() != prefer.lower()]
+    return (next(name for name in ordered if name.lower() == prefer.lower()), *rest)
+
+
+#: How large a coefficient the optimiser may consider, on standardised covariates.
+#:
+#: lifelines leaves an AFT model's coefficients unbounded -- its ``_bounds`` are for the
+#: univariate fitters -- and that is where the runs went wrong. The likelihood it writes clips
+#: the interval probability at 1e-25 but adds the truncation term unclipped, so far from the
+#: data the objective -- a mean *negative* log-likelihood, which cannot be negative -- goes
+#: negative and flat. Every failure of the prepayment model ended there: SLSQP at coefficients
+#: of 1e+80, L-BFGS-B ``ABNORMAL``, and trust-constr returning a point where the next
+#: evaluation read **-8.97e+69**.
+#:
+#: The covariates are divided by their own standard deviation before the fit, so a coefficient
+#: of 100 means a scale factor of e^100 per standard deviation. The bound is three orders of
+#: magnitude outside anything a credit model can mean and ten orders inside the region where
+#: the objective stops being one: it cannot bind at an optimum, and `_check_interior` refuses
+#: the fit if it ever does.
+_PARAMETER_BOUND: Final = 100.0
+
+#: Consecutive refused points after which the fit is given up.
+#:
+#: An optimiser turned back this many times in a row is **pinned against the floor**: the only
+#: direction it can find an improvement in is the impossible one, so the maximum of the
+#: likelihood as lifelines computes it lies in the region lifelines cannot compute. That is a
+#: conclusion about the specification, and waiting for the iteration cap to confirm it costs
+#: hours -- the prepayment model's step 8 spent 85 minutes on 17 straight refusals without one
+#: accepted point, with four more hours to go.
+#:
+#: It cannot change which model is chosen: a fit that ends this way is refused either way, and
+#: step 8 keeps the covariate under rule 11. It decides only how long the run waits to say what
+#: the log already shows.
+_PINNED_REFUSALS: Final = 25
+
+#: Evaluations looked at when deciding whether the optimiser is pinned, and the share of them
+#: refused that says it is.
+#:
+#: `_PINNED_REFUSALS` counts refusals **in a row**, and the prepayment model's step 8 showed the
+#: shape it cannot see: a cycle of six or seven refusals with one accepted point among them, which
+#: resets the count and never reaches twenty-five. That fit ran to 211 evaluations, 4.3 hours, and
+#: was refused at the end as it would have been at the start.
+#:
+#: Over a window the two states separate cleanly. On that run the share refused was 73% across the
+#: whole of SLSQP and rose to 88% once the cycle set in, while **no** window of forty evaluations
+#: fell below 35% after it began -- and the early, productive phase ran at 0%. Forty at
+#: three-quarters therefore fires at evaluation 82 rather than 211, a cut of 2.6 times, with the
+#: threshold twice the worst the productive phase produced.
+#:
+#: It is paired with a second condition -- the best accepted objective has not improved inside the
+#: window -- which can only hold the guard back, never trip it. A fit still finding better points
+#: is not pinned however much of its search is refused.
+_PINNED_WINDOW: Final = 40
+_PINNED_SHARE: Final = 0.75
+
+
+class _Pinned:
+    """Whether the optimiser is stuck against a boundary it cannot leave.
+
+    Two readings of the same thing: a run of refusals, and a window of them without progress.
+    The first catches an optimiser that has walked into the wall and stopped; the second catches
+    one that is circling it, which is what the prepayment model did for four hours.
+    """
+
+    def __init__(self) -> None:
+        self.refusals = 0
+        self._window: deque[bool] = deque(maxlen=_PINNED_WINDOW)
+        self._against_the_floor: deque[bool] = deque(maxlen=_PINNED_WINDOW)
+        self._best = np.inf
+        self._best_at = 0
+        self._seen = 0
+
+    def saw(self, *, refused: bool, value: float) -> None:
+        self._seen += 1
+        self.refusals = self.refusals + 1 if refused else 0
+        self._window.append(refused)
+        # A refusal of a value a likelihood could take is the floor's doing; an impossible one is
+        # lifelines' clipping. The polish needs them apart, because only the first is a statement
+        # about the parent's optimum.
+        self._against_the_floor.append(refused and _possible(value))
+        if not refused and value < self._best:
+            self._best, self._best_at = value, self._seen
+
+    @property
+    def against_the_floor(self) -> bool:
+        """Whether what turned the optimiser back was the parent's optimum, not the clipping.
+
+        Most of the **refusals**, not most of the evaluations: a damped Newton alternates a
+        refused step with an accepted one, so the refusals are barely half of what it does. On
+        the prepayment model's warm phase, 9 of 11 refusals were the floor and 22 evaluations
+        were made -- a majority of the evaluations would have wanted 12, and the fit went on to
+        spend three more hours reaching the same answer.
+        """
+        refusals = sum(self._window)
+        return refusals > 0 and 2 * sum(self._against_the_floor) > refusals
+
+    @property
+    def circling(self) -> bool:
+        """A full window mostly refused, and no better point found inside it."""
+        if len(self._window) < _PINNED_WINDOW:
+            return False
+        if sum(self._window) / len(self._window) < _PINNED_SHARE:
+            return False
+        return self._seen - self._best_at >= _PINNED_WINDOW
+
+
+#: How far the **shape** parameter may go, on the log scale it is estimated on.
+#:
+#: This is the bound that matters, and the coefficient bound above was aimed at the wrong
+#: parameter. The cumulative hazard is ``exp(rho * (log t - log lambda))``: the shape sits in
+#: an exponent, so it needs only reach exp(5) for the hazard to overflow and take lifelines'
+#: objective with it -- while a scale coefficient of the same size does nothing of the kind.
+#:
+#: Three on the log scale means a shape between 0.05 and 20. Measured across **125 converged
+#: fits** on this book -- default and prepayment, Weibull and log-logistic -- the log shape lies
+#: between +0.070 and +0.484, a shape of 1.07 to 1.62. The bound is six times outside the widest
+#: of those on the log scale, and a mortgage whose hazard bends twenty times faster than its age
+#: is not a mortgage. It cannot bind on this book; if it ever does, the fit is refused as not
+#: identified rather than published.
+_SHAPE_BOUND: Final = 3.0
+
+#: Optimisers tried when lifelines' own stops without converging, in order.
+#:
+#: SLSQP is lifelines' choice and is the fastest here when it works. It solves a quadratic
+#: subproblem at each step, and on an ill-conditioned design it reports **"Rank-deficient
+#: equality constraint subproblem"** and gives up -- which is what the prepayment model did at
+#: step 8 of its selection, from a cold start, at a perfectly finite objective of 56.58 with
+#: 23 iterations behind it. The design is the default model's, which converges; what differs is
+#: the curvature of a likelihood whose event rate is twenty times higher.
+#:
+#: L-BFGS-B builds no subproblem and no explicit curvature, so ill-conditioning costs it
+#: iterations rather than stopping it; trust-constr is slower again and handles worse. **The
+#: estimator is unchanged**: the same likelihood on the same rows has the same optimum, and the
+#: damped Newton polish then certifies the answer is at it to under a thousandth of a standard
+#: error -- which is what makes trying another path safe rather than a different model.
+_FALLBACK_METHODS: Final[tuple[str, ...]] = ("L-BFGS-B", "trust-constr")
 
 #: Rows evaluated at once. One block's autograd tape costs about 700 bytes a row, so a
 #: million rows is 0.7 GB above the stored data: small against the machine, and large
@@ -151,21 +346,97 @@ class _Block:
 
     def arguments(self, columns: pd.MultiIndex, scale: np.ndarray) -> tuple[Any, ...]:
         """The block as lifelines' likelihood takes it: ``(Ts, E, W, entries, Xs)``."""
-        # Column-major, so each column is contiguous to write into and the frame below
-        # can wrap the array without copying it.
+        # Column-major, so each column is contiguous to write into and the slicer below
+        # can take its columns without copying them.
         design = np.empty((self.rows, len(self.design)), dtype=np.float64, order="F")
         for position, column in enumerate(self.design):
             column.expand_into(design[:, position])
         design /= scale
-        frame = pd.DataFrame(design, columns=columns, copy=False)
         bounds = (self.lower.expand(), self.upper.expand())
         return (
             bounds,
             self.exact,
             self.weight.expand(),
             self.entry.expand(),
-            utils.DataframeSlicer(frame),
+            _Slicer(design, columns),
         )
+
+
+def _column_slices(columns: pd.MultiIndex) -> dict[str, slice | np.ndarray]:
+    """Each parameter's columns as a slice where they are adjacent, positions where not.
+
+    A slice of an F-ordered array is a view of contiguous columns; a list of positions is a
+    copy. The design is built in the MultiIndex's own order, so the slice is the usual case and
+    the fallback is there so an unusual order is slow rather than wrong.
+    """
+    outer = columns.get_level_values(0)
+    found: dict[str, slice | np.ndarray] = {}
+    for name in outer.unique():
+        positions = np.flatnonzero(outer == name)
+        adjacent = positions[-1] - positions[0] + 1 == len(positions)
+        found[str(name)] = (
+            slice(int(positions[0]), int(positions[-1]) + 1) if adjacent else positions
+        )
+    return found
+
+
+class _Slicer:
+    """lifelines' ``DataframeSlicer``, over numpy and remembering what it has been asked.
+
+    The likelihood filters the design four times per call -- the exact observations, the
+    censored rows twice, the delayed entries -- and lifelines' slicer answers each with a
+    pandas take, which copies the whole block. Those masks are properties of the *data*: they
+    are the same on every evaluation of every iteration, and so is the design.
+
+    Measured on a 250,000-row block of the production table, a value-and-gradient spent **32%
+    of its time in ``pandas.take`` and another 20% copying**, against 42% in autograd's tape
+    and a minority in the arithmetic. Two things remove most of that, and neither touches the
+    likelihood -- which is what keeps `tests/test_blocks.py` able to hold this engine to
+    lifelines' own answer:
+
+    * a parameter's columns are **adjacent** in the design, because the design is built in the
+      order of the MultiIndex, so asking for them is a slice and a slice is a view. pandas
+      copied them on every call;
+    * the masks are properties of the data, so a repeated filter is answered from a cache.
+
+    The filtered copy is kept in Fortran order like the design it came from. Row-indexing an
+    F-ordered array returns a C-ordered copy, and the likelihood then works on non-contiguous
+    columns: the first version of this class did that and was **60% slower** than the pandas it
+    replaced, which is the sort of thing only a measurement finds.
+    """
+
+    __slots__ = ("_cache", "_columns", "_design", "_positions")
+
+    def __init__(self, design: np.ndarray, columns: pd.MultiIndex) -> None:
+        self._design = design
+        self._columns = columns
+        self._positions = _column_slices(columns)
+        self._cache: dict[bytes, _Slicer] = {}
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        taken: np.ndarray = self._design[:, self._positions[str(key)]]
+        return taken
+
+    def filter(self, mask: np.ndarray) -> _Slicer:
+        """The rows the mask selects. The same mask twice costs nothing the second time."""
+        flat = np.asarray(mask)
+        if flat.dtype != bool:
+            return _Slicer(np.asfortranarray(self._design[flat]), self._columns)
+        key = flat.tobytes()
+        cached = self._cache.get(key)
+        if cached is None:
+            cached = _Slicer(np.asfortranarray(self._design[flat]), self._columns)
+            self._cache[key] = cached
+        return cached
+
+    def groupby(self, *args: object, **kwargs: object) -> object:
+        """Only the fitter's reporting path asks for this, never the likelihood."""
+        frame = pd.DataFrame(self._design, columns=self._columns, copy=False)
+        return utils.DataframeSlicer(frame).groupby(*args, **kwargs)
+
+    @property
+    def size(self) -> int:
+        return int(self._design.shape[0])
 
 
 @dataclass
@@ -183,6 +454,10 @@ class _Scan:
     high: np.ndarray | None = None
     bounds: list[pd.Series] = field(default_factory=list)
     events: float = 0.0
+    weight: float = 0.0
+    #: Blocks and bytes held by the worker processes, when there are any.
+    other_blocks: int = 0
+    other_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -209,7 +484,7 @@ class BlockFit:
 
 def fit_interval_censoring_in_blocks(
     fitter: ParametericAFTRegressionFitter,
-    blocks: Iterable[pd.DataFrame],
+    blocks: Iterable[pd.DataFrame] | Callable[[int, int], Iterable[pd.DataFrame]],
     *,
     formula: str,
     lower_bound_col: str,
@@ -222,6 +497,9 @@ def fit_interval_censoring_in_blocks(
     fit_options: dict[str, Any] | None = None,
     show_progress: bool = False,
     polish: bool = True,
+    workers: int = 1,
+    prefer: str | None = None,
+    floor: float | None = None,
 ) -> BlockFit:
     """``fitter.fit_interval_censoring``, reading the rows a block at a time.
 
@@ -240,27 +518,38 @@ def fit_interval_censoring_in_blocks(
     ``polish`` carries the fit from where SLSQP stops to the optimum -- see :func:`_polish`.
     Off, the result is the one lifelines itself returns, which is what the equivalence
     tests compare.
+
+    ``workers`` above one evaluates the blocks in that many processes. ``blocks`` must then
+    be a **description** of where the rows come from -- callable as ``blocks(part, of)`` and
+    picklable, such as :class:`creditsurv.data.panel.CellBlocks` -- because each worker reads
+    its own share rather than being sent one: sending the blocks would cost their memory
+    twice, and autograd traces the likelihood in Python, so threads would share one core.
     """
     if isinstance(ancillary, pd.DataFrame):
         message = "An ancillary DataFrame cannot be read block by block; pass a formula or True."
         raise TypeError(message)
 
     started = time.perf_counter()
-    utils.CensoringType.set_censoring_type(fitter, utils.CensoringType.INTERVAL)
-    fitter._time_fit_was_called = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
-    fitter.lower_bound_col = lower_bound_col
-    fitter.upper_bound_col = upper_bound_col
-    fitter.event_col = event_col
-    fitter.entry_col = entry_col
-    fitter.weights_col = weights_col
-    fitter.robust = False
+    names = (lower_bound_col, upper_bound_col, event_col, entry_col, weights_col)
+    _set_censoring(fitter, names)
 
+    if workers > 1 and not callable(blocks):
+        message = (
+            "Fitting in several processes needs a description of where the rows come from, "
+            "callable as blocks(part, of), not an iterator of them."
+        )
+        raise TypeError(message)
+    source = cast("Callable[[int, int], Iterable[pd.DataFrame]]", blocks)
+    setup = _Setup(type(fitter), fitter.penalizer, formula, ancillary, names)
+    pool = _Workers(setup, source, workers) if workers > 1 else None
     scan = _scan(
         fitter,
-        blocks,
+        source(0, workers) if callable(blocks) else blocks,
         seed=_seed_regressors(fitter, formula, ancillary),
-        names=(lower_bound_col, upper_bound_col, event_col, entry_col, weights_col),
+        names=names,
     )
+    if pool is not None:
+        _combine(scan, pool.summaries())
     if scan.rows < 2 or scan.columns is None:
         message = "A fit needs at least two rows."
         raise ValueError(message)
@@ -300,7 +589,22 @@ def fit_interval_censoring_in_blocks(
     fitter._neg_likelihood = partial(
         fitter._create_neg_likelihood_with_penalty_function, likelihood=likelihood
     )
-    objective = _Objective(fitter, scan.blocks, columns, norm_std.to_numpy(), unflatten)
+    total_weight = float(scan.weight)
+    local = _Objective(
+        fitter,
+        scan.blocks,
+        columns,
+        norm_std.to_numpy(),
+        unflatten,
+        total_weight=total_weight,
+        with_penalty=pool is None,
+        floor=floor,
+        pooled=pool is not None,
+    )
+    objective: _Evaluator = local
+    if pool is not None:
+        pool.prepare(columns, norm_std.to_numpy(), total_weight, seeded)
+        objective = _Pooled(fitter, local, pool, unflatten, floor=floor)
 
     # From a warm start Newton goes straight to the optimum. SLSQP would rebuild its
     # curvature estimate from nothing and take as many evaluations as from a cold start:
@@ -309,35 +613,87 @@ def fit_interval_censoring_in_blocks(
         _newton_from(objective, start) if polish and isinstance(initial_point, pd.Series) else None
     )
     if solution is None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            results = minimize(
-                objective,
-                start,
-                method=fitter._scipy_fit_method,
-                jac=True,
-                options={
-                    "disp": show_progress,
-                    **fitter._scipy_fit_options,
-                    **(fit_options or {}),
-                },
-                callback=fitter._scipy_fit_callback,
-            )
-        if show_progress:
-            # lifelines prints the optimiser's result under the same flag.
-            print(results)
-        if not (results.fun < np.inf and results.success):
+        limits = _limits(columns, fitter._primary_parameter_name)
+        attempts: list[OptimizeResult] = []
+        for method in _methods(fitter._scipy_fit_method, prefer):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                results = minimize(
+                    objective,
+                    start,
+                    method=method,
+                    jac=True,
+                    bounds=limits,
+                    options={
+                        "disp": show_progress,
+                        **(fitter._scipy_fit_options if method == fitter._scipy_fit_method else {}),
+                        **(fit_options or {}),
+                    },
+                    callback=fitter._scipy_fit_callback,
+                )
+            attempts.append(results)
+            if show_progress:
+                # lifelines prints the optimiser's result under the same flag.
+                print(results)
+            # **The polish decides whether a method worked, not the method's own flag.** Two
+            # cases the flag gets wrong, both met on the production table. lifelines caps SLSQP
+            # at 200 iterations, and a fit that reaches the cap comes back `success=False`
+            # although it is *at* the answer -- this one had been stable to nine significant
+            # figures for twenty evaluations. And trust-constr came back `success=True` at a
+            # point whose next evaluation read -8.97e+69. What settles it is the distance to
+            # the optimum, which only the polish measures.
+            if not _possible(float(results.fun)):
+                # **A statement about the surface, not about the method.** Ending outside the
+                # likelihood means the optimiser found nothing better than the wall: the
+                # specification has the spurious minimum lifelines' unclipped truncation term
+                # creates, and every other method finds it too -- measured six times out of six
+                # on the prepayment model, warm and cold, with both bounds in place. Trying the
+                # rest costs hours and tells us what we already know, so this stops here and the
+                # caller decides (step 8 keeps the covariate: rule 11 of docs/rules.md).
+                message = (
+                    f"{method} ended outside the likelihood ({results.message}) after "
+                    f"{objective.evaluations} evaluations of {scan.rows:,} rows. The objective "
+                    "is unbounded below on this specification -- lifelines clips the interval "
+                    "probability and adds the truncation term unclipped -- so no optimiser can "
+                    "maximise it and another method would find the same region."
+                )
+                raise exceptions.ConvergenceError(message)
+            try:
+                _check_interior(results.x, limits)
+                solution = _from_optimiser(objective, results, polish=polish)
+            except Pinned:
+                # The floor stops every optimiser in the same place: see Pinned.
+                raise
+            except exceptions.ConvergenceError as error:
+                log.warning("%s could not be polished (%s); trying the next", method, error)
+                continue
+            if not results.success:
+                log.info(
+                    "%s stopped short (%s) and the polish finished it", method, results.message
+                )
+            method_used = method
+            break
+        else:
+            reports = "\n\n".join(f"minimum_results={attempt}" for attempt in attempts)
             message = (
                 f"Fitting did not converge after {objective.evaluations} evaluations of "
-                f"{scan.rows:,} rows in {len(scan.blocks)} blocks.\n\nminimum_results={results}"
+                f"{scan.rows:,} rows in {len(scan.blocks)} blocks, under "
+                f"{len(attempts)} method(s).\n\n{reports}"
             )
             raise exceptions.ConvergenceError(message)
-        solution = _from_slsqp(objective, results, polish=polish)
-        method = "slsqp"
+        if method_used != fitter._scipy_fit_method:
+            log.info("optimised with %s where %s failed", method_used, fitter._scipy_fit_method)
+        method = str(method_used).lower()
     else:
         method = "newton"
 
     x, value, curvature, steps, stopped, remaining = solution
+    if polish and remaining > POLISH_TOLERANCE_SE:
+        message = (
+            f"The fit ended {remaining:.3g} standard errors from the optimum, past the "
+            f"{POLISH_TOLERANCE_SE:g} this engine promises."
+        )
+        raise exceptions.ConvergenceError(message)
     if not _possible(value):
         message = (
             f"The fit ended at an objective of {value:.6g}, which no likelihood can take: the "
@@ -351,13 +707,15 @@ def fit_interval_censoring_in_blocks(
         steps,
         remaining,
     )
+    if pool is not None:
+        pool.close()
     _store(fitter, columns, x, value, curvature, objective, unflatten)
     return BlockFit(
         rows=scan.rows,
-        blocks=len(scan.blocks),
+        blocks=len(scan.blocks) + scan.other_blocks,
         loan_months=objective.total_weight,
         events=scan.events,
-        stored_bytes=sum(block.nbytes for block in scan.blocks),
+        stored_bytes=sum(block.nbytes for block in scan.blocks) + scan.other_bytes,
         evaluations=objective.evaluations,
         seconds=time.perf_counter() - started,
         method=method,
@@ -468,6 +826,7 @@ def _scan(
             distinct.groupby(["lower", "upper", "entry"], sort=False)["weight"].sum()
         )
         scan.events += float(weights[np.isfinite(upper)].sum())
+        scan.weight += float(weights.sum())
         log.debug("block %d: %s rows", number, f"{len(frame):,}")
 
     stored = sum(block.nbytes for block in scan.blocks)
@@ -636,6 +995,283 @@ def _warm_start(
     return started
 
 
+def _set_censoring(
+    fitter: ParametericAFTRegressionFitter,
+    names: tuple[str, str, str, str | None, str | None],
+) -> None:
+    """Tell the fitter what it is fitting, as ``fit_interval_censoring`` does."""
+    lower_bound_col, upper_bound_col, event_col, entry_col, weights_col = names
+    utils.CensoringType.set_censoring_type(fitter, utils.CensoringType.INTERVAL)
+    fitter._time_fit_was_called = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+    fitter.lower_bound_col = lower_bound_col
+    fitter.upper_bound_col = upper_bound_col
+    fitter.event_col = event_col
+    fitter.entry_col = entry_col
+    fitter.weights_col = weights_col
+    fitter.robust = False
+
+
+@dataclass(frozen=True)
+class _Setup:
+    """What a worker needs to build the same design from its own share of the rows."""
+
+    fitter_class: type[ParametericAFTRegressionFitter]
+    penalizer: float
+    formula: str
+    ancillary: str | bool | None
+    names: tuple[str, str, str, str | None, str | None]
+
+
+def _summary(scan: _Scan) -> dict[str, Any]:
+    """What a worker's scan tells the parent. Not the blocks: those stay where they are."""
+    return {
+        "rows": scan.rows,
+        "first": scan.first,
+        "second": scan.second,
+        "low": scan.low,
+        "high": scan.high,
+        "events": scan.events,
+        "weight": scan.weight,
+        "bounds": pd.concat(scan.bounds).groupby(level=[0, 1, 2]).sum() if scan.bounds else None,
+        "columns": scan.columns,
+        "blocks": len(scan.blocks),
+        "bytes": sum(block.nbytes for block in scan.blocks),
+    }
+
+
+def _combine(scan: _Scan, summaries: Iterable[dict[str, Any]]) -> None:
+    """Add the workers' sums to the parent's, so the fit sees every row."""
+    for summary in summaries:
+        if summary["rows"] == 0:
+            continue
+        if scan.columns is not None and not summary["columns"].equals(scan.columns):
+            message = "A worker's design columns differ from the parent's."
+            raise ValueError(message)
+        scan.rows += summary["rows"]
+        scan.events += summary["events"]
+        scan.weight += summary["weight"]
+        scan.other_blocks += summary["blocks"]
+        scan.other_bytes += summary["bytes"]
+        if scan.first is None:
+            scan.first, scan.second = summary["first"], summary["second"]
+            scan.low, scan.high = summary["low"], summary["high"]
+        else:
+            assert scan.second is not None and scan.low is not None and scan.high is not None
+            scan.first = scan.first + summary["first"]
+            scan.second = scan.second + summary["second"]
+            scan.low = np.minimum(scan.low, summary["low"])
+            scan.high = np.maximum(scan.high, summary["high"])
+        if summary["bounds"] is not None:
+            scan.bounds.append(summary["bounds"])
+
+
+def _serve(
+    setup: _Setup,
+    source: Callable[[int, int], Iterable[pd.DataFrame]],
+    part: int,
+    of: int,
+    commands: Queue[Command | Prepared],
+    results: Queue[Tagged],
+) -> None:
+    """A worker: read a share of the rows, then answer with its part of the objective.
+
+    Runs in its own process. It reads its blocks itself rather than being sent them, keeps
+    them for the whole fit, and adds no penalty: the parent adds that once.
+    """
+    fitter = setup.fitter_class(penalizer=setup.penalizer)
+    _set_censoring(fitter, setup.names)
+    scan = _scan(
+        fitter,
+        source(part, of),
+        seed=_seed_regressors(fitter, setup.formula, setup.ancillary),
+        names=setup.names,
+    )
+    results.put((part, _summary(scan)))
+
+    columns, scale, total_weight, seeded = cast("Prepared", commands.get())
+    raw_std = pd.Series(scale, index=columns)
+    fitter.regressors = scan.regressors
+    fitter._n_examples = scan.rows
+    fitter._cols_to_not_penalize = fitter._find_cols_to_not_penalize(raw_std)
+    fitter._norm_std = raw_std
+    fitter._initial_point_dicts = [seeded]
+    likelihood = fitter._log_likelihood_interval_censoring
+    fitter._neg_likelihood_with_penalty_function = partial(
+        fitter._create_neg_likelihood_with_penalty_function,
+        likelihood=likelihood,
+        penalty=fitter._add_penalty,
+    )
+    fitter._neg_likelihood = partial(
+        fitter._create_neg_likelihood_with_penalty_function, likelihood=likelihood
+    )
+    objective = _Objective(
+        fitter,
+        scan.blocks,
+        columns,
+        scale,
+        flatten(seeded)[1],
+        total_weight=total_weight,
+        with_penalty=False,
+    )
+    while True:
+        command, payload = cast("Command", commands.get())
+        if command == "stop" or payload is None:
+            return
+        if command == "value":
+            results.put((part, objective(payload)))
+        else:
+            results.put((part, objective.hessian(payload)))
+
+
+class _Workers:
+    """The worker processes, each holding its own share of the rows for the whole fit."""
+
+    def __init__(
+        self,
+        setup: _Setup,
+        source: Callable[[int, int], Iterable[pd.DataFrame]],
+        of: int,
+    ) -> None:
+        context = multiprocessing.get_context("spawn")
+        self._results: Queue[Tagged] = context.Queue()
+        self._commands: list[Queue[Command | Prepared]] = []
+        self._processes: list[multiprocessing.process.BaseProcess] = []
+        for part in range(1, of):
+            commands: Queue[Command | Prepared] = context.Queue()
+            process = context.Process(
+                target=_serve,
+                args=(setup, source, part, of, commands, self._results),
+                daemon=True,
+            )
+            process.start()
+            self._commands.append(commands)
+            self._processes.append(process)
+        log.info("%d worker process(es) reading their share of the rows", len(self._processes))
+
+    def summaries(self) -> list[dict[str, Any]]:
+        return [cast("dict[str, Any]", answer) for answer in self._collect()]
+
+    def prepare(
+        self,
+        columns: pd.MultiIndex,
+        scale: np.ndarray,
+        total_weight: float,
+        seeded: dict[str, np.ndarray],
+    ) -> None:
+        for commands in self._commands:
+            commands.put((columns, scale, total_weight, seeded))
+
+    def _ask(self, command: str, x: np.ndarray) -> list[Answer]:
+        for commands in self._commands:
+            commands.put((command, x))
+        return self._collect()
+
+    def _collect(self) -> list[Answer]:
+        """The answers **in the order the rows were split**, never in the order they arrive.
+
+        One queue serves every worker, so `get` returns whichever finished first, and the parent
+        used to add them in that order. Floating-point addition is not associative, so the same
+        point summed in two arrival orders differs in its last digit -- and an optimiser turns
+        that into a different search: two runs of the identical fit agreed to every printed digit
+        for eighty evaluations, then diverged at 0.065288491918 against 0.065288491919 and were
+        five significant figures apart forty evaluations later. A fit of one specification on one
+        cell file has to give one answer, so the answers are added in the parts' own order.
+        """
+        answers = dict(cast("list[Tagged]", [self._results.get() for _ in self._processes]))
+        return [answers[part] for part in sorted(answers)]
+
+    def value_and_gradient(self, x: np.ndarray) -> list[tuple[float, np.ndarray]]:
+        return [cast("tuple[float, np.ndarray]", answer) for answer in self._ask("value", x)]
+
+    def hessian(self, x: np.ndarray) -> list[np.ndarray]:
+        return [cast("np.ndarray", answer) for answer in self._ask("hessian", x)]
+
+    def close(self) -> None:
+        for commands in self._commands:
+            commands.put(("stop", None))
+        for process in self._processes:
+            process.join(timeout=30)
+
+
+class _Pooled:
+    """The objective over every row: this process's blocks plus the workers'."""
+
+    def __init__(
+        self,
+        fitter: ParametericAFTRegressionFitter,
+        local: _Objective,
+        workers: _Workers,
+        unflatten: Callable[[np.ndarray], dict[str, np.ndarray]],
+        floor: float | None = None,
+    ) -> None:
+        self._local = local
+        self._workers = workers
+        self.floor = floor
+        self.pinned = _Pinned()
+        self._started = time.perf_counter()
+        self._reported = -np.inf
+        self.total_weight = local.total_weight
+        self.evaluations = 0
+        penalizer = fitter.penalizer
+        self._penalty: Callable[[np.ndarray], Any] | None = None
+        if isinstance(penalizer, np.ndarray) or penalizer > 0:
+
+            def penalty(x: np.ndarray) -> float:
+                return cast("float", fitter._add_penalty(unflatten(x), 0.0))
+
+            self._penalty = penalty
+
+    def __call__(self, x: np.ndarray) -> tuple[float, np.ndarray]:
+        remote = self._workers.value_and_gradient(x)
+        value, gradient = self._local(x)
+        for block_value, block_gradient in remote:
+            value += float(block_value)
+            gradient = gradient + block_gradient
+        if self._penalty is not None:
+            penalty_value, penalty_gradient = value_and_grad(self._penalty)(x)
+            value += float(penalty_value)
+            gradient = gradient + penalty_gradient
+        self.evaluations += 1
+        refused = _outside_the_domain(value, x, self.floor)
+        self.pinned.saw(refused=refused is not None, value=value)
+        elapsed = time.perf_counter() - self._started
+        if refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS:
+            self._reported = elapsed
+            why = ""
+            if refused is not None:
+                why = (
+                    " (refused: below the parent's optimum, reported as infinite)"
+                    if _possible(value)
+                    else " (refused: not a likelihood, reported as infinite)"
+                )
+            log.info(
+                "evaluation %d: objective %.12f%s at %.0fs", self.evaluations, value, why, elapsed
+            )
+        _check_pinned(self.pinned, self.floor)
+        return refused or (value, gradient)
+
+    def hessian(self, x: np.ndarray) -> np.ndarray:
+        remote = self._workers.hessian(x)
+        total = self._local.hessian(x)
+        for block in remote:
+            total = total + block
+        if self._penalty is not None:
+            total = total + hessian(self._penalty)(x)
+        return total
+
+
+class _Evaluator(Protocol):
+    """The objective as the optimiser and the polish use it, wherever the rows are."""
+
+    total_weight: float
+    evaluations: int
+    pinned: _Pinned
+
+    def __call__(self, x: np.ndarray) -> tuple[float, np.ndarray]: ...
+
+    def hessian(self, x: np.ndarray) -> np.ndarray: ...
+
+
 class _Objective:
     """The negative mean log-likelihood and its derivatives, added up block by block.
 
@@ -651,11 +1287,25 @@ class _Objective:
         columns: pd.MultiIndex,
         scale: np.ndarray,
         unflatten: Callable[[np.ndarray], dict[str, np.ndarray]],
+        *,
+        total_weight: float | None = None,
+        with_penalty: bool = True,
+        floor: float | None = None,
+        pooled: bool = False,
     ) -> None:
+        # Inside a pool this objective sees **a share of the rows**, so its value is a share of
+        # the objective: with four processes, a quarter. Neither the floor nor the progress line
+        # belongs here then -- the floor is a bound on the whole objective, and comparing it with
+        # a quarter of one refused every nested fit that was perfectly good. The pooled evaluator
+        # owns both.
+        self._pooled = pooled
+        self.floor = None if pooled else floor
         self._blocks = blocks
         self._columns = columns
         self._scale = scale
-        self.total_weight = float(sum(block.weight_sum for block in blocks))
+        # Given when the rows are split across processes: a block's share is of every row
+        # fitted, not of the rows this process happens to hold.
+        self.total_weight = total_weight or float(sum(block.weight_sum for block in blocks))
         negative = partial(
             fitter._create_neg_likelihood_with_penalty_function,
             likelihood=fitter._log_likelihood_interval_censoring,
@@ -665,7 +1315,7 @@ class _Objective:
 
         penalizer = fitter.penalizer
         self._penalty: Callable[[np.ndarray], Any] | None = None
-        if isinstance(penalizer, np.ndarray) or penalizer > 0:
+        if with_penalty and (isinstance(penalizer, np.ndarray) or penalizer > 0):
 
             def penalty(x: np.ndarray) -> float:
                 # A cast, not float(): while autograd traces this the value is a box, and
@@ -675,6 +1325,7 @@ class _Objective:
             self._penalty = penalty
 
         self.evaluations = 0
+        self.pinned = _Pinned()
         self._started = time.perf_counter()
         self._reported = -np.inf
 
@@ -695,10 +1346,34 @@ class _Objective:
 
         self.evaluations += 1
         elapsed = time.perf_counter() - self._started
-        if elapsed - self._reported >= _PROGRESS_SECONDS:
+        refused = _outside_the_domain(value, x, self.floor)
+        self.pinned.saw(refused=refused is not None, value=value)
+        if not self._pooled and (
+            refused is not None or elapsed - self._reported >= _PROGRESS_SECONDS
+        ):
+            # A refused point is always logged, whatever the interval: it is the surface falling
+            # away, and reading a run without seeing that happen is misleading. The two reasons
+            # are named apart, because they say different things -- a negative value is
+            # lifelines' clipped likelihood breaking, and a value under the floor is a nested
+            # model claiming to beat its parent.
             self._reported = elapsed
-            log.info("evaluation %d: objective %.12f at %.0fs", self.evaluations, value, elapsed)
-        return value, gradient
+            why = ""
+            if refused is not None:
+                why = (
+                    " (refused: below the parent's optimum, reported as infinite)"
+                    if _possible(value)
+                    else " (refused: not a likelihood, reported as infinite)"
+                )
+            log.info(
+                "evaluation %d: objective %.12f%s at %.0fs",
+                self.evaluations,
+                value,
+                why,
+                elapsed,
+            )
+        if not self._pooled:
+            _check_pinned(self.pinned, self.floor)
+        return refused or (value, gradient)
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
         total = np.zeros((len(x), len(x)))
@@ -723,6 +1398,33 @@ _POLISH_STEPS: Final = 40
 _DAMPING_FLOOR: Final = 1e-6
 _DAMPING_CEILING: Final = 1e12
 
+#: Steps closing too slowly to reach the tolerance, after which the polish is given up.
+#:
+#: A damping that cannot come down turns Newton into a short gradient step, and the distance to
+#: the optimum then falls by a **constant factor** a step instead of squaring. On the prepayment
+#: model's first backward-elimination candidate it settled at 0.925 with the damping stuck at
+#: 1e+02 -- 1.24e3 standard errors out, then 1.13e3, 1.05e3, 975 -- which needs **177 steps** to
+#: reach 1e-3 against a cap of 40. The cap does end it, three hours later, with the same verdict
+#: the fourth step already implied.
+#:
+#: The damping cannot come down because every step long enough to make progress lands under the
+#: floor and is refused, so the damping rises to meet it. The refusals are real, but they are
+#: **interleaved with accepted points**, one of each a step, which resets `_PINNED_REFUSALS` and
+#: leaves it silent, so this pathology needs its own guard.
+#:
+#: What was refused there was not lifelines' unbounded region, as this comment first said. The
+#: optimiser was converging, to a point 11.8 log-likelihood units better than its parent's
+#: certified optimum on exactly the same rows, and the floor's allowance was one unit -- see
+#: `creditsurv.models.procedure._NESTED_TOLERANCE`, which carries that measurement. The guard is
+#: right either way: a polish closing by a constant factor cannot finish, whatever is holding it.
+#:
+#: It shortens a phase; it does not decide a fit. A warm start the Newton steps cannot finish
+#: falls back on SLSQP from the same point, as it always has, and what happens to the fit is
+#: settled there -- by `_check_pinned`, by the polish's verdict, or by converging after all.
+#: Five is what it costs to sit out the wild early steps: on that run the count reached two by
+#: step 4 and reset at step 5, where two halvings in a row were real progress.
+_STALL_STEPS: Final = 5
+
 
 def _newton_step(
     curvature: np.ndarray, gradient: np.ndarray, total_weight: float
@@ -742,7 +1444,7 @@ def _newton_step(
 
 
 def _polish(
-    objective: _Objective,
+    objective: _Evaluator,
     x: np.ndarray,
     value: float,
     gradient: np.ndarray,
@@ -774,6 +1476,7 @@ def _polish(
     """
     _, stopped = _newton_step(curvature, gradient, objective.total_weight)
     remaining, steps, damping = stopped, 0, 0.0
+    stalled = 0
     slack = 4 * np.finfo(float).eps
     while remaining > POLISH_TOLERANCE_SE and steps < _POLISH_STEPS:
         diagonal = np.diag(curvature)
@@ -794,7 +1497,10 @@ def _polish(
                 return x, value, curvature, steps, stopped, remaining
         x, value, gradient = candidate, candidate_value, candidate_gradient
         curvature = _symmetric(objective.hessian(x))
-        _, remaining = _newton_step(curvature, gradient, objective.total_weight)
+        previous, (_, remaining) = (
+            remaining,
+            _newton_step(curvature, gradient, objective.total_weight),
+        )
         steps += 1
         log.info(
             "Newton step %d, damping %.0e: %.3g standard errors from the optimum",
@@ -802,10 +1508,120 @@ def _polish(
             damping,
             remaining,
         )
+        stalled = stalled + 1 if _too_slow(remaining, previous, steps) else 0
+        if stalled >= _STALL_STEPS:
+            if objective.pinned.against_the_floor:
+                # What stopped it is the parent's optimum, not this optimiser or this start:
+                # SLSQP gave up 557 standard errors out and L-BFGS-B, from its own path, 762.
+                message = (
+                    f"The polish stopped {remaining:.3g} standard errors out, every step it "
+                    "wanted refused below the parent's optimum. The maximum of the likelihood "
+                    "as lifelines computes it lies in the region it cannot compute, so this "
+                    "specification cannot be fitted."
+                )
+                raise Pinned(message)
+            log.warning(
+                "the polish has closed by %.3g a step for %d steps and needs %.3g to finish "
+                "in the %d it has left; it is %.3g standard errors out and stopped",
+                remaining / previous,
+                stalled,
+                _required_ratio(remaining, steps),
+                _POLISH_STEPS - steps,
+                remaining,
+            )
+            return x, value, curvature, steps, stopped, remaining
         damping = damping / 10.0 if damping >= 10.0 * _DAMPING_FLOOR else 0.0
     if remaining > POLISH_TOLERANCE_SE:
         log.warning("polish stopped after %d steps, %.3g standard errors out", steps, remaining)
     return x, value, curvature, steps, stopped, remaining
+
+
+def _required_ratio(remaining: float, steps: int) -> float:
+    """The factor a step must close by to finish inside the steps the polish has left."""
+    budget = _POLISH_STEPS - steps
+    if budget <= 0:
+        return 0.0
+    return float((POLISH_TOLERANCE_SE / remaining) ** (1.0 / budget))
+
+
+def _too_slow(remaining: float, previous: float, steps: int) -> bool:
+    """Whether this step closed by less than finishing inside the remaining budget asks.
+
+    Compared against the budget rather than a fixed factor, because the two are the same
+    question: a polish 975 standard errors out with 30 steps left has to close by 0.631 a step,
+    and one 1.37e3 out with 34 left by 0.660. Closing by 0.925 fails both, and by the same
+    margin it will fail every step after -- which is what makes the projection worth acting on
+    rather than waiting for the cap.
+    """
+    if previous <= 0.0 or remaining <= POLISH_TOLERANCE_SE:
+        return False
+    return remaining / previous > _required_ratio(remaining, steps)
+
+
+def _outside_the_domain(
+    value: float, x: np.ndarray, floor: float | None = None
+) -> tuple[float, np.ndarray] | None:
+    """``(inf, 0)`` where the objective is not one a likelihood can take, else ``None``.
+
+    The objective is a **mean negative log-likelihood** and cannot be negative. lifelines clips
+    the interval probability at 1e-25 but adds the left-truncation term unclipped, so beyond a
+    ridge the surface falls away into a region that is not a likelihood at all -- the worst
+    point seen here read -8.97e+69, and `rho_` needs only reach exp(5) for the cumulative hazard
+    to get there.
+
+    Reported at face value, that region is the most attractive place on the surface and every
+    optimiser walks into it: on the prepayment model, **six attempts in a row** -- warm and
+    cold, SLSQP, L-BFGS-B and trust-constr alike -- ended there, and bounding the coefficients
+    at 100 did not help, because it is the *shape* parameter that makes the hazard explode.
+    Reported as infinite, it is a wall: every method backtracks from it, which is how a domain
+    boundary is meant to be told to an optimiser.
+
+    ``floor`` is the value the objective cannot go below on this specification, and for a
+    **nested** model there is one: its parameters are the parent's with a coefficient held at
+    zero, so every point of the child is a point of the parent and the parent's maximum bounds
+    all of them. A child reporting better than that is reporting a wrong number, and the floor
+    makes the whole artefact unreachable *during* the fit rather than refusing it afterwards --
+    which is the difference between a fit that converges and one that runs for three hours and is
+    thrown away.
+
+    The gradient is zero because there is nothing there to differentiate; the optimisers only
+    use it to shorten a step they are already rejecting.
+    """
+    if _possible(value) and (floor is None or value >= floor):
+        return None
+    return float("inf"), np.zeros_like(x)
+
+
+class Pinned(exceptions.ConvergenceError):  # type: ignore[misc]  # lifelines is untyped
+    """The optimiser could not leave a boundary, so no starting point will help.
+
+    Told apart from every other way a fit fails to converge because the caller's remedy differs.
+    A warm start that diverges has failed *as a starting point* and a cold fit is the answer; an
+    optimiser pinned against the parent's optimum has found where lifelines' clipped region
+    begins, and that edge is a property of the surface. Starting somewhere else and walking back
+    to the same maximum costs another hour to meet the same edge, which the prepayment model paid
+    twice before this was told apart.
+    """
+
+
+def _check_pinned(pinned: _Pinned, floor: float | None) -> None:
+    """Give up once the optimiser is pinned against the boundary, in a row or in a window."""
+    where = "below the parent's optimum" if floor is not None else "outside the likelihood"
+    if pinned.refusals >= _PINNED_REFUSALS:
+        message = (
+            f"The optimiser has been refused {pinned.refusals} times in a row, every point "
+            f"{where}. The maximum of the likelihood as lifelines computes it lies in the region "
+            "it cannot compute, so this specification cannot be fitted."
+        )
+        raise Pinned(message)
+    if pinned.circling:
+        message = (
+            f"Of the last {_PINNED_WINDOW} evaluations at least "
+            f"{_PINNED_SHARE:.0%} were refused, every one {where}, and none of the rest "
+            "improved on the best point already found. The optimiser is circling a boundary it "
+            "cannot cross, so this specification cannot be fitted."
+        )
+        raise Pinned(message)
 
 
 def _possible(value: float) -> bool:
@@ -822,26 +1638,44 @@ def _damped_step(x: np.ndarray, gradient: np.ndarray, damped: np.ndarray) -> np.
     return np.asarray(x - np.linalg.solve(damped, gradient), dtype=float)
 
 
-def _from_slsqp(
-    objective: _Objective, results: OptimizeResult, *, polish: bool
+def _from_optimiser(
+    objective: _Evaluator, results: OptimizeResult, *, polish: bool
 ) -> tuple[np.ndarray, float, np.ndarray, int, float, float]:
-    """Where SLSQP stopped, polished to the optimum unless ``polish`` is off."""
+    """Where the optimiser stopped, polished to the optimum unless ``polish`` is off.
+
+    The value and the gradient are **recomputed here** rather than read off the result. Each
+    optimiser reports them its own way -- SLSQP's ``jac`` is the gradient, trust-constr's is
+    shaped for its constraint machinery -- and reading them cost a run: trust-constr solved a
+    prepayment fit SLSQP had given up on, and the polish then died on `LinAlgError:
+    Incompatible dimensions`, an hour of fitting thrown away for a field's shape. One
+    value-and-gradient is 2% of the Hessian this function computes anyway.
+    """
     started = time.perf_counter()
     x = np.asarray(results.x, dtype=float)
     curvature = _symmetric(objective.hessian(x))
-    log.info(
-        "hessian over %d blocks in %.0fs", len(objective._blocks), time.perf_counter() - started
-    )
-    value = float(results.fun)
-    gradient = np.asarray(results.jac, dtype=float)
+    log.info("hessian in %.0fs", time.perf_counter() - started)
+    value, gradient = objective(x)
     if polish:
-        return _polish(objective, x, value, gradient, curvature)
+        solution = _polish(objective, x, value, gradient, curvature)
+        remaining = solution[5]
+        if remaining > POLISH_TOLERANCE_SE:
+            # **The polish decides, and this is the deciding.** Without it a fit that the polish
+            # could not move was accepted and cached: the prepayment model produced one sitting
+            # 6,850 standard errors from the optimum, at an objective seventy times below any
+            # real fit, and the log cheerfully said the polish had finished it.
+            message = (
+                f"The polish stopped {remaining:.3g} standard errors from the optimum, past the "
+                f"{POLISH_TOLERANCE_SE:g} this engine promises, after {solution[3]} step(s). "
+                "The point the optimiser reached is not a maximum of the likelihood."
+            )
+            raise exceptions.ConvergenceError(message)
+        return solution
     _, stopped = _newton_step(curvature, gradient, objective.total_weight)
     return x, value, curvature, 0, stopped, stopped
 
 
 def _newton_from(
-    objective: _Objective, start: np.ndarray
+    objective: _Evaluator, start: np.ndarray
 ) -> tuple[np.ndarray, float, np.ndarray, int, float, float] | None:
     """Damped Newton steps from a warm start, or ``None`` if they do not reach the optimum.
 
@@ -877,7 +1711,7 @@ def _store(
     x: np.ndarray,
     value: float,
     curvature: np.ndarray,
-    objective: _Objective,
+    objective: _Evaluator,
     unflatten: Callable[[np.ndarray], dict[str, np.ndarray]],
 ) -> None:
     """What ``_fit_model`` and ``_fit`` set once the optimum is found."""

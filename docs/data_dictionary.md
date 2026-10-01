@@ -58,31 +58,31 @@ million weighted cells of the training half takes an hour and a half, block by b
 
 | Column | FRED id | Native | Unit | To monthly |
 |---|---|---|---|---|
-| `unemployment_rate` | `UNRATE` | Monthly | Percent | Last |
-| `hpi` | `CSUSHPINSA` | Monthly | Index, Jan 2000 = 100 | Last |
-| `mortgage_rate_30y` | `MORTGAGE30US` | Weekly | Percent | **Mean** |
-| `mortgage_rate_15y` | `MORTGAGE15US` | Weekly | Percent | **Mean** |
-| `nfci` | `NFCI` | Weekly | Index, 0 = average conditions | **Mean** |
-| `policy_rate` | `FEDFUNDS` | Monthly | Percent | Last |
-| `treasury_10y` | `DGS10` | Daily | Percent | **Mean** |
-| `term_spread` | `T10Y2Y` | Daily | Percentage points | **Mean** |
-| `credit_spread` | `BAA10Y` | Daily | Percentage points | **Mean** |
-| `cpi` | `CPIAUCSL` | Monthly | Index | Last |
-| `equity_index` | `NASDAQCOM` | Daily | Index | **Mean** |
-| `vix` | `VIXCLS` | Daily | Index | **Mean** |
-| `sentiment` | `UMCSENT` | Monthly | Index | Last |
-| `housing_starts` | `HOUST` | Monthly | Thousands, annual rate | Last |
+| *unemployment rate* (`unemployment_rate`) | `UNRATE` | Monthly | Percent | Last |
+| *house price index* (`house_price_index`, formerly `hpi`) | `CSUSHPINSA` | Monthly | Index, Jan 2000 = 100 | Last |
+| *30-year mortgage rate* (`mortgage_rate_30y`) | `MORTGAGE30US` | Weekly | Percent | **Mean** |
+| *15-year mortgage rate* (`mortgage_rate_15y`) | `MORTGAGE15US` | Weekly | Percent | **Mean** |
+| *financial conditions index* (`financial_conditions_index`, formerly `nfci`) | `NFCI` | Weekly | Index, 0 = average conditions | **Mean** |
+| *federal funds rate* (`fed_funds_rate`, formerly `policy_rate`) | `FEDFUNDS` | Monthly | Percent | Last |
+| *10-year Treasury yield* (`treasury_10y`) | `DGS10` | Daily | Percent | **Mean** |
+| *10-year minus 2-year Treasury spread* (`treasury_10y_2y_spread`, formerly `term_spread`) | `T10Y2Y` | Daily | Percentage points | **Mean** |
+| *Baa corporate spread* (`baa_treasury_spread`, formerly `credit_spread`) | `BAA10Y` | Daily | Percentage points | **Mean** |
+| *consumer price index* (`consumer_price_index`, formerly `cpi`) | `CPIAUCSL` | Monthly | Index | Last |
+| *Nasdaq Composite* (`nasdaq_composite`, formerly `equity_index`) | `NASDAQCOM` | Daily | Index | **Mean** |
+| *VIX* (`vix_index`, formerly `vix`) | `VIXCLS` | Daily | Index | **Mean** |
+| *consumer sentiment index* (`consumer_sentiment_index`, formerly `sentiment`) | `UMCSENT` | Monthly | Index | Last |
+| *housing starts* (`housing_starts`) | `HOUST` | Monthly | Thousands, annual rate | Last |
 
 Daily and weekly series are **averaged**, not sampled. The rate a borrower lives
 with over a month is the average of its days, not whichever day happened to fall
 last — and averaging also absorbs the market holidays that leave 226 to 303 gaps in
 each daily series since 1999.
 
-**What `nfci` is.** The Chicago Fed National Financial Conditions Index, a weekly
-summary of 105 measures of risk, liquidity and leverage across money, debt and
-equity markets. Zero is average conditions over its own history; positive is
-tighter than average. It is the single most useful macro covariate here because it
-moves *before* unemployment does.
+**What the financial conditions index is.** The Chicago Fed National Financial Conditions
+Index, a weekly summary of 105 measures of risk, liquidity and leverage across money, debt
+and equity markets. Zero is average conditions over its own history; positive is tighter
+than average. It is the single most useful macro covariate here because it moves *before*
+unemployment does.
 
 **`DRSFRMACBS`** (single-family mortgage delinquency rate, quarterly) is fetched as a
 **reference series only** — used to sanity-check observed default rates against a
@@ -102,18 +102,18 @@ truncation the likelihood is never told about. Reaching further back costs nothi
 **Interior gaps are forward-filled.** FRED has occasional holes — `UNRATE` has one
 in this window — and monthly series published late leave one at the edge of a month.
 
-**The trailing edge is truncated.** Series publish on different lags: `hpi` runs two
-to three months behind `unemployment_rate`. Forward-filling that ragged edge would
-invent macro observations that never existed, which then leak into every covariate
-built on them. The panel ends at the last month for which *every* series has a real
-observation, and logs what it discarded. On a current run it ends **2026-06**.
+**The trailing edge is truncated.** Series publish on different lags: the *house price
+index* runs two to three months behind the *unemployment rate*. Forward-filling that ragged
+edge would invent macro observations that never existed, which then leak into every
+covariate built on them. The panel ends at the last month for which *every* series has a
+real observation, and logs what it discarded. On a current run it ends **2026-06**.
 
 ### Every series is lagged three months, for one of two reasons
 
 | Lag | Series | Why |
 |---|---|---|
-| **Publication** | `unemployment_rate`, `hpi`, `nfci`, `cpi`, `sentiment`, `housing_starts` | Published in arrears and later revised: the value for month *t* is not known in *t* |
-| **Transmission** | both mortgage rates, `treasury_10y`, `term_spread`, `credit_spread`, `equity_index`, `vix`, `policy_rate` | Quoted in real time and never revised, and still unable to cause a default in the month they are quoted |
+| **Publication** | unemployment rate, house price index, financial conditions index, consumer price index, consumer sentiment index, housing starts | Published in arrears and later revised: the value for month *t* is not known in *t* |
+| **Transmission** | both mortgage rates, the 10-year Treasury yield, the 10-year minus 2-year spread, the Baa corporate spread, the Nasdaq Composite, the VIX, the federal funds rate | Quoted in real time and never revised, and still unable to cause a default in the month they are quoted |
 
 Market quotes used to be read contemporaneously, on the argument that they are known in
 real time. That is an argument about **availability**. The event is ninety days of missed
@@ -122,7 +122,7 @@ so nothing observed in *t* can be what caused it. The backtest showed the cost. 
 default spiked in April 2025 and March 2026, the two VIX peaks of the test window, with
 actual over expected at 0.47 and 0.59, while realised default did not move.
 
-The lag reaches every market series, not only the one that was noticed. `policy_rate` had
+The lag reaches every market series, not only the one that was noticed. The *federal funds rate* had
 been in neither list, and so was never lagged at all.
 
 ---
@@ -138,25 +138,24 @@ reliably.
 | Field | Source column | Unit / domain | Notes |
 |---|---|---|---|
 | `loan_id` | `loan_identifier` | — | Primary key |
-| `credit_score` | `classic_fico` | 300–850 | **9999 means missing** |
-| `fico_s` | derived | ≈ −2.4 to +3.0 | `(credit_score − 700) / 50`, the modelled form |
-| `orig_ltv` | `original_ltv` | Percent | **999 means missing** |
-| `orig_cltv` | `original_cltv` | Percent | Combined: catches second liens |
-| `dti` | `original_dti` | Percent | **999 means missing** -- for every HARP refinance, which is why the model does not cover them; see [data_preparation.md](data_preparation.md#what-dropping-removes) |
-| `orig_upb` | `original_upb` | USD | |
-| `note_rate` | `original_interest_rate` | Percent | |
+| *credit score* (`credit_score`) | `classic_fico` | 300–850 | **9999 means missing**. Modelled in points; until the rename it was carried as `(score − 700) / 50`, named `fico_s` |
+| *loan-to-value at origination* (`original_ltv`, formerly `orig_ltv`) | `original_ltv` | Percent | **999 means missing** |
+| *combined loan-to-value at origination* (`original_cltv`, formerly `orig_cltv`) | `original_cltv` | Percent | Combined: catches second liens |
+| *debt-to-income at origination* (`debt_to_income`, formerly `dti`) | `original_dti` | Percent | **999 means missing** -- for every HARP refinance, which is why the model does not cover them; see [data_preparation.md](data_preparation.md#what-dropping-removes) |
+| *original balance* (`original_balance`, formerly `orig_upb`) | `original_upb` | USD | |
+| *note rate* (`note_rate`) | `original_interest_rate` | Percent | |
 | `orig_term` | `original_loan_term` | Months | 180 or 360 for almost all of the book |
-| `mi_percent` | `mortgage_insurance_percentage` | Percent | 0 where uninsured |
-| `purpose` | `loan_purpose` | P / C / N / R | purchase, cash-out, rate-term |
-| `occupancy` | `occupancy_status` | P / S / I | owner, second home, investor |
-| `channel` | `channel` | R / B / C / T | See the warning below |
-| `region` | `property_state` | 4 census regions | Fifty dummies buy little |
-| `first_time_buyer` | `first_time_homebuyer_indicator` | Y / N | 9 means missing |
-| `property_type` | `property_type` | SF / PU / CO / MH / CP | |
-| `units` | `number_of_units` | 1–4 | |
-| `n_borrowers` | `number_of_borrowers` | 1–10 | |
+| *mortgage insurance coverage* (`insurance_coverage`, formerly `mi_percent`) | `mortgage_insurance_percentage` | Percent | 0 where uninsured |
+| *loan purpose* (`purpose`) | `loan_purpose` | P / C / N / R | purchase, cash-out, rate-term |
+| *occupancy* (`occupancy`) | `occupancy_status` | P / S / I | owner, second home, investor |
+| *origination channel* (`channel`) | `channel` | R / B / C / T | See the warning below |
+| *Census region* (`region`) | `property_state` | 4 census regions | Fifty dummies buy little |
+| *buyer type* (`buyer_type`, formerly `first_time_buyer`) | `first_time_homebuyer_indicator` | Y / N | 9 means missing |
+| *property type* (`property_type`) | `property_type` | SF / PU / CO / MH / CP | |
+| *units* (`units`) | `number_of_units` | 1–4 | |
+| *borrowers* (`borrower_count`, formerly `n_borrowers`) | `number_of_borrowers` | 1–10 | |
 
-**What `credit_score` is, and whether using it is circular.** It is a FICO score:
+**What the credit score is, and whether using it is circular.** It is a FICO score:
 300–850, produced by a model calibrated on the probability of serious delinquency.
 The worry is fair and the answer is that it is not circular, for three reasons that
 all have to hold. It is measured **at inception** and never updated. It predicts a
@@ -173,14 +172,14 @@ delinquency status, or `DRSFRMACBS`. All three are excluded.
 credit score is several thousand. Every one is blanked on read, and the list is in
 `aggregate.py` next to the `NULLIF` that does it.
 
-⚠️ **`channel` cannot be used at four levels.** Until 2008 about half of
+⚠️ **The *origination channel* cannot be used at four levels.** Until 2008 about half of
 originations are coded `T`, third-party not otherwise specified, and broker and
 correspondent are near zero; from 2009 `T` vanishes and those two absorb it exactly.
 That is a change in how Freddie Mac coded the field, not a change in how loans were
 sold, and a model given four levels reads the coding change as a risk effect.
 Retail's own share is stable throughout — 53.8% in 1999, 57.9% in 2021 — so the
 binary split is the part that means the same thing in every vintage. It is collapsed
-to **retail against third-party**.
+to **retail against broker or correspondent**.
 
 ---
 
@@ -252,21 +251,22 @@ fitter is actually handed.
 | Field | Type | Definition |
 |---|---|---|
 | `vintage` | str | Origination quarter, `YYYYQn`, read off the file name |
-| `orig_month` | int | Origination month, as `year × 12 + month − 1`. The calendar is read from it: with only the quarter, every macro series was read about two months late (M1) |
+| `origination_month` | int | Origination month, as `year × 12 + month − 1`. The calendar is read from it: with only the quarter, every macro series was read about two months late (M1) |
 | `age` | int | Loan age in months, the start of the episode |
 | `event` | bool | Whether this cell's loan-months ended in default |
-| `n` | int | **How many loan-months the row stands for** |
-| `fico_s`, `orig_ltv`, `dti` | float | Coarse-classed, carried at the band's midpoint |
-| `purpose`, `occupancy`, `term_years`, `has_mi`, `first_time_buyer` | category | Mapped levels |
+| `loan_months` | int | **How many loan-months the row stands for** |
+| `credit_score`, `original_ltv`, `debt_to_income` | float | Coarse-classed, carried at the band's midpoint: the score in points, the ratios in percent |
+| `purpose`, `occupancy`, `mortgage_insurance` (formerly `has_mi`), `buyer_type` | category | Mapped levels, such as `cash_out_refinance`, `insured`, `first_time` |
+| `term_years` | int | 15 or 30 |
 
 Episodes agreeing on every covariate and on their position in time are
 exchangeable, so they collapse into one row carrying a count, and the likelihood
 treats that count as a frequency weight. 2.54 billion loan-months become 63.6
 million cells — 40× — and the estimate is identical. The table was four times smaller
 before the validation, when the key carried the origination quarter rather than the month
-and neither `has_mi` nor `first_time_buyer`.
+and neither mortgage insurance nor first-time buyer status.
 
-**`n` is a count of loan-months, never an amount.** Weighting by exposure would
+**`loan_months` is a count of loan-months, never an amount.** Weighting by exposure would
 answer a different question from the one Basel and IFRS 9 ask: a PD is defined per
 obligor, so a $2m loan and a $200k loan each contribute one default. Weighting by
 balance turns the estimate into a loss-weighted rate, which is a different quantity
@@ -284,27 +284,29 @@ and the loan age — both of which the key already carries. So the macro side of
 specification is free: adding a series cannot change the size of the cell table by
 one row, while adding a loan characteristic to the key can multiply it.
 
-All thirteen are **built**; eight are **fitted**. The other five were given up by the
-variable selection, for reasons set out with their measured evidence in
-[variable_selection.md](variable_selection.md). They are still constructed, because
-the selection has to be re-runnable and because a covariate that cannot be built
-cannot be reconsidered.
+All fifteen are **built**; seven are **fitted**. The other eight were given up by
+`creditsurv select`, each by a rule written before the fits, with the measured evidence in
+[variable_selection.md](variable_selection.md). They are still constructed, because the
+selection has to be re-runnable and because a covariate that cannot be built cannot be
+reconsidered.
 
 | Covariate | Shape | Definition | In the model |
 |---|---|---|---|
-| `cltv_drift` | gap | `orig_ltv × hpi(orig)/hpi(now) − orig_ltv` — leverage gained or lost | ✅ |
-| `unemp_gap` | gap | `unemployment(now) − unemployment(orig)` | ✅ |
-| `policy_rate_gap` | gap | `policy_rate(now) − policy_rate(orig)` | ✅ |
-| `rate_gap` | gap | `market_rate(orig) − market_rate(now)`, **switched by term** | ✅ |
-| `nfci_lagged` | level | Financial conditions now | ✅ |
-| `vix` | level | Implied volatility now | ✅ |
-| `hpi_growth` | year-on-year | House prices | ✅ |
-| `inflation` | year-on-year | CPI | ✅ |
-| `credit_spread` | level | Baa − 10y now | ✗ collinear with `nfci_lagged`, which contains it |
-| `term_spread` | level | 10y − 2y now | ✗ collinear with `policy_rate_gap` |
-| `sentiment` | level | Consumer sentiment now | ✗ no marginal signal |
-| `equity_return` | year-on-year | Nasdaq | ✗ no marginal signal |
-| `starts_growth` | year-on-year | Housing starts | ✗ U-shaped; a linear term cannot carry it |
+| Loan-to-value change since origination (`ltv_change`) | gap | `original_ltv × house_price_index(origination) / house_price_index(now) − original_ltv`: leverage gained or lost | ✅ |
+| Unemployment change since origination (`unemployment_change`) | gap | unemployment rate now minus at origination | ✅ |
+| Financial conditions (`financial_conditions`) | level | the NFCI now | ✅ |
+| Policy rate change since origination (`policy_rate_change`) | gap | federal funds rate now minus at origination | ✅ |
+| Consumer sentiment (`consumer_sentiment`) | level | consumer sentiment now | ✅ |
+| Housing starts growth (`housing_starts_growth`) | year-on-year | housing starts | ✅ |
+| Inflation change since origination (`inflation_change`) | year-on-year gap | year-on-year inflation now minus at origination | ✅ |
+| Mortgage rate fall since origination (`mortgage_rate_decline`) | gap | market mortgage rate at origination minus now, **switched by term** | ✗ reversed: -0.190 beside the loan block alone, +0.018 in the full model |
+| House price growth (`house_price_growth`) | year-on-year | the house price index | ✗ 1 sd effect -0.004 on even and +0.015 on odd origination years, beside loan-to-value change since origination at -0.179, which is built from the same house price index |
+| Yield curve slope (`yield_curve_slope`) | level | 10-year minus 2-year Treasury now | ✗ 1 sd effect -0.058 on even and +0.013 on odd origination years, beside policy rate change since origination at +0.119 |
+| Corporate bond spread (`corporate_bond_spread`) | level | Baa over the 10-year Treasury now | ✗ variance inflation 11.9, above 10 |
+| Inflation (`inflation_rate`) | year-on-year | consumer prices | ✗ reversed: +10.04 beside the loan block alone, -8.33 in the full model, against inflation change since origination's +6.9 there |
+| Equity return (`equity_return`) | year-on-year | the Nasdaq Composite | ✗ reversed: +0.431 beside the loan block alone, -0.086 in the full model |
+| Equity volatility (`equity_volatility`) | level | the VIX now | ✗ wrong sign: +0.00935 in the full model once volatility change since origination is gone, against -0.0198 beside the loan block alone |
+| Volatility change since origination (`volatility_change`) | gap | the VIX now minus at origination | ✗ wrong sign: +0.00254 in the full model, where stress should shorten survival |
 
 Three shapes, and the distinction is not cosmetic. A **gap** is zero at origination
 by construction, so it carries the *movement* and leaves the level to the
@@ -313,19 +315,19 @@ origination covariates — which is what keeps the pair from being collinear. A
 into. A **year-on-year change** uses a twelve-month window because the monthly
 change in these series is mostly noise.
 
-**`rate_gap` is switched by term**: a fifteen-year loan is compared with the
-fifteen-year rate. That is possible only because `term_years` is in the cell key.
+**The *mortgage rate fall since origination* is switched by term**: a fifteen-year loan is compared
+with the fifteen-year rate. That is possible only because the *original term* is in the cell key.
 It is the *market* component of the refinancing incentive, not the whole of it — the
 full measure needs the loan's own note rate, which the key does not carry.
 
 ### Why loan-to-value is split in two
 
-`orig_ltv` and mark-to-market LTV are *equal* at origination and stay strongly
-correlated afterwards, so fitting both gives unstable coefficients. The pair is
-decomposed into a level — `orig_ltv`, underwriting at origination — and a movement —
-`cltv_drift`, how far house prices have carried the position since. The movement is
-zero at origination by construction, so the two carry nearly independent
-information.
+*Loan-to-value at origination* and mark-to-market LTV are *equal* at origination and stay
+strongly correlated afterwards, so fitting both gives unstable coefficients. The pair is
+decomposed into a level — *loan-to-value at origination*, underwriting at origination — and
+a movement — *loan-to-value change since origination*, how far house prices have carried the
+position since. The movement is zero at origination by construction, so the two carry nearly
+independent information.
 
 ### Fields deliberately excluded from the model
 
@@ -334,7 +336,7 @@ information.
 | Origination vintage as a covariate | Reserved for the time split. As a covariate it absorbs the macro effects the model exists to estimate. |
 | Current delinquency status | A mediator, not a predictor. Including it inflates every metric while destroying the model's use. |
 | Contemporaneous macro | Look-ahead, and no mechanism: a default in *t* was caused before *t*. Every series is lagged three months. |
-| `super_conforming_flag` | 1.96% of loans are flagged, 5.1% at most (2020), and none before 2008, when the category did not exist: its `N` for those vintages records a date, not a loan. What it does carry, a high balance in a high-cost area, is what `log_orig_upb` would measure directly. |
+| `super_conforming_flag` | 1.96% of loans are flagged, 5.1% at most (2020), and none before 2008, when the category did not exist: its `N` for those vintages records a date, not a loan. What it does carry, a high balance in a high-cost area, is what `log_original_balance` would measure directly. |
 | `amortization_type`, `interest_only_indicator` | Exactly **one** value each across the whole dataset. |
 | All loss and proceeds columns | Populated only for defaults, and they need LGD, which is out of scope. |
 
@@ -343,7 +345,7 @@ information.
 ## Layer 5 — Model matrix
 
 **Grain: one episode** — the same rows as layer 4, re-expressed as half-open
-intervals `(age_start, age_stop]` for the fitter, still carrying `n`.
+intervals `(age_start, age_stop]` for the fitter, still carrying `loan_months`.
 
 | Field | Type | Definition |
 |---|---|---|
@@ -417,20 +419,19 @@ would be counted as both a default and a prepayment, or as neither.
 **Layer 4 — the cell it lands in**
 
 ```
-vintage  fico_s  orig_ltv  dti  purpose            occupancy       term_years  age  event
-2006Q1     -0.4      85.0   32  refinance_cashout  owner_occupied          15   19   True
+vintage  credit_score  original_ltv  debt_to_income  purpose             occupancy       term_years  mortgage_insurance  buyer_type  age  event
+2006Q1          680.0          85.0            32.0  cash_out_refinance  owner_occupied          15  insured             repeat       19   True
 ```
 
-Every continuous covariate is at its band's midpoint: a 679 score is `fico_s` −0.42,
-which falls in the band (−0.8, 0.0] carried as −0.4; 90% LTV falls in (80, 90]
-carried as 85. This cell is shared with every other loan of the 2006Q1 vintage that
-matches on all seven fields and defaulted in its twentieth month — and `n` counts
-them.
+Every continuous covariate is at its band's midpoint: a 679 score falls in the band (660,
+700] and is carried as 680; 90% LTV falls in (80, 90] and is carried as 85. This cell is
+shared with every other loan of the 2006Q1 vintage that matches on all nine fields and
+defaulted in its twentieth month — and `loan_months` counts them.
 
 **Layer 5 — the episodes, with the covariates rebuilt**
 
 ```
-age  start  stop  lower  upper  event  period   cltv_drift  unemp_gap  nfci   rate_gap  hpi_growth
+age  start  stop  lower  upper  event  period   ltv_change  unemployment_change  financial_conditions  mortgage_rate_decline  house_price_growth
   0    0.0   1.0    1.0    inf  False  2006-01       0.000        0.0  -0.54     -0.000       0.144
   1    1.0   2.0    2.0    inf  False  2006-02      -0.436        0.0  -0.55     -0.150       0.141
   2    2.0   3.0    3.0    inf  False  2006-03      -0.639       -0.1  -0.53     -0.258       0.135
@@ -445,7 +446,7 @@ upper limit, then a terminal episode bracketing the default between ages 19 and 
 Every row carries `age_start` as its truncation point and none is an exact
 observation.
 
-Read `hpi_growth` down the column: **+14.4% a year at origination, −1.4% by the
+Read *house price growth* down the column: **+14.4% a year at origination, −1.4% by the
 month of default.** The loan was written at the top of the market and defaulted as
 it turned. No covariate fixed at origination can represent that, which is the whole
 argument for the time-varying construction.
@@ -462,7 +463,8 @@ they are tested in `tests/test_panel.py`:
 3. At most one event per loan.
 4. An event only on a loan's final month — a loan cannot keep paying after defaulting.
 5. No negative ages.
-6. Every loan starts at `age = 0` — a loan starting later is a selection effect the likelihood is never told about.
+6. Every loan starts at `age = 0` — a loan starting later is a selection effect the
+   likelihood is never told about.
 
 None of these raise on their own. All of them bias the fit. On the aggregated path
 the loan id is gone, so rules 1 and 3 cannot be checked per loan — which is exactly

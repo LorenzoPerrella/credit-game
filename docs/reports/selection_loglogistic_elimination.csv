@@ -1,0 +1,7 @@
+step,removed,coef,p,reason,remaining
+1,volatility_change,0.0003651269702724841,6.576063234368618e-05,wrong sign: +0.0003651 where - is expected,22
+2,house_price_growth,-0.1718860778385602,3.060322927707734e-21,wrong sign: -0.1719 where + is expected,21
+3,equity_volatility,0.009257558929525535,0.0,wrong sign: +0.009258 where - is expected,20
+4,inflation_rate,-8.994433945519164,0.0,"reversed sign: -8.994 in the full model, +8.431 beside the loan block alone",19
+5,equity_return,-0.034370986670825936,1.2356728675697685e-19,"reversed sign: -0.03437 in the full model, +0.5181 beside the loan block alone",18
+6,inflation_change,-0.03472145406291157,0.41707700705340545,"reversed sign: -0.03472 in the full model, +13.81 beside the loan block alone",17

@@ -1,0 +1,10 @@
+specification,cells_sampled,multiple_of_base,projected_cells,within_ceiling
+base,6303637,1.0,63639116,True
+harp,6701001,1.063037259283807,67650751,True
+origination_spread,13415718,2.128250405281903,135439974,True
+delinquency_state,7468938,1.184861691750334,75403551,True
+fine_bands,14348301,2.2761940448030242,144854977,True
+all,30906034,4.902889236800913,312015537,False
+all less fine_bands,16035828,2.5439009257671406,161891606,False
+"all less fine_bands, origination_spread",7965481,1.2636325664057115,80416459,True
+"all less fine_bands, origination_spread, delinquency_state",6701001,1.063037259283807,67650751,True

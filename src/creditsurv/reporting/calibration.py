@@ -107,10 +107,10 @@ def marginal_effects(
     which is what the first version of this table showed for all four of them,
     flatly contradicting their own coefficients. Which covariates count as derived is
     read from ``MACRO_DERIVED``; the validation found an older, pre-selection list in
-    its place, so ``inflation`` was shocked on the record and reported as exactly zero.
+    its place, so ``inflation_rate`` was shocked on the record and reported as exactly zero.
 
     **The size of the move comes from the fitting data, not from the projection.**
-    Under the random-walk baseline a macro *level* such as ``vix`` is flat across the
+    Under the random-walk baseline a macro *level* such as ``equity_volatility`` is flat across the
     whole projection and identical for every loan, so its deviation there is exactly
     zero and the covariate was skipped -- the table omitted the macro covariate with the
     largest standardised effect for that reason alone. ``steps`` carries one standard

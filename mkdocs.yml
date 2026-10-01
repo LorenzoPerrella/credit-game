@@ -59,6 +59,9 @@ markdown_extensions:
 extra_javascript:
   - javascripts/figures.js
 
+extra_css:
+  - stylesheets/extra.css
+
 validation:
   omitted_files: warn
   absolute_links: warn
@@ -69,14 +72,20 @@ nav:
   - Home: index.md
   - Data:
       - In short: data.md
+      - Variables: variables.md
       - Data dictionary: data_dictionary.md
       - Data preparation: data_preparation.md
       - The moratorium decision: reports/moratorium.md
   - Portfolio: portfolio.md
   - Methodology:
       - In short: methodology.md
+      - Rules written first: rules.md
       - Variable selection: variable_selection.md
       - The selection record: reports/selection.md
+      - The selection record, log-logistic: reports/selection_loglogistic.md
+      - The selection record, prepayment: reports/selection_weibull_prepayment.md
+      - The distribution family: reports/family.md
+      - Windows, anchoring and grades: reports/windows.md
       - Methodology report: reports/methodology.md
   - Model:
       - In short: model.md

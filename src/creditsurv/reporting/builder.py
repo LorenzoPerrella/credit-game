@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from creditsurv.names import readable
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
     from pathlib import Path
@@ -75,7 +77,10 @@ class Report:
     ) -> Report:
         if caption:
             self._parts.append(f"**{caption}**")
-        self._parts.append(markdown_table(frame, decimals=decimals, index=index))
+        # Every table in a report is shown in labels: a reader sees "Credit score" and
+        # "Cash-out refinance", not the names the code uses.
+        shown = readable(frame.reset_index() if index else frame)
+        self._parts.append(markdown_table(shown, decimals=decimals))
         return self
 
     def figure(self, path: Path, alt: str, *, caption: str = "") -> Report:

@@ -13,7 +13,7 @@ Two design notes:
 
 *Reduced specification.* Three covariates, no categoricals, no prepayment. The
 full specification produces roughly 500 events against 21 parameters, where the
-intercept trades off against ``log_orig_upb`` and ``orig_spread`` and several
+intercept trades off against ``log_original_balance`` and ``origination_spread`` and several
 coefficients are genuinely weakly identified. That is a property of the sample
 size, not of the encoding, and a test that fails for it would be testing the
 wrong thing.
@@ -48,11 +48,14 @@ if TYPE_CHECKING:
     import pandas as pd
 
 RECOVERY_SEED = 17
-COVARIATES = ["fico_s", "cltv_drift", "unemp_gap"]
-FORMULA = "fico_s + cltv_drift + unemp_gap"
+COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
+FORMULA = "credit_score + ltv_change + unemployment_change"
 
-TRUE_COEFFICIENTS = {"fico_s": 0.34, "cltv_drift": -0.020, "unemp_gap": -0.105}
-TRUE_INTERCEPT = 5.0
+TRUE_COEFFICIENTS = {"credit_score": 0.0068, "ltv_change": -0.020, "unemployment_change": -0.105}
+TRUE_INTERCEPT = 0.24
+
+#: The score the intercept is read at: the middle of the book, not a score of zero.
+SCORE_CENTRE = 700.0
 
 #: Prepayment is switched off by pushing its scale far out. The recovery claim is
 #: about the default model; censoring is exercised elsewhere.
@@ -96,9 +99,26 @@ def test_covariate_coefficients_are_recovered(
 
 
 def test_intercept_is_recovered(fitted: FitResult) -> None:
-    lower, upper = _interval(fitted, "lambda_", "Intercept")
+    """At a score of 700, where the data are, rather than at a score of zero.
 
-    assert lower <= TRUE_INTERCEPT <= upper
+    The credit score is in points, so the intercept alone is the log scale of a loan scored
+    zero -- 700 points outside the data, where it trades off almost exactly against the
+    score's coefficient. The quantity the encoding determines is the intercept at the
+    centre of the book, ``Intercept + 700 * credit_score``, which is the intercept this
+    test held when the score was stored as ``(score - 700) / 50``.
+    """
+    params = fitted.fitter.params_
+    covariance = fitted.fitter.variance_matrix_
+    intercept, score = ("lambda_", "Intercept"), ("lambda_", "credit_score")
+    estimate = float(params[intercept] + SCORE_CENTRE * params[score])
+    variance = float(
+        covariance.loc[intercept, intercept]
+        + SCORE_CENTRE**2 * covariance.loc[score, score]
+        + 2.0 * SCORE_CENTRE * covariance.loc[intercept, score]
+    )
+    truth = TRUE_INTERCEPT + SCORE_CENTRE * TRUE_COEFFICIENTS["credit_score"]
+
+    assert abs(estimate - truth) <= 1.96 * variance**0.5
 
 
 def test_shape_parameter_is_recovered(fitted: FitResult) -> None:

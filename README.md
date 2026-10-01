@@ -52,9 +52,12 @@ likelihood, polished to the optimum its optimiser stops short of.
 
 The figures and numbers on those pages are placed at build time from the tables in
 `docs/tables`, so on GitHub the pages show text without them; the site shows both.
-Notebooks [`01_portfolio.ipynb`](notebooks/01_portfolio.ipynb) and
-[`02_lifetime_pd.ipynb`](notebooks/02_lifetime_pd.ipynb) carry the evidence; the statistics
-live in the package, tested.
+Notebook [`01_portfolio.ipynb`](notebooks/01_portfolio.ipynb) carries the evidence about the
+book itself; the statistics live in the package, tested. There was a second notebook for the
+model, and the site replaced it: each of its five sections is now a generated page -- the
+distribution family against Aalen-Johansen, the univariate screen, the correlation and the
+variance inflation, the coefficients, and Kaplan-Meier against the model -- built from tested
+functions and rebuilt on every run, where the notebook was a copy that had to be remembered.
 
 ## Quickstart
 

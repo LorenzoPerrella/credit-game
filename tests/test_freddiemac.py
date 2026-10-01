@@ -103,7 +103,9 @@ def test_columns_are_read_positionally(files: tuple[Path, Path]) -> None:
 def test_missing_value_sentinels_become_nan(tmp_path: Path) -> None:
     """9999 is not a credit score, and left alone it produces a portfolio whose
     average score is several thousand."""
-    path = write(tmp_path / "orig.txt", [origination_row("F15Q1000009", fico="9999", dti="999")])
+    path = write(
+        tmp_path / "orig.txt", [origination_row("F15Q1000009", fico="9999", debt_to_income="999")]
+    )
 
     origination = read_origination(path)
 
@@ -122,8 +124,8 @@ def test_origination_month_is_recovered_from_age(files: tuple[Path, Path]) -> No
     months later, so age is the reliable anchor."""
     panel = load_sample(*files)
 
-    assert (panel["orig_period"] == panel["period"] - panel["age"]).all()
-    assert str(panel["orig_period"].iloc[0]) == "2015-03"
+    assert (panel["origination_period"] == panel["period"] - panel["age"]).all()
+    assert str(panel["origination_period"].iloc[0]) == "2015-03"
 
 
 def test_default_is_flagged_once_despite_continued_reporting(
@@ -159,8 +161,8 @@ def test_a_performing_loan_records_no_event(files: tuple[Path, Path]) -> None:
 def test_categorical_codes_are_decoded(files: tuple[Path, Path]) -> None:
     panel = load_sample(*files)
 
-    assert value_for(panel, "F15Q1000001", "purpose") == "refinance_cashout"
-    assert value_for(panel, "F15Q1000003", "channel") == "broker"
+    assert value_for(panel, "F15Q1000001", "purpose") == "cash_out_refinance"
+    assert value_for(panel, "F15Q1000003", "channel") == "broker_or_correspondent"
     assert value_for(panel, "F15Q1000001", "occupancy") == "owner_occupied"
 
 

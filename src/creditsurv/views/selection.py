@@ -23,6 +23,10 @@ _DESCRIBED: Final[dict[str, str]] = {
     "screening": "Each candidate beside the loan block: sign, effect, likelihood ratio.",
     "elimination": "Backward elimination, one covariate a step, and the rule that fired.",
     "stability": "Standardised effects on the training half and on each half of the book.",
+    "materiality": (
+        "Macro covariates removed at step 10 for an effect under 0.02 of log survival time "
+        "per standard deviation, the threshold rule 3 declared before any fit."
+    ),
     "fits": "Every model the selection estimated, its time, and whether it was cached.",
 }
 
@@ -45,7 +49,7 @@ def selection_views(directory: Path) -> list[View]:
             View(
                 f"selection_{name}",
                 f"Selection: {name}",
-                _DESCRIBED[name],
+                _DESCRIBED.get(name, f"The selection's {name} table."),
                 frame,
                 source="selection",
             )
