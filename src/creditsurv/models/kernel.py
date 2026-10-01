@@ -44,9 +44,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
+import pandas as pd
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
 #: lifelines' ``safe_exp`` ceiling: ``exp`` is never asked for more than this, and its
 #: derivative is reported as the capped value rather than as zero.
@@ -341,3 +342,226 @@ def row_likelihood(
 
     interval = _clipped(opened - closed, INTERVAL_FLOOR, INTERVAL_CEILING)
     return _log(interval) + entry.scaled(truncated)
+
+
+@dataclass(frozen=True)
+class Rows:
+    """A block of rows as the kernel reads them: four narrow columns and two indices.
+
+    ``i`` says which **loan** combination a row has and ``j`` which **calendar** key, so the
+    scale's linear predictor is a lookup plus a lookup. On the production table that is
+    3,001 and 153,309 table entries against 53 million rows, and the row itself is ten bytes
+    where the expanded design is 208.
+    """
+
+    i: np.ndarray
+    j: np.ndarray
+    age: np.ndarray
+    event: np.ndarray
+    weight: np.ndarray
+
+    @property
+    def rows(self) -> int:
+        return len(self.i)
+
+    @property
+    def nbytes(self) -> int:
+        """What the rows cost. The two tables are shared by every block and counted once."""
+        return int(self.i.nbytes + self.j.nbytes + self.age.nbytes + self.event.nbytes)
+
+
+def _stable_codes(frame: pd.DataFrame, names: Sequence[str]) -> np.ndarray:
+    """The named columns as a float matrix whose numbers mean the same thing in every block.
+
+    A categorical contributes its **declared** level codes, never codes discovered in this
+    block: the tables are global, so a level absent from one batch would otherwise shift every
+    code after it and two different combinations would be handed the same index.
+    ``blocks._check_categories`` is what makes the levels the same everywhere.
+    """
+    columns: list[np.ndarray] = []
+    for name in names:
+        values = frame[name]
+        if isinstance(values.dtype, pd.CategoricalDtype):
+            columns.append(values.cat.codes.to_numpy(dtype=float))
+            continue
+        if values.dtype == object:
+            message = (
+                f"Column {name!r} is plain text, so its codes would be this block's own. "
+                "Restore the declared categorical levels before encoding."
+            )
+            raise ValueError(message)
+        columns.append(values.to_numpy(dtype=float))
+    return np.column_stack(columns) if columns else np.zeros((len(frame), 1))
+
+
+def _a_function_of(design: np.ndarray, codes: np.ndarray, size: int) -> np.ndarray:
+    """Which of the design's columns are functions of ``codes``, one column at a time.
+
+    Written into a table indexed by the codes and read back: a column that is a function of
+    them comes back unchanged, and one that is not comes back with whichever row was written
+    last. Exact equality, not a tolerance -- the same combination carries literally the same
+    float -- and one pass over the block.
+    """
+    table = np.zeros((size, design.shape[1]))
+    table[codes] = design
+    return np.asarray(np.all(table[codes] == design, axis=0))
+
+
+class Factorisation:
+    """The two design tables, grown block by block, and the rows that index into them.
+
+    The partition is **declared** by the caller -- which covariates the cell key carries and
+    which are functions of the calendar -- and **verified** here, because a declaration that
+    is not checked is a comment. Every column of the design has to be a function of the loan
+    combination or of the calendar key; one that is a function of neither is a term coupling
+    the two sides, which this factorisation cannot represent, and it is refused by name rather
+    than quietly fitted as something else.
+
+    The tables are kept **unscaled**. lifelines optimises each coefficient multiplied by its
+    column's standard deviation, and dividing two tables of a few thousand rows once is
+    nothing next to dividing a design of 53 million.
+    """
+
+    def __init__(
+        self,
+        *,
+        loan: Sequence[str],
+        calendar: Sequence[str],
+        age_column: str,
+        columns: Sequence[str],
+    ) -> None:
+        self._loan = tuple(loan)
+        self._calendar = (*calendar, age_column)
+        self._age_column = age_column
+        self._columns = tuple(columns)
+        self._loan_codes = _Growing()
+        self._calendar_codes = _Growing()
+        self._loan_positions: np.ndarray | None = None
+        self._calendar_positions: np.ndarray | None = None
+        self._loan_rows: list[np.ndarray] = []
+        self._calendar_rows: list[np.ndarray] = []
+
+    def add(
+        self, frame: pd.DataFrame, design: np.ndarray, *, event: np.ndarray, weight: np.ndarray
+    ) -> Rows:
+        """Encode one block, growing the tables with whatever combinations are new to it."""
+        i = self._loan_codes.of(_stable_codes(frame, self._loan))
+        j = self._calendar_codes.of(_stable_codes(frame, self._calendar))
+        if self._loan_positions is None:
+            self._decide(design, i, j)
+        assert self._loan_positions is not None
+        assert self._calendar_positions is not None
+        self._grow(self._loan_rows, design[:, self._loan_positions], i)
+        self._grow(self._calendar_rows, design[:, self._calendar_positions], j)
+        self._verify(design, i, j)
+        age = frame[self._age_column].to_numpy()
+        return Rows(
+            i=i.astype(np.uint32),
+            j=j.astype(np.uint32),
+            age=age.astype(np.int32),
+            event=np.asarray(event, dtype=bool),
+            weight=np.asarray(weight, dtype=np.float64),
+        )
+
+    def tables(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """The loan table, the calendar table, and which design columns each one holds."""
+        if self._loan_positions is None or self._calendar_positions is None:
+            message = "Nothing has been encoded, so there are no tables."
+            raise ValueError(message)
+        return (
+            np.asarray(self._loan_rows, dtype=np.float64),
+            np.asarray(self._calendar_rows, dtype=np.float64),
+            self._loan_positions,
+            self._calendar_positions,
+        )
+
+    def _decide(self, design: np.ndarray, i: np.ndarray, j: np.ndarray) -> None:
+        loan = _a_function_of(design, i, len(self._loan_codes))
+        calendar = _a_function_of(design, j, len(self._calendar_codes))
+        neither = ~loan & ~calendar
+        if neither.any():
+            named = ", ".join(self._columns[position] for position in np.flatnonzero(neither))
+            message = (
+                f"The design column(s) {named} are a function of neither the loan combination "
+                "nor the calendar key, so the linear predictor is not a sum of the two and "
+                "this kernel cannot fit it. A term coupling a loan characteristic to the "
+                "calendar belongs in the calendar key, or the fit belongs on the autograd "
+                "evaluator."
+            )
+            raise ValueError(message)
+        # A constant column -- the intercept -- is a function of both, and has to go to
+        # exactly one side. The loan side, which is also where lifelines puts it first.
+        self._loan_positions = np.flatnonzero(loan)
+        self._calendar_positions = np.flatnonzero(~loan & calendar)
+
+    @staticmethod
+    def _grow(rows: list[np.ndarray], design: np.ndarray, codes: np.ndarray) -> None:
+        """Store a design row for each combination this block is the first to carry.
+
+        Codes are handed out in order of first appearance, so a block's new ones are exactly
+        the indices past the end of the table, and any row carrying one of them will do: the
+        invariant `_verify` checks is that they all carry the same values.
+        """
+        wanted = int(codes.max()) + 1 if len(codes) else 0
+        missing = set(range(len(rows), wanted))
+        if not missing:
+            return
+        rows.extend(np.zeros(design.shape[1]) for _ in missing)
+        for position, code in enumerate(codes):
+            index = int(code)
+            if index in missing:
+                rows[index] = design[position].copy()
+                missing.discard(index)
+                if not missing:
+                    return
+
+    def _verify(self, design: np.ndarray, i: np.ndarray, j: np.ndarray) -> None:
+        """Every row's design is the two tables read at its two indices. Exactly.
+
+        This is the check that makes the declared partition a fact rather than a claim, and it
+        runs on every block rather than the first: a covariate that is a function of the key on
+        one quarter of the book and not on another would pass a test of the first block alone.
+        """
+        assert self._loan_positions is not None
+        assert self._calendar_positions is not None
+        loan = np.asarray(self._loan_rows, dtype=np.float64)
+        calendar = np.asarray(self._calendar_rows, dtype=np.float64)
+        for side, table, codes, positions in (
+            ("loan", loan, i, self._loan_positions),
+            ("calendar", calendar, j, self._calendar_positions),
+        ):
+            if positions.size and not np.array_equal(table[codes], design[:, positions]):
+                wrong = np.flatnonzero(~np.all(table[codes] == design[:, positions], axis=0))
+                named = ", ".join(self._columns[positions[position]] for position in wrong)
+                message = (
+                    f"The design column(s) {named} are not a function of the {side} key after "
+                    "all: the same combination carries different values in different blocks. "
+                    "The factorisation would fit a different model, so it is refused."
+                )
+                raise ValueError(message)
+
+
+class _Growing:
+    """A table of distinct rows, giving the same index to the same row in every block."""
+
+    __slots__ = ("_rows", "_seen")
+
+    def __init__(self) -> None:
+        self._seen: dict[bytes, int] = {}
+        self._rows = 0
+
+    def of(self, values: np.ndarray) -> np.ndarray:
+        distinct, inverse = np.unique(values, axis=0, return_inverse=True)
+        mapped = np.empty(len(distinct), dtype=np.int64)
+        for position, row in enumerate(distinct):
+            key = np.ascontiguousarray(row).tobytes()
+            index = self._seen.get(key)
+            if index is None:
+                index = self._rows
+                self._seen[key] = index
+                self._rows += 1
+            mapped[position] = index
+        return mapped[np.asarray(inverse).ravel()]
+
+    def __len__(self) -> int:
+        return self._rows

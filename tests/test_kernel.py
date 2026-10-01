@@ -19,6 +19,7 @@ from typing import Any
 
 import autograd.numpy as anp
 import numpy as np
+import pandas as pd
 import pytest
 from autograd import grad, hessian
 from lifelines.utils.safe_exp import safe_exp
@@ -29,6 +30,7 @@ from creditsurv.models.kernel import (
     MAX_EXPONENT,
     SURVIVAL_CEILING,
     SURVIVAL_FLOOR,
+    Factorisation,
     log_times,
     row_likelihood,
 )
@@ -255,3 +257,234 @@ def test_the_safe_exponential_reports_the_derivative_lifelines_reports() -> None
     assert float(np.asarray(jet.v)[0]) == pytest.approx(capped)
     assert float(np.asarray(jet.de)[0]) == pytest.approx(capped), "not zero, as autograd has it"
     assert float(np.asarray(grad(lambda x: safe_exp(x))(above))) == pytest.approx(capped)
+
+
+LOAN = ("credit_score", "original_ltv", "purpose")
+CALENDAR = ("unemployment_change", "ltv_change")
+DESIGN_COLUMNS = (
+    "Intercept",
+    "C(credit_score)[T.680.0]",
+    "original_ltv",
+    "C(purpose)[T.cash_out_refinance]",
+    "unemployment_change",
+    "ltv_change",
+)
+
+
+def _book(months: range, ages: range) -> pd.DataFrame:
+    """A little book with the production table's structure, not its size.
+
+    Loan characteristics that the cell key carries; macro covariates that are functions of the
+    observation month, which is the origination month plus the age; and `ltv_change`, which is
+    the one covariate of the real model that reads a loan characteristic *and* the calendar --
+    the LTV band's midpoint times a house-price ratio -- and is therefore the reason the
+    calendar key carries 153,309 entries rather than 38,384.
+    """
+    rows = []
+    for origination in months:
+        for age in ages:
+            observation = origination + age
+            for score in (680.0, 790.0):
+                for ltv in (50.0, 95.0):
+                    for purpose in ("purchase", "cash_out_refinance"):
+                        rows.append(
+                            {
+                                "credit_score": score,
+                                "original_ltv": ltv,
+                                "purpose": purpose,
+                                "unemployment_change": 0.1 * np.sin(observation),
+                                "ltv_change": ltv * (0.01 * np.cos(observation)),
+                                "age": age,
+                                "loan_months": 1.0 + (age % 7),
+                                "outcome": (age + origination) % 11 == 0,
+                            }
+                        )
+    frame = pd.DataFrame(rows)
+    frame["purpose"] = pd.Categorical(
+        frame["purpose"], categories=["purchase", "cash_out_refinance"]
+    )
+    return frame
+
+
+def _design(frame: pd.DataFrame) -> np.ndarray:
+    """The formula's expansion, written out: an intercept, two factors and three numbers."""
+    return np.column_stack(
+        [
+            np.ones(len(frame)),
+            (frame["credit_score"].to_numpy() == 680.0).astype(float),
+            frame["original_ltv"].to_numpy(dtype=float),
+            (frame["purpose"].astype(str).to_numpy() == "cash_out_refinance").astype(float),
+            frame["unemployment_change"].to_numpy(dtype=float),
+            frame["ltv_change"].to_numpy(dtype=float),
+        ]
+    )
+
+
+def _factorisation() -> Factorisation:
+    return Factorisation(loan=LOAN, calendar=CALENDAR, age_column="age", columns=DESIGN_COLUMNS)
+
+
+def test_the_two_tables_reproduce_the_design_row_for_row() -> None:
+    """The point of the whole kernel: no design matrix, and nothing lost by not having one.
+
+    Every column is a function of the loan combination or of the calendar key, so the design
+    is two small tables read at two indices -- and that is checked by rebuilding it and
+    comparing, exactly rather than to a tolerance, because the same combination carries
+    literally the same floats.
+    """
+    frame = _book(range(0, 6), range(0, 9))
+    design = _design(frame)
+    factorisation = _factorisation()
+
+    rows = factorisation.add(
+        frame,
+        design,
+        event=frame["outcome"].to_numpy(dtype=bool),
+        weight=frame["loan_months"].to_numpy(dtype=float),
+    )
+    loan, calendar, loan_positions, calendar_positions = factorisation.tables()
+
+    rebuilt = np.zeros_like(design)
+    rebuilt[:, loan_positions] = loan[rows.i]
+    rebuilt[:, calendar_positions] = calendar[rows.j]
+    np.testing.assert_array_equal(rebuilt, design)
+
+    # The intercept is a function of both sides and has to land on exactly one of them.
+    assert sorted([*loan_positions, *calendar_positions]) == list(range(design.shape[1]))
+    assert set(loan_positions) == {0, 1, 2, 3}
+    assert set(calendar_positions) == {4, 5}
+
+    # Eight loan combinations: two scores, two LTV bands, two purposes.
+    assert len(loan) == 2 * 2 * 2
+    # And one calendar key for each (observation month, age, LTV band): the macro series are
+    # functions of the observation month, `ltv_change` reads the band as well, and the age is
+    # in the key because the interval bounds are. Six origination months by nine ages is
+    # fifty-four (observation, age) pairs, over two bands.
+    expected = {
+        (origination + age, age, ltv)
+        for origination in range(0, 6)
+        for age in range(0, 9)
+        for ltv in (50.0, 95.0)
+    }
+    assert len(calendar) == len(expected) == 54 * 2
+    assert rows.rows == len(frame)
+
+
+def test_a_combination_keeps_its_index_when_a_level_is_missing_from_a_block() -> None:
+    """The tables are global, so the codes have to be too.
+
+    A categorical contributes its **declared** level codes. Were they discovered per block, a
+    level absent from one batch would shift every code after it and two different combinations
+    would be handed the same index -- silently, and with the design rebuilt from the wrong row.
+    """
+    first = _book(range(0, 4), range(0, 5))
+    second = _book(range(4, 8), range(0, 5))
+    # The second block never sees a cash-out refinance, but still knows the level exists.
+    second = second[second["purpose"].astype(str) == "purchase"].reset_index(drop=True)
+    assert set(second["purpose"].cat.categories) == {"purchase", "cash_out_refinance"}
+
+    factorisation = _factorisation()
+    encoded = []
+    for block in (first, second):
+        design = _design(block)
+        encoded.append(
+            (
+                block,
+                design,
+                factorisation.add(
+                    block,
+                    design,
+                    event=block["outcome"].to_numpy(dtype=bool),
+                    weight=block["loan_months"].to_numpy(dtype=float),
+                ),
+            )
+        )
+    loan, calendar, loan_positions, calendar_positions = factorisation.tables()
+
+    for block, design, rows in encoded:
+        rebuilt = np.zeros_like(design)
+        rebuilt[:, loan_positions] = loan[rows.i]
+        rebuilt[:, calendar_positions] = calendar[rows.j]
+        np.testing.assert_array_equal(rebuilt, design, err_msg=f"{len(block)} rows")
+
+    # The same loan combination in the two blocks is the same index.
+    purchases = [
+        {
+            int(code)
+            for code, keep in zip(rows.i, block["purpose"].astype(str) == "purchase", strict=True)
+            if keep
+        }
+        for block, _, rows in encoded
+    ]
+    assert purchases[1] <= purchases[0]
+
+
+def test_a_column_that_reads_both_sides_is_refused_by_name() -> None:
+    """A term coupling a loan characteristic to the calendar has no place in a sum of two
+    tables, and the kernel says which column rather than fitting something else.
+
+    This is not hypothetical arithmetic: `ltv_change` and `mortgage_rate_decline` are both of
+    that kind, and they work only because the calendar key carries the LTV band and the term.
+    An interaction written into the formula would not.
+    """
+    frame = _book(range(0, 4), range(0, 5))
+    design = _design(frame)
+    coupled = np.column_stack(
+        [design, design[:, 1] * design[:, 4]]  # credit score band times a macro series
+    )
+    factorisation = Factorisation(
+        loan=LOAN,
+        calendar=CALENDAR,
+        age_column="age",
+        columns=(*DESIGN_COLUMNS, "C(credit_score)[T.680.0]:unemployment_change"),
+    )
+
+    with pytest.raises(ValueError, match="function of neither"):
+        factorisation.add(
+            frame,
+            coupled,
+            event=frame["outcome"].to_numpy(dtype=bool),
+            weight=frame["loan_months"].to_numpy(dtype=float),
+        )
+
+
+def test_a_key_that_stops_holding_a_covariate_is_caught_on_the_later_block() -> None:
+    """The verification runs on every block, not on the first.
+
+    A covariate that is a function of the key on one quarter of the book and not on another
+    would pass a test of the first block alone, and the fit would then read one of the two
+    values from the table and the other from nowhere.
+    """
+    first = _book(range(0, 4), range(0, 5))
+    second = _book(range(0, 4), range(0, 5))
+    factorisation = _factorisation()
+    factorisation.add(
+        first,
+        _design(first),
+        event=first["outcome"].to_numpy(dtype=bool),
+        weight=first["loan_months"].to_numpy(dtype=float),
+    )
+
+    # The same keys, and one column moved: the stored table no longer describes it.
+    moved = _design(second)
+    moved[:, 2] += 1.0
+    with pytest.raises(ValueError, match="not a function of the loan key after all"):
+        factorisation.add(
+            second,
+            moved,
+            event=second["outcome"].to_numpy(dtype=bool),
+            weight=second["loan_months"].to_numpy(dtype=float),
+        )
+
+
+def test_plain_text_is_refused_because_its_codes_would_be_this_blocks_own() -> None:
+    frame = _book(range(0, 3), range(0, 4))
+    frame["purpose"] = frame["purpose"].astype(str)
+
+    with pytest.raises(ValueError, match="plain text"):
+        _factorisation().add(
+            frame,
+            _design(frame),
+            event=frame["outcome"].to_numpy(dtype=bool),
+            weight=frame["loan_months"].to_numpy(dtype=float),
+        )
