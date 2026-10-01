@@ -287,7 +287,7 @@ def profile(
     """
     import logging
 
-    from creditsurv.data.aggregate import _CATEGORICAL, _SOURCE
+    from creditsurv.data.book import CATEGORICAL, SOURCE
     from creditsurv.profiling import (
         is_monotonic,
         profile_categorical,
@@ -311,10 +311,10 @@ def profile(
         typer.echo(f"Written to {destination}")
         return
 
-    if covariate in _CATEGORICAL:
+    if covariate in CATEGORICAL:
         _echo_table(profile_categorical(covariate).round(5))
         return
-    if covariate in _SOURCE:
+    if covariate in SOURCE:
         edges = propose_cut_points(covariate)
         typer.echo(f"Quantile cut points: {edges}")
         table = profile_continuous(covariate, edges)
@@ -359,12 +359,12 @@ def aggregate(
     import logging
 
     from creditsurv.data.aggregate import (
-        MoratoriumPolicy,
         cardinality_report,
         credit_adjacent_exits,
         incomplete_cases,
         write_cells,
     )
+    from creditsurv.data.book import MoratoriumPolicy
     from creditsurv.data.store import cells_path
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -1116,7 +1116,7 @@ def views(
 
     from creditsurv.backtest.runner import predicted_hazard
     from creditsurv.config import tables_dir
-    from creditsurv.data.aggregate import MoratoriumPolicy
+    from creditsurv.data.book import MoratoriumPolicy
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import (
         AGE,
@@ -1452,7 +1452,8 @@ def check_calendar(moratorium: MoratoriumOption = "exclude") -> None:
     """
     import logging
 
-    from creditsurv.data.aggregate import MoratoriumPolicy, defaults_by_month
+    from creditsurv.data.aggregate import defaults_by_month
+    from creditsurv.data.book import MoratoriumPolicy
     from creditsurv.data.panel import defaults_by_observation_month
     from creditsurv.data.store import load_cells
     from creditsurv.explore import lagged_correlation

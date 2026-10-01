@@ -301,9 +301,9 @@ def test_no_categorical_mapping_has_an_else_branch() -> None:
     refinance. Every branch is listed explicitly so an unmapped code becomes NULL and
     the loan is dropped, which is the honest outcome for a value nobody has looked at.
     """
-    from creditsurv.data.aggregate import _CATEGORICAL
+    from creditsurv.data.book import CATEGORICAL
 
-    for name, expression in _CATEGORICAL.items():
+    for name, expression in CATEGORICAL.items():
         # Only the code mappings. A CASE on a numeric condition -- "is the term under
         # 190 months", "is there mortgage insurance" -- has no unseen values to
         # absorb, so an ELSE there is a genuine two-way split.
@@ -405,7 +405,7 @@ def test_a_modified_loan_is_cut_at_the_modification(tmp_path: Path) -> None:
     """
     import duckdb
 
-    from creditsurv.data.aggregate import _state_of_the_book_sql
+    from creditsurv.data.book import state_of_the_book_sql
 
     performance = [
         performance_row("F15Q1000001", "201503", "0"),
@@ -419,7 +419,7 @@ def test_a_modified_loan_is_cut_at_the_modification(tmp_path: Path) -> None:
     _ingested(tmp_path, [origination_row("F15Q1000001")], performance)
 
     perf, orig = _sources(tmp_path)
-    book = duckdb.connect().execute(_state_of_the_book_sql(), [perf, orig]).df()
+    book = duckdb.connect().execute(state_of_the_book_sql(), [perf, orig]).df()
     book = book.sort_values("period_key")
 
     assert book["age"].tolist() == [0, 1, 2], "history should stop before the modification"
@@ -436,7 +436,7 @@ def test_truncation_follows_calendar_time_not_age(tmp_path: Path) -> None:
     """
     import duckdb
 
-    from creditsurv.data.aggregate import _state_of_the_book_sql
+    from creditsurv.data.book import state_of_the_book_sql
 
     performance = [
         performance_row("F15Q1000001", "201503", "0"),
@@ -450,7 +450,7 @@ def test_truncation_follows_calendar_time_not_age(tmp_path: Path) -> None:
     _ingested(tmp_path, [origination_row("F15Q1000001")], performance)
 
     perf, orig = _sources(tmp_path)
-    book = duckdb.connect().execute(_state_of_the_book_sql(), [perf, orig]).df()
+    book = duckdb.connect().execute(state_of_the_book_sql(), [perf, orig]).df()
     book = book.sort_values("period_key")
 
     assert book["age"].tolist() == [0, 1, 2, 3, 4]
@@ -535,7 +535,7 @@ def test_a_statutory_payment_holiday_is_not_a_default(tmp_path: Path) -> None:
     """
     import duckdb
 
-    from creditsurv.data.aggregate import MoratoriumPolicy, _state_of_the_book_sql
+    from creditsurv.data.book import MoratoriumPolicy, state_of_the_book_sql
 
     _ingested(tmp_path, *_moratorium_quarter())
     perf, orig = _sources(tmp_path)
@@ -543,7 +543,7 @@ def test_a_statutory_payment_holiday_is_not_a_default(tmp_path: Path) -> None:
     holiday, stopped = "F15Q1000001", "F15Q1000002"
 
     def book(policy: MoratoriumPolicy) -> pd.DataFrame:
-        frame = duckdb.connect().execute(_state_of_the_book_sql(policy), [perf, orig]).df()
+        frame = duckdb.connect().execute(state_of_the_book_sql(policy), [perf, orig]).df()
         return frame.sort_values(["loan_identifier", "period_key"])
 
     def event_ages(frame: pd.DataFrame, loan: str) -> list[int]:
@@ -579,14 +579,14 @@ def test_the_two_moratorium_treatments_are_not_equivalent(tmp_path: Path) -> Non
     argued: EXCLUDE keeps the exposure and catches the later default, CENSOR does not."""
     import duckdb
 
-    from creditsurv.data.aggregate import MoratoriumPolicy, _state_of_the_book_sql
+    from creditsurv.data.book import MoratoriumPolicy, state_of_the_book_sql
 
     _ingested(tmp_path, *_moratorium_quarter())
     perf, orig = _sources(tmp_path)
     connection = duckdb.connect()
 
-    kept = connection.execute(_state_of_the_book_sql(MoratoriumPolicy.EXCLUDE), [perf, orig]).df()
-    lost = connection.execute(_state_of_the_book_sql(MoratoriumPolicy.CENSOR), [perf, orig]).df()
+    kept = connection.execute(state_of_the_book_sql(MoratoriumPolicy.EXCLUDE), [perf, orig]).df()
+    lost = connection.execute(state_of_the_book_sql(MoratoriumPolicy.CENSOR), [perf, orig]).df()
 
     assert len(kept) > len(lost), "censoring gives up the exposure after the accommodation"
 
@@ -604,7 +604,8 @@ def test_a_quarter_arrives_with_every_level_it_could_hold() -> None:
     because `pd.Categorical` turns it into a NaN and the loan-months would leave the table
     without a word.
     """
-    from creditsurv.data.aggregate import CATEGORICAL_LEVELS, _compact, _concatenate
+    from creditsurv.data.aggregate import _compact, _concatenate
+    from creditsurv.data.book import CATEGORICAL_LEVELS
 
     levels = {"occupancy": CATEGORICAL_LEVELS["occupancy"]}
     first = _compact(
@@ -1030,19 +1031,19 @@ def test_the_declared_levels_are_the_levels_the_sql_can_produce() -> None:
     `_STATE_TO_REGION`, so its own values are the source. `term_years` has none because it is
     not text -- the mapping returns 15 or 30 and the column is an `int32`.
     """
-    from creditsurv.data.aggregate import (
-        _CATEGORICAL,
+    from creditsurv.data.book import (
         _STATE_TO_REGION,
+        CATEGORICAL,
         CATEGORICAL_LEVELS,
     )
 
-    assert set(CATEGORICAL_LEVELS) | {"term_years"} == set(_CATEGORICAL)
+    assert set(CATEGORICAL_LEVELS) | {"term_years"} == set(CATEGORICAL)
 
     for name, declared in CATEGORICAL_LEVELS.items():
         if name == "region":
             assert declared == tuple(sorted(set(_STATE_TO_REGION.values())))
             continue
-        in_the_sql = sorted(set(re.findall(r"THEN\s+'([^']+)'", _CATEGORICAL[name])))
+        in_the_sql = sorted(set(re.findall(r"THEN\s+'([^']+)'", CATEGORICAL[name])))
         assert list(declared) == in_the_sql, name
 
     # Sorted, because the level unification this replaced sorted, and the order is what

@@ -18,7 +18,8 @@ from creditsurv.config import (
     STATIC_CONTINUOUS,
     TIME_VARYING_CONTINUOUS,
 )
-from creditsurv.data.aggregate import _CATEGORICAL, _SOURCE, PRODUCTION_EDGES
+from creditsurv.data.aggregate import PRODUCTION_EDGES
+from creditsurv.data.book import CATEGORICAL, SOURCE
 from creditsurv.features import BIN_EDGES, MACRO_DERIVED, MACRO_SOURCES
 from creditsurv.models.lifetime_pd import ADVERSE
 from creditsurv.models.procedure import BASE_CATEGORICAL, CANDIDATE_CATEGORICAL, LOAN_CONTINUOUS
@@ -37,8 +38,8 @@ def _covariates() -> set[str]:
         *MACRO_DERIVED,
         *BIN_EDGES,
         *PRODUCTION_EDGES,
-        *_SOURCE,
-        *_CATEGORICAL,
+        *SOURCE,
+        *CATEGORICAL,
         *LOAN_CONTINUOUS,
         *BASE_CATEGORICAL,
         *CANDIDATE_CATEGORICAL,
@@ -68,10 +69,10 @@ def test_every_macro_series_the_code_names_is_registered_under_its_current_name(
 _THEN: re.Pattern[str] = re.compile(r"THEN '([^']*)'")
 
 
-@pytest.mark.parametrize("name", sorted(_CATEGORICAL))
+@pytest.mark.parametrize("name", sorted(CATEGORICAL))
 def test_every_level_the_aggregation_produces_is_a_current_level(name: str) -> None:
     entry = names.VARIABLES[name]
-    produced = set(_THEN.findall(_CATEGORICAL[name]))
+    produced = set(_THEN.findall(CATEGORICAL[name]))
     if name == "region":
         produced = {"Northeast", "Midwest", "South", "West", "Other"}
 

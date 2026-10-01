@@ -106,15 +106,15 @@ def cells_writer(policy: str = DEFAULT_POLICY) -> Iterator[Callable[[pd.DataFram
 def _reader() -> Iterator[duckdb.DuckDBPyConnection]:
     """A DuckDB connection for reading the cell file, closed when the caller is done.
 
-    Through :func:`creditsurv.data.aggregate._connect`, which is the one place that sets the
+    Through :func:`creditsurv.data.book.connect`, which is the one place that sets the
     temporary directory away from the working tree: DuckDB spills into the process's own
     directory by default, and the first query here that did left 20 GB inside the repository.
     The readers are unlikely to spill -- they select or group in one pass -- but a connection
     that cannot is cheaper than remembering which ones can.
     """
-    from creditsurv.data.aggregate import _connect
+    from creditsurv.data.book import connect
 
-    con = _connect()
+    con = connect()
     try:
         yield con
     finally:

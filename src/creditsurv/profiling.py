@@ -28,13 +28,13 @@ from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
-from creditsurv.data.aggregate import (
-    _CATEGORICAL,
-    _SOURCE,
-    GIVE_UP_ORDER,
-    _connect,
-    _resolve,
-    _state_of_the_book_sql,
+from creditsurv.data.aggregate import GIVE_UP_ORDER
+from creditsurv.data.book import (
+    CATEGORICAL,
+    SOURCE,
+    connect,
+    sources,
+    state_of_the_book_sql,
 )
 
 if TYPE_CHECKING:
@@ -42,7 +42,8 @@ if TYPE_CHECKING:
 
     import duckdb
 
-    from creditsurv.data.aggregate import CellSpec, PathSpec
+    from creditsurv.data.aggregate import CellSpec
+    from creditsurv.data.book import PathSpec
 
 _LOGGER: Final = logging.getLogger(__name__)
 
@@ -76,11 +77,11 @@ def _accumulate(
     exactly one quarter's files, so the counts simply sum, and nothing has to be
     resident.
     """
-    con = connection or _connect()
+    con = connection or connect()
     frames = []
     for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
         query = f"""
-        WITH book AS ({_state_of_the_book_sql()})
+        WITH book AS ({state_of_the_book_sql()})
         SELECT {inner_select},
                COUNT(*) AS loan_months,
                SUM(CASE WHEN event THEN 1 ELSE 0 END) AS events
@@ -111,10 +112,10 @@ def profile_categorical(
     rather than dropped; a covariate whose largest level dominates has nothing to
     contribute at all.
     """
-    expression = _CATEGORICAL[column]
+    expression = CATEGORICAL[column]
     table = _accumulate(
-        _resolve(perf_source, "perf"),
-        _resolve(orig_source, "orig"),
+        sources(perf_source, "perf"),
+        sources(orig_source, "orig"),
         f"{expression} AS level",
         "1",
         connection=connection,
@@ -144,15 +145,15 @@ def propose_cut_points(
     These say where the mass is, so a convention that would leave a band nearly empty
     is visible before it is adopted.
     """
-    con = connection or _connect()
-    expression = _SOURCE[column]
+    con = connection or connect()
+    expression = SOURCE[column]
     quantile_list = ", ".join(str(q) for q in quantiles)
 
     # One quarter is enough to place the quantiles; this is a starting point.
-    perf = _resolve(perf_source, "perf")
-    orig = _resolve(orig_source, "orig")
+    perf = sources(perf_source, "perf")
+    orig = sources(orig_source, "orig")
     query = f"""
-    WITH book AS ({_state_of_the_book_sql()})
+    WITH book AS ({state_of_the_book_sql()})
     SELECT QUANTILE_CONT({expression}, [{quantile_list}]) AS edges FROM book
     """
     result = con.execute(query, [sorted(perf)[0], sorted(orig)[0]]).fetchone()
@@ -175,15 +176,15 @@ def profile_continuous(
     untreated missing-value sentinel: credit score and loan-to-value ordered their
     own risk cleanly and this one did not.
     """
-    expression = _SOURCE[column]
+    expression = SOURCE[column]
     clauses = " ".join(
         f"WHEN {expression} <= {edge} THEN {index}" for index, edge in enumerate(edges)
     )
     band = f"CASE WHEN {expression} IS NULL THEN -1 {clauses} ELSE {len(edges)} END"
 
     table = _accumulate(
-        _resolve(perf_source, "perf"),
-        _resolve(orig_source, "orig"),
+        sources(perf_source, "perf"),
+        sources(orig_source, "orig"),
         f"{band} AS band",
         "1",
         connection=connection,
@@ -207,7 +208,7 @@ def is_monotonic(profile: pd.DataFrame) -> bool:
 
 
 def screen_categoricals(
-    columns: Sequence[str] = tuple(_CATEGORICAL),
+    columns: Sequence[str] = tuple(CATEGORICAL),
     perf_source: PathSpec = None,
     orig_source: PathSpec = None,
 ) -> pd.DataFrame:
@@ -215,7 +216,7 @@ def screen_categoricals(
 
     The whole-history version of the screening `nmds` runs before its group-by.
     """
-    con = _connect()
+    con = connect()
     rows = []
     for column in columns:
         profile = profile_categorical(column, perf_source, orig_source, connection=con)

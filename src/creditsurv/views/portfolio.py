@@ -7,7 +7,7 @@ Two passes over the book, quarter by quarter, each grouping by every segment at 
   which the monthly default rate and the conditional prepayment rate follow;
 * :func:`lending_by_segment` -- loans and amounts written, by vintage year.
 
-Both read the book the cells are built from, ``_state_of_the_book_sql``, with its cleaning,
+Both read the book the cells are built from, ``state_of_the_book_sql``, with its cleaning,
 truncation and event definition, and label their segments with the same
 :mod:`creditsurv.views.segments` the calibration views use -- so a loan-month is "620 to 660"
 on the portfolio page exactly when it is on the calibration page. The book is taken whole
@@ -23,16 +23,16 @@ from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
-from creditsurv.data.aggregate import (
-    _CATEGORICAL,
-    _SOURCE,
-    PRODUCTION_EDGES,
+from creditsurv.data.aggregate import PRODUCTION_EDGES
+from creditsurv.data.book import (
+    CATEGORICAL,
+    SOURCE,
     MoratoriumPolicy,
     PathSpec,
-    _case_expression,
-    _connect,
-    _resolve,
-    _state_of_the_book_sql,
+    case_expression,
+    connect,
+    sources,
+    state_of_the_book_sql,
 )
 from creditsurv.data.panel import origination_months
 from creditsurv.views.calibration import WHOLE_BOOK, survival_by_age
@@ -76,9 +76,9 @@ _ORIGINATION_YEAR: Final = "((period_key // 100) * 12 + (period_key % 100) - 1 -
 
 
 def _labelled_columns() -> list[str]:
-    columns = [f"{_CATEGORICAL[name]} AS {name}" for name in PORTFOLIO_CATEGORICAL]
+    columns = [f"{CATEGORICAL[name]} AS {name}" for name in PORTFOLIO_CATEGORICAL]
     columns += [
-        _case_expression(_SOURCE[name], PRODUCTION_EDGES[name], name) for name in PORTFOLIO_BANDED
+        case_expression(SOURCE[name], PRODUCTION_EDGES[name], name) for name in PORTFOLIO_BANDED
     ]
     return columns
 
@@ -129,8 +129,8 @@ def book_by_segment(
     monthly mortality of prepayment, and its annualised form, the conditional prepayment
     rate ``1 - (1 - smm)^12`` a mortgage desk reads.
     """
-    perf = _resolve(perf_source, "perf")
-    orig = _resolve(orig_source, "orig")
+    perf = sources(perf_source, "perf")
+    orig = sources(orig_source, "orig")
     if not perf or not orig:
         message = "No ingested quarters found. Run `creditsurv ingest` first."
         raise FileNotFoundError(message)
@@ -138,7 +138,7 @@ def book_by_segment(
     gaps = ", ".join(f"GROUPING({name}) AS g_{name}" for name in fields)
     sets = ", ".join(f"(period_key, {name})" for name in fields)
     query = f"""
-    WITH book AS ({_state_of_the_book_sql(policy, complete_only=False)}),
+    WITH book AS ({state_of_the_book_sql(policy, complete_only=False)}),
     labelled AS (
         SELECT period_key, event, prepaid, {", ".join(_labelled_columns())},
                {_ORIGINATION_YEAR} AS vintage_year
@@ -151,7 +151,7 @@ def book_by_segment(
     FROM labelled
     GROUP BY GROUPING SETS ({sets}, (period_key))
     """
-    con = connection or _connect()
+    con = connection or connect()
     frames = [
         con.execute(query, [perf_path, orig_path]).df()
         for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True)
@@ -180,8 +180,8 @@ def lending_by_segment(
     Each loan counted once, with the attributes and the origination year of its first month
     in the book.
     """
-    perf = _resolve(perf_source, "perf")
-    orig = _resolve(orig_source, "orig")
+    perf = sources(perf_source, "perf")
+    orig = sources(orig_source, "orig")
     if not perf or not orig:
         message = "No ingested quarters found. Run `creditsurv ingest` first."
         raise FileNotFoundError(message)
@@ -190,7 +190,7 @@ def lending_by_segment(
     gaps = ", ".join(f"GROUPING({name}) AS g_{name}" for name in fields)
     sets = ", ".join(f"(vintage_year, {name})" for name in fields)
     query = f"""
-    WITH book AS ({_state_of_the_book_sql(MoratoriumPolicy.EXCLUDE, complete_only=False)}),
+    WITH book AS ({state_of_the_book_sql(MoratoriumPolicy.EXCLUDE, complete_only=False)}),
     labelled AS (
         SELECT loan_identifier, period_key, original_balance, {", ".join(_labelled_columns())},
                {_ORIGINATION_YEAR} AS vintage_year
@@ -207,7 +207,7 @@ def lending_by_segment(
     FROM loans
     GROUP BY GROUPING SETS ({sets}, (vintage_year))
     """
-    con = connection or _connect()
+    con = connection or connect()
     frames = [
         con.execute(query, [perf_path, orig_path]).df()
         for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True)

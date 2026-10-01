@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 import pandas as pd
 
-from creditsurv.data.aggregate import PathSpec, _connect, _resolve
+from creditsurv.data.book import PathSpec, connect, sources
 from creditsurv.data.panel import EVENT, WEIGHT
 
 if TYPE_CHECKING:
@@ -41,8 +41,8 @@ def _run(
     Same reason the aggregation works this way: every loan lives in exactly one
     quarter's files, so the pieces stack and nothing has to be resident.
     """
-    con = connection or _connect()
-    perf_paths, orig_paths = _resolve(perf, "perf"), _resolve(orig, "orig")
+    con = connection or connect()
+    perf_paths, orig_paths = sources(perf, "perf"), sources(orig, "orig")
     # Some descriptive queries read only the performance side. Passing both would
     # fail on the parameter count, so the query says how many it wants.
     wants_both = query.count("?") == 2
@@ -112,8 +112,8 @@ def originations_by_period(
     GROUP BY 1
     """
     # Only the origination file is needed, but the runner's signature takes both.
-    con = connection or _connect()
-    frames = [con.execute(query, [[o]]).df() for o in sorted(_resolve(orig_source, "orig"))]
+    con = connection or connect()
+    frames = [con.execute(query, [[o]]).df() for o in sorted(sources(orig_source, "orig"))]
     frame = pd.concat(frames, ignore_index=True)
 
     weighted = frame.assign(
@@ -145,9 +145,9 @@ def origination_mix(
     one decade can mislead about another, and it is worth seeing before the
     coefficients rather than after.
     """
-    from creditsurv.data.aggregate import _CATEGORICAL
+    from creditsurv.data.book import CATEGORICAL
 
-    expression = _CATEGORICAL[column]
+    expression = CATEGORICAL[column]
     query = f"""
     SELECT
         CAST(first_payment_date AS INTEGER) // 100              AS year,
@@ -157,8 +157,8 @@ def origination_mix(
     WHERE first_payment_date IS NOT NULL
     GROUP BY 1, 2
     """
-    con = connection or _connect()
-    frames = [con.execute(query, [[o]]).df() for o in sorted(_resolve(orig_source, "orig"))]
+    con = connection or connect()
+    frames = [con.execute(query, [[o]]).df() for o in sorted(sources(orig_source, "orig"))]
     frame = pd.concat(frames, ignore_index=True).dropna(subset=["level"])
     stacked: pd.DataFrame = (
         frame.groupby(["year", "level"], observed=True).agg(loans=("loans", "sum")).reset_index()
@@ -191,8 +191,8 @@ def covariate_evolution(
     WHERE first_payment_date IS NOT NULL
     GROUP BY 1
     """
-    con = connection or _connect()
-    frames = [con.execute(query, [[o]]).df() for o in sorted(_resolve(orig_source, "orig"))]
+    con = connection or connect()
+    frames = [con.execute(query, [[o]]).df() for o in sorted(sources(orig_source, "orig"))]
     frame = pd.concat(frames, ignore_index=True)
 
     rows = []
@@ -237,10 +237,10 @@ def default_rate_by_period(
     The series the macro covariates are supposed to explain. Plotted against
     unemployment it is the whole argument for a time-varying model in one picture.
     """
-    from creditsurv.data.aggregate import _state_of_the_book_sql
+    from creditsurv.data.book import state_of_the_book_sql
 
     query = f"""
-    WITH book AS ({_state_of_the_book_sql()})
+    WITH book AS ({state_of_the_book_sql()})
     SELECT period_key,
            COUNT(*)                                             AS loan_months,
            SUM(CASE WHEN event THEN 1 ELSE 0 END)               AS events
