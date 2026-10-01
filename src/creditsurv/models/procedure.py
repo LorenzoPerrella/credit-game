@@ -51,7 +51,7 @@ from creditsurv.config import (
     MACRO_ELIMINATION_PRIORITY,
 )
 from creditsurv.data.panel import DEFAULT_CAUSE, WEIGHT, CellBlocks
-from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
+from creditsurv.data.store import find_fits, fit_fingerprint, load_fit, save_fit
 from creditsurv.explore import collinear_pairs
 from creditsurv.models.aft import FitResult, fit_aft, fit_streamed
 from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, Pinned
@@ -219,8 +219,16 @@ class Fits:
 
         log.info("fitting: %s on the %s", spec.formula, sample)
         started = time.perf_counter()
+        # `_floor` and `_check_nested` keep reading the caller's own start, never the
+        # borrowed one: a bound taken from a fit on another cell table bounds nothing here.
+        elsewhere = self._elsewhere(described) if start is None else None
         result = self._estimate(
-            spec, where=where, parity=parity, start=start, floor=_floor(spec, parent, start)
+            spec,
+            where=where,
+            parity=parity,
+            start=start if elsewhere is None else elsewhere,
+            floor=_floor(spec, parent, start),
+            speculative=elsewhere is not None,
         )
         _check_nested(spec, result, parent=parent, parent_fit=start)
         minutes = (time.perf_counter() - started) / 60
@@ -231,6 +239,36 @@ class Fits:
         )
         return result
 
+    def _elsewhere(self, described: dict[str, object]) -> FitResult | None:
+        """The same specification fitted on **another** cell table, as a starting point only.
+
+        A fit is cached under the table's name, size and time of writing, so rebuilding the
+        table invalidates every fit made before it -- 36 of the 175 on disk are a selection run
+        on a table that has since been replaced, 17.5 hours of them. They are not useless. The
+        specification is the same and the book is mostly the same book, so the old optimum is a
+        far better guess at the new one than lifelines' seed: a cold fit of the training half is
+        45 to 91 minutes and a warm one 4.7 to 13.
+
+        **It can only ever be a starting point.** Where a fit ends is settled by the polish,
+        which measures the distance to the optimum on the gradient and the curvature of *these*
+        rows and refuses a fit it cannot drive under a thousandth of a standard error. A start
+        changes how long that takes, not where it arrives -- and because this start is a guess
+        about a different table, a failure from it is retried cold rather than reported.
+        """
+        wanted = {key: value for key, value in described.items() if key != "cells"}
+        # `find_fits` reads `None` as "this key must be absent", which is how a default-cause
+        # fit is told from a prepayment one: `selection_description` omits the key for the
+        # default, so every fit made before the prepayment model existed keeps its name.
+        wanted.setdefault("cause", None)
+        for fingerprint, found in find_fits(**wanted):
+            if found.get("cells") == described["cells"]:
+                continue
+            cached = load_fit(fingerprint)
+            if isinstance(cached, FitResult) and cached.log_likelihood < 0:
+                log.info("starting from the same model fitted on %s", found.get("cells"))
+                return cached
+        return None
+
     def _estimate(
         self,
         spec: Specification,
@@ -239,6 +277,7 @@ class Fits:
         parity: int | None,
         start: FitResult | None,
         floor: float | None = None,
+        speculative: bool = False,
     ) -> FitResult:
         """One fit, from the rows in hand or from the cell file.
 
@@ -257,8 +296,13 @@ class Fits:
         try:
             return self._once(spec, where=where, parity=parity, start=start, floor=floor)
         except Pinned:
-            # Not a bad starting point but the shape of the surface: see blocks.Pinned.
-            raise
+            # Not a bad starting point but the shape of the surface: see blocks.Pinned. The
+            # exception is a start borrowed from another cell table, which is a guess about
+            # these rows and must never be able to fail a fit that would otherwise succeed.
+            if not speculative:
+                raise
+            log.warning("a start from another table was pinned; refitting cold: %s", spec.formula)
+            return self._once(spec, where=where, parity=parity, start=None, floor=floor)
         except exceptions.ConvergenceError:
             if start is None:
                 raise

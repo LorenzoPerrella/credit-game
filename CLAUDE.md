@@ -40,8 +40,15 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
 - `creditsurv moratorium`, two fits and two backtests, took 4.8 hours.
 - **`report` starts its fit where the selection ended.** Same specification, same rows, so
   the selection's cached fit is already the optimum, and Newton goes from there instead of
-  SLSQP from lifelines' seed. A cell table rebuilt since has another identity, and the fit
-  starts cold.
+  SLSQP from lifelines' seed.
+- **A rebuilt table invalidates every cached fit, and the old optima are still worth having.**
+  `cells_identity` is the file's name, size and time of writing, so 36 of the 175 fits on disk
+  are a selection run on a table since replaced -- 17.5 hours of them. `Fits._elsewhere` finds
+  the same specification fitted on *another* table and hands it to the optimiser as a
+  **starting point, never as a result**: where a fit ends is settled by the polish, on the
+  gradient and curvature of these rows, under a thousandth of a standard error. Because such a
+  start is a guess about a different table, a `Pinned` from it is retried cold, which is the
+  one place that exception is not taken at its word.
 - **Nothing holds the panel any more, and nothing should start again.** Every command that
   used to expand the training half now reads the cell file a batch at a time: the fits
   (`models.blocks`), the selection (`Fits(blocks=...)`), the views (`views.streamed`) and the

@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 
 from creditsurv.data.panel import to_interval_censored
+from creditsurv.models.blocks import Pinned
 from creditsurv.models.procedure import (
     Fits,
     SelectionRecord,
@@ -1195,3 +1196,80 @@ def test_a_parent_cannot_bound_a_fit_that_sees_other_rows(train: pd.DataFrame) -
     with pytest.raises(ValueError, match="different sample"):
         fits.fit(child, sample="odd", where=np.zeros(len(train), dtype=bool), parent=parent)
     assert not fits.record, "nothing may be fitted before the bound is checked"
+
+
+def test_a_rebuilt_table_starts_from_the_same_model_fitted_on_the_old_one(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fit is cached under the cell table's name, size and time of writing, so rebuilding the
+    table invalidates every fit made before it: 36 of the 175 on disk are a selection run on a
+    table that has since been replaced, 17.5 hours of them.
+
+    They are not useless. The specification is the same and the book is mostly the same book,
+    so the old optimum is a far better guess at the new one than lifelines' seed -- a cold fit
+    of the training half is 45 to 91 minutes and a warm one 4.7 to 13.
+
+    The rows here are deliberately **identical** and only the declared identity differs,
+    because what has to be shown is not that the lookup finds something but that what it finds
+    cannot move the answer: the borrowed start must be used, the fit must still be made, and it
+    must land where the cold fit landed, inside the thousandth of a standard error the polish
+    promises.
+    """
+    from creditsurv.models.blocks import POLISH_TOLERANCE_SE
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    spec = Specification(continuous=("credit_score", "unemployment_change"))
+
+    before = Fits(
+        train, identity="cells_exclude.parquet:1:1", as_of="2008-12", moratorium="exclude"
+    )
+    cold = before.fit(spec)
+    assert cold.blocks is not None
+    assert cold.blocks.method != "newton", "nothing in the cache to start from"
+
+    after = Fits(train, identity="cells_exclude.parquet:2:2", as_of="2008-12", moratorium="exclude")
+    warm = after.fit(spec)
+
+    assert warm.blocks is not None
+    assert warm.blocks.method == "newton", "the old table's optimum was not used as a start"
+    assert after.record[-1]["cached"] is False, "a start is not a result"
+    assert warm is not cold
+
+    moved = (warm.fitter.params_ - cold.fitter.params_).abs() / cold.fitter.standard_errors_
+    assert moved.max() < 2 * POLISH_TOLERANCE_SE, f"the start moved the optimum by {moved.max()}"
+
+
+def test_a_start_borrowed_from_another_table_can_never_fail_a_fit(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Pinned` says the surface, not the start: an optimiser held against the parent's optimum
+    has found a boundary that sits in the same place for every method and every starting point,
+    so a cold retry would spend another hour reaching the same refusal. That reasoning does not
+    hold for a start borrowed from a *different* cell table, which is a guess about these rows
+    -- so there, and only there, `Pinned` is retried cold.
+    """
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    spec = Specification(continuous=("credit_score",))
+
+    before = Fits(
+        train, identity="cells_exclude.parquet:1:1", as_of="2008-12", moratorium="exclude"
+    )
+    before.fit(spec)
+
+    after = Fits(train, identity="cells_exclude.parquet:2:2", as_of="2008-12", moratorium="exclude")
+    attempts: list[bool] = []
+    original = Fits._once
+
+    def refuse_the_warm_one(self: Fits, spec: Specification, **rest: object) -> FitResult:
+        warm = rest.get("start") is not None
+        attempts.append(warm)
+        if warm:
+            message = "the optimiser is circling a boundary it cannot cross"
+            raise Pinned(message)
+        return original(self, spec, **rest)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Fits, "_once", refuse_the_warm_one)
+    result = after.fit(spec)
+
+    assert attempts == [True, False], "the borrowed start was tried, then given up on"
+    assert result.log_likelihood < 0
