@@ -46,7 +46,6 @@ if TYPE_CHECKING:
     from creditsurv.models.aft import FitResult
 
 
-
 @dataclass(frozen=True)
 class BacktestResult:
     """What one reporting date produced."""
