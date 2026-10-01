@@ -921,3 +921,77 @@ def test_a_worker_that_dies_ends_the_fit_instead_of_blocking_it() -> None:
     ):
         patch.setattr("creditsurv.models.blocks._WORKER_POLL_SECONDS", 0.05)
         pool._collect()
+
+
+def test_the_parent_evaluates_its_own_share_while_the_workers_evaluate_theirs() -> None:
+    """The point goes out before the parent starts, and a failed share drains the queue.
+
+    `_ask` put the commands and then blocked on the answers, so the workers computed while the
+    parent waited and then the parent computed while the workers waited: `of` processes were
+    worth `of/2`. Measured on 1.95 million rows of the production table, four workers went from
+    1,747 ms an evaluation to 803, against 2,913 at one -- 3.6x of a possible 4x where it had
+    been 1.75x.
+
+    What the split costs is a hazard the single call did not have. One queue serves the whole
+    pool, so an answer nobody collects is still there at the *next* evaluation, and a sum of two
+    different points is worse than the failure that caused it. So a local share that raises
+    drains the pool on its way out.
+    """
+
+    from creditsurv.models.blocks import _Pinned, _Pooled
+
+    class Pool:
+        def __init__(self) -> None:
+            self.sent: list[tuple[str, float]] = []
+            self.pending = 0
+            self.discarded = 0
+
+        def send(self, command: str, x: np.ndarray) -> None:
+            self.sent.append((command, float(x[0])))
+            self.pending += 1
+
+        def value_and_gradient(self) -> list[tuple[float, np.ndarray]]:
+            self.pending -= 1
+            return [(0.25, np.array([1.0]))]
+
+        def curvature(self) -> list[np.ndarray]:
+            self.pending -= 1
+            return [np.array([[2.0]])]
+
+        def discard(self) -> None:
+            self.pending -= 1
+            self.discarded += 1
+
+    pool = Pool()
+    order: list[str] = []
+
+    def local(x: np.ndarray) -> tuple[float, np.ndarray]:
+        order.append("parent")
+        if float(x[0]) < 0:
+            message = "the parent's own share failed"
+            raise ArithmeticError(message)
+        return 0.75, np.array([3.0])
+
+    objective = cast("Any", object.__new__(_Pooled))
+    objective._local = local
+    objective._workers = pool
+    objective.floor = None
+    objective.pinned = _Pinned()
+    objective._started = 0.0
+    objective._reported = np.inf
+    objective.total_weight = 1.0
+    objective.evaluations = 0
+    objective._penalty = None
+
+    value, gradient = objective(np.array([1.0]))
+
+    assert pool.sent == [("value", 1.0)], "the point is sent before the parent's own share"
+    assert order == ["parent"], "the parent evaluated rather than waited"
+    assert value == pytest.approx(1.0), "the parent's share plus the workers'"
+    np.testing.assert_allclose(gradient, [4.0])
+    assert pool.pending == 0 and pool.discarded == 0
+
+    with pytest.raises(ArithmeticError, match="own share failed"):
+        objective(np.array([-1.0]))
+    assert pool.pending == 0, "an uncollected answer would be read at the next point"
+    assert pool.discarded == 1
