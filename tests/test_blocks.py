@@ -884,3 +884,40 @@ def test_a_polish_the_floor_stalled_is_not_offered_to_another_optimiser() -> Non
     assert warm.against_the_floor, "9 of 11 refusals are the floor's"
 
     assert issubclass(Pinned, exceptions.ConvergenceError)
+
+
+def test_a_worker_that_dies_ends_the_fit_instead_of_blocking_it() -> None:
+    """The parent used to wait for an answer that was never coming.
+
+    `_collect`'s `get` had no timeout, so a worker killed by the memory pressure this engine
+    exists to manage left the parent blocked for ever, with nothing in the log after the last
+    evaluation. There is no honest fixed deadline -- one logged fit spent 457 minutes on four
+    evaluations -- so the wait polls and looks at whether the processes that owe answers are
+    still alive. A missing answer from a live worker is patience; a missing answer from a
+    process that has exited is the end of the fit, because its share of the rows is gone and a
+    sum over the parts that remain is a different likelihood.
+    """
+    import queue
+    from types import SimpleNamespace
+
+    from creditsurv.models.blocks import _Workers
+
+    pool = cast("Any", object.__new__(_Workers))
+    pool._results = queue.Queue()
+    pool._processes = [SimpleNamespace(exitcode=None), SimpleNamespace(exitcode=None)]
+
+    # Both alive and both answered: the parts come back in their own order, not in arrival
+    # order, which is what keeps a pooled fit reproducible bit for bit.
+    pool._results.put((2, "second"))
+    pool._results.put((1, "first"))
+    assert pool._collect() == ["first", "second"]
+
+    # One alive, one exited, and the answer owed by the dead one never arrives.
+    pool._processes = [SimpleNamespace(exitcode=None), SimpleNamespace(exitcode=-9)]
+    pool._results.put((1, "first"))
+    with (
+        pytest.raises(RuntimeError, match="stopped before answering"),
+        pytest.MonkeyPatch.context() as patch,
+    ):
+        patch.setattr("creditsurv.models.blocks._WORKER_POLL_SECONDS", 0.05)
+        pool._collect()

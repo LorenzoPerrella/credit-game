@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
+import queue
 import time
 import warnings
 from collections import deque
@@ -542,187 +543,202 @@ def fit_interval_censoring_in_blocks(
     source = cast("Callable[[int, int], Iterable[pd.DataFrame]]", blocks)
     setup = _Setup(type(fitter), fitter.penalizer, formula, ancillary, names)
     pool = _Workers(setup, source, workers) if workers > 1 else None
-    scan = _scan(
-        fitter,
-        source(0, workers) if callable(blocks) else blocks,
-        seed=_seed_regressors(fitter, formula, ancillary),
-        names=names,
-    )
-    if pool is not None:
-        _combine(scan, pool.summaries())
-    if scan.rows < 2 or scan.columns is None:
-        message = "A fit needs at least two rows."
-        raise ValueError(message)
-    columns = scan.columns
+    # **The pool is closed on every path out of here, not only on the one that works.**
+    # `close()` used to sit just before `_store`, after every `raise` in the body: a fit
+    # refused by the domain check, by `_check_interior`, by the polish or by the method
+    # chain left `workers - 1` processes alive, each parked in `commands.get()` still
+    # holding its share of the stored blocks -- and `procedure._estimate` then started a
+    # cold retry beside them. They are daemons, so they die with the parent; a selection
+    # makes twenty-odd fits before the parent exits.
+    try:
+        scan = _scan(
+            fitter,
+            source(0, workers) if callable(blocks) else blocks,
+            seed=_seed_regressors(fitter, formula, ancillary),
+            names=names,
+        )
+        if pool is not None:
+            _combine(scan, pool.summaries())
+        if scan.rows < 2 or scan.columns is None:
+            message = "A fit needs at least two rows."
+            raise ValueError(message)
+        columns = scan.columns
 
-    raw = _standard_deviation(scan)
-    raw_std = pd.Series(raw, index=columns)
-    fitter.regressors = scan.regressors
-    fitter._n_examples = scan.rows
-    fitter._cols_to_not_penalize = fitter._find_cols_to_not_penalize(raw_std)
-    norm_std = raw_std.copy()
-    norm_std[norm_std < _CONSTANT] = 1.0
-    fitter._norm_std = norm_std
+        raw = _standard_deviation(scan)
+        raw_std = pd.Series(raw, index=columns)
+        fitter.regressors = scan.regressors
+        fitter._n_examples = scan.rows
+        fitter._cols_to_not_penalize = fitter._find_cols_to_not_penalize(raw_std)
+        norm_std = raw_std.copy()
+        norm_std[norm_std < _CONSTANT] = 1.0
+        fitter._norm_std = norm_std
 
-    bounds = pd.concat(scan.bounds).groupby(level=[0, 1, 2]).sum().reset_index()
-    fitter.timeline = np.unique(bounds["lower"].to_numpy(dtype=float))
+        bounds = pd.concat(scan.bounds).groupby(level=[0, 1, 2]).sum().reset_index()
+        fitter.timeline = np.unique(bounds["lower"].to_numpy(dtype=float))
 
-    seeded = _initial_point(fitter, columns, raw, bounds)
-    fitter._initial_point_dicts = [seeded]
-    start, unflatten = flatten(seeded)
-    if isinstance(initial_point, pd.Series):
-        start = flatten(_warm_start(seeded, columns, norm_std, initial_point))[0]
-    elif isinstance(initial_point, dict):
-        start = flatten(initial_point)[0]
-    elif initial_point is not None:
-        start = np.asarray(initial_point, dtype=float)
-    if start.shape[0] != columns.size:
-        message = "initial_point is not the correct shape."
-        raise ValueError(message)
+        seeded = _initial_point(fitter, columns, raw, bounds)
+        fitter._initial_point_dicts = [seeded]
+        start, unflatten = flatten(seeded)
+        if isinstance(initial_point, pd.Series):
+            start = flatten(_warm_start(seeded, columns, norm_std, initial_point))[0]
+        elif isinstance(initial_point, dict):
+            start = flatten(initial_point)[0]
+        elif initial_point is not None:
+            start = np.asarray(initial_point, dtype=float)
+        if start.shape[0] != columns.size:
+            message = "initial_point is not the correct shape."
+            raise ValueError(message)
 
-    likelihood = fitter._log_likelihood_interval_censoring
-    fitter._neg_likelihood_with_penalty_function = partial(
-        fitter._create_neg_likelihood_with_penalty_function,
-        likelihood=likelihood,
-        penalty=fitter._add_penalty,
-    )
-    fitter._neg_likelihood = partial(
-        fitter._create_neg_likelihood_with_penalty_function, likelihood=likelihood
-    )
-    total_weight = float(scan.weight)
-    local = _Objective(
-        fitter,
-        scan.blocks,
-        columns,
-        norm_std.to_numpy(),
-        unflatten,
-        total_weight=total_weight,
-        with_penalty=pool is None,
-        floor=floor,
-        pooled=pool is not None,
-    )
-    objective: _Evaluator = local
-    if pool is not None:
-        pool.prepare(columns, norm_std.to_numpy(), total_weight, seeded)
-        objective = _Pooled(fitter, local, pool, unflatten, floor=floor)
+        likelihood = fitter._log_likelihood_interval_censoring
+        fitter._neg_likelihood_with_penalty_function = partial(
+            fitter._create_neg_likelihood_with_penalty_function,
+            likelihood=likelihood,
+            penalty=fitter._add_penalty,
+        )
+        fitter._neg_likelihood = partial(
+            fitter._create_neg_likelihood_with_penalty_function, likelihood=likelihood
+        )
+        total_weight = float(scan.weight)
+        local = _Objective(
+            fitter,
+            scan.blocks,
+            columns,
+            norm_std.to_numpy(),
+            unflatten,
+            total_weight=total_weight,
+            with_penalty=pool is None,
+            floor=floor,
+            pooled=pool is not None,
+        )
+        objective: _Evaluator = local
+        if pool is not None:
+            pool.prepare(columns, norm_std.to_numpy(), total_weight, seeded)
+            objective = _Pooled(fitter, local, pool, unflatten, floor=floor)
 
-    # From a warm start Newton goes straight to the optimum. SLSQP would rebuild its
-    # curvature estimate from nothing and take as many evaluations as from a cold start:
-    # 27 against 27 on the test fixture.
-    solution = (
-        _newton_from(objective, start) if polish and isinstance(initial_point, pd.Series) else None
-    )
-    if solution is None:
-        limits = _limits(columns, fitter._primary_parameter_name)
-        attempts: list[OptimizeResult] = []
-        for method in _methods(fitter._scipy_fit_method, prefer):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                results = minimize(
-                    objective,
-                    start,
-                    method=method,
-                    jac=True,
-                    bounds=limits,
-                    options={
-                        "disp": show_progress,
-                        **(fitter._scipy_fit_options if method == fitter._scipy_fit_method else {}),
-                        **(fit_options or {}),
-                    },
-                    callback=fitter._scipy_fit_callback,
-                )
-            attempts.append(results)
-            if show_progress:
-                # lifelines prints the optimiser's result under the same flag.
-                print(results)
-            # **The polish decides whether a method worked, not the method's own flag.** Two
-            # cases the flag gets wrong, both met on the production table. lifelines caps SLSQP
-            # at 200 iterations, and a fit that reaches the cap comes back `success=False`
-            # although it is *at* the answer -- this one had been stable to nine significant
-            # figures for twenty evaluations. And trust-constr came back `success=True` at a
-            # point whose next evaluation read -8.97e+69. What settles it is the distance to
-            # the optimum, which only the polish measures.
-            if not _possible(float(results.fun)):
-                # **A statement about the surface, not about the method.** Ending outside the
-                # likelihood means the optimiser found nothing better than the wall: the
-                # specification has the spurious minimum lifelines' unclipped truncation term
-                # creates, and every other method finds it too -- measured six times out of six
-                # on the prepayment model, warm and cold, with both bounds in place. Trying the
-                # rest costs hours and tells us what we already know, so this stops here and the
-                # caller decides (step 8 keeps the covariate: rule 11 of docs/rules.md).
+        # From a warm start Newton goes straight to the optimum. SLSQP would rebuild its
+        # curvature estimate from nothing and take as many evaluations as from a cold start:
+        # 27 against 27 on the test fixture.
+        solution = (
+            _newton_from(objective, start)
+            if polish and isinstance(initial_point, pd.Series)
+            else None
+        )
+        if solution is None:
+            limits = _limits(columns, fitter._primary_parameter_name)
+            attempts: list[OptimizeResult] = []
+            for method in _methods(fitter._scipy_fit_method, prefer):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    results = minimize(
+                        objective,
+                        start,
+                        method=method,
+                        jac=True,
+                        bounds=limits,
+                        options={
+                            "disp": show_progress,
+                            **(
+                                fitter._scipy_fit_options
+                                if method == fitter._scipy_fit_method
+                                else {}
+                            ),
+                            **(fit_options or {}),
+                        },
+                        callback=fitter._scipy_fit_callback,
+                    )
+                attempts.append(results)
+                if show_progress:
+                    # lifelines prints the optimiser's result under the same flag.
+                    print(results)
+                # **The polish decides whether a method worked, not the method's own flag.** Two
+                # cases the flag gets wrong, both met on the production table. lifelines caps SLSQP
+                # at 200 iterations, and a fit that reaches the cap comes back `success=False`
+                # although it is *at* the answer -- this one had been stable to nine significant
+                # figures for twenty evaluations. And trust-constr came back `success=True` at a
+                # point whose next evaluation read -8.97e+69. What settles it is the distance to
+                # the optimum, which only the polish measures.
+                if not _possible(float(results.fun)):
+                    # **A statement about the surface, not about the method.** Ending outside the
+                    # likelihood means the optimiser found nothing better than the wall: the
+                    # specification has the spurious minimum lifelines' unclipped truncation term
+                    # creates, and every other method finds it too -- measured six times out of six
+                    # on the prepayment model, warm and cold, with both bounds in place. Trying the
+                    # rest costs hours and tells us what we already know, so this stops here and the
+                    # caller decides (step 8 keeps the covariate: rule 11 of docs/rules.md).
+                    message = (
+                        f"{method} ended outside the likelihood ({results.message}) after "
+                        f"{objective.evaluations} evaluations of {scan.rows:,} rows. The objective "
+                        "is unbounded below on this specification -- lifelines clips the interval "
+                        "probability and adds the truncation term unclipped -- so no optimiser can "
+                        "maximise it and another method would find the same region."
+                    )
+                    raise exceptions.ConvergenceError(message)
+                try:
+                    _check_interior(results.x, limits)
+                    solution = _from_optimiser(objective, results, polish=polish)
+                except Pinned:
+                    # The floor stops every optimiser in the same place: see Pinned.
+                    raise
+                except exceptions.ConvergenceError as error:
+                    log.warning("%s could not be polished (%s); trying the next", method, error)
+                    continue
+                if not results.success:
+                    log.info(
+                        "%s stopped short (%s) and the polish finished it", method, results.message
+                    )
+                method_used = method
+                break
+            else:
+                reports = "\n\n".join(f"minimum_results={attempt}" for attempt in attempts)
                 message = (
-                    f"{method} ended outside the likelihood ({results.message}) after "
-                    f"{objective.evaluations} evaluations of {scan.rows:,} rows. The objective "
-                    "is unbounded below on this specification -- lifelines clips the interval "
-                    "probability and adds the truncation term unclipped -- so no optimiser can "
-                    "maximise it and another method would find the same region."
+                    f"Fitting did not converge after {objective.evaluations} evaluations of "
+                    f"{scan.rows:,} rows in {len(scan.blocks)} blocks, under "
+                    f"{len(attempts)} method(s).\n\n{reports}"
                 )
                 raise exceptions.ConvergenceError(message)
-            try:
-                _check_interior(results.x, limits)
-                solution = _from_optimiser(objective, results, polish=polish)
-            except Pinned:
-                # The floor stops every optimiser in the same place: see Pinned.
-                raise
-            except exceptions.ConvergenceError as error:
-                log.warning("%s could not be polished (%s); trying the next", method, error)
-                continue
-            if not results.success:
-                log.info(
-                    "%s stopped short (%s) and the polish finished it", method, results.message
-                )
-            method_used = method
-            break
+            if method_used != fitter._scipy_fit_method:
+                log.info("optimised with %s where %s failed", method_used, fitter._scipy_fit_method)
+            method = str(method_used).lower()
         else:
-            reports = "\n\n".join(f"minimum_results={attempt}" for attempt in attempts)
+            method = "newton"
+
+        x, value, curvature, steps, stopped, remaining = solution
+        if polish and remaining > POLISH_TOLERANCE_SE:
             message = (
-                f"Fitting did not converge after {objective.evaluations} evaluations of "
-                f"{scan.rows:,} rows in {len(scan.blocks)} blocks, under "
-                f"{len(attempts)} method(s).\n\n{reports}"
+                f"The fit ended {remaining:.3g} standard errors from the optimum, past the "
+                f"{POLISH_TOLERANCE_SE:g} this engine promises."
             )
             raise exceptions.ConvergenceError(message)
-        if method_used != fitter._scipy_fit_method:
-            log.info("optimised with %s where %s failed", method_used, fitter._scipy_fit_method)
-        method = str(method_used).lower()
-    else:
-        method = "newton"
-
-    x, value, curvature, steps, stopped, remaining = solution
-    if polish and remaining > POLISH_TOLERANCE_SE:
-        message = (
-            f"The fit ended {remaining:.3g} standard errors from the optimum, past the "
-            f"{POLISH_TOLERANCE_SE:g} this engine promises."
+        if not _possible(value):
+            message = (
+                f"The fit ended at an objective of {value:.6g}, which no likelihood can take: the "
+                "optimiser left the region where lifelines computes the likelihood exactly."
+            )
+            raise exceptions.ConvergenceError(message)
+        log.info(
+            "%s: Newton steps began %.3g standard errors from the optimum; %d left %.3g",
+            method,
+            stopped,
+            steps,
+            remaining,
         )
-        raise exceptions.ConvergenceError(message)
-    if not _possible(value):
-        message = (
-            f"The fit ended at an objective of {value:.6g}, which no likelihood can take: the "
-            "optimiser left the region where lifelines computes the likelihood exactly."
+        _store(fitter, columns, x, value, curvature, objective, unflatten)
+        return BlockFit(
+            rows=scan.rows,
+            blocks=len(scan.blocks) + scan.other_blocks,
+            loan_months=objective.total_weight,
+            events=scan.events,
+            stored_bytes=sum(block.nbytes for block in scan.blocks) + scan.other_bytes,
+            evaluations=objective.evaluations,
+            seconds=time.perf_counter() - started,
+            method=method,
+            stopping_error_se=stopped,
+            polish_steps=steps,
+            residual_error_se=remaining,
         )
-        raise exceptions.ConvergenceError(message)
-    log.info(
-        "%s: Newton steps began %.3g standard errors from the optimum; %d left %.3g",
-        method,
-        stopped,
-        steps,
-        remaining,
-    )
-    if pool is not None:
-        pool.close()
-    _store(fitter, columns, x, value, curvature, objective, unflatten)
-    return BlockFit(
-        rows=scan.rows,
-        blocks=len(scan.blocks) + scan.other_blocks,
-        loan_months=objective.total_weight,
-        events=scan.events,
-        stored_bytes=sum(block.nbytes for block in scan.blocks) + scan.other_bytes,
-        evaluations=objective.evaluations,
-        seconds=time.perf_counter() - started,
-        method=method,
-        stopping_error_se=stopped,
-        polish_steps=steps,
-        residual_error_se=remaining,
-    )
+    finally:
+        if pool is not None:
+            pool.close()
 
 
 def _seed_regressors(
@@ -1123,6 +1139,12 @@ def _serve(
             results.put((part, objective.hessian(payload)))
 
 
+#: How long the parent waits for an answer before it looks at whether the workers are alive.
+#: Not a deadline on the answer: an evaluation of the training half is minutes, and the
+#: first collection waits for every worker's whole scan.
+_WORKER_POLL_SECONDS: Final = 30.0
+
+
 class _Workers:
     """The worker processes, each holding its own share of the rows for the whole fit."""
 
@@ -1176,8 +1198,37 @@ class _Workers:
         for eighty evaluations, then diverged at 0.065288491918 against 0.065288491919 and were
         five significant figures apart forty evaluations later. A fit of one specification on one
         cell file has to give one answer, so the answers are added in the parts' own order.
+
+        **A worker that dies is a fit that cannot be completed, not a fit that waits.** The
+        `get` here had no timeout, so a worker killed by the memory pressure this engine exists
+        to manage left the parent blocked for ever, with nothing in the log after the last
+        evaluation. There is no honest fixed deadline -- a first scan is minutes and one logged
+        fit spent 457 of them on four evaluations -- so the wait polls instead, and only an
+        answer that is missing *while the process that owed it has exited* ends the fit. Its
+        share of the rows is gone, so a sum without it would be a different estimator.
         """
-        answers = dict(cast("list[Tagged]", [self._results.get() for _ in self._processes]))
+        answers: dict[int, Answer] = {}
+        while len(answers) < len(self._processes):
+            try:
+                part, answer = self._results.get(timeout=_WORKER_POLL_SECONDS)
+            except queue.Empty:
+                gone = [
+                    (number, process.exitcode)
+                    for number, process in enumerate(self._processes, start=1)
+                    if process.exitcode is not None
+                ]
+                if not gone:
+                    continue
+                reported = ", ".join(f"part {number} exited {code}" for number, code in gone)
+                message = (
+                    f"{len(gone)} of {len(self._processes)} worker process(es) stopped before "
+                    f"answering ({reported}). Their share of the rows is gone, so the fit "
+                    "cannot be finished: a sum over the parts that remain is a different "
+                    "likelihood. A worker killed with no traceback of its own is usually out "
+                    "of memory -- lower --workers or --block-rows."
+                )
+                raise RuntimeError(message) from None
+            answers[part] = answer
         return [answers[part] for part in sorted(answers)]
 
     def value_and_gradient(self, x: np.ndarray) -> list[tuple[float, np.ndarray]]:
