@@ -182,7 +182,10 @@ def decile_boundaries(
     total = cumulative[-1]
     wanted = [total * (index + 1) / buckets for index in range(buckets - 1)]
     positions = np.searchsorted(cumulative, wanted)
-    return np.exp(edges[1:][np.minimum(positions, bins - 1)])
+    # Annotated for the same reason as `nonparametric.aalen_johansen_variance`: numpy's stubs
+    # type this Any on the version Python 3.11 resolves to.
+    boundaries: np.ndarray = np.exp(edges[1:][np.minimum(positions, bins - 1)])
+    return boundaries
 
 
 def deciles_of(hazard: np.ndarray, boundaries: np.ndarray) -> np.ndarray:

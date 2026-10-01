@@ -444,4 +444,8 @@ def _incidence_error(
         + np.cumsum(second)
         - 2.0 * (incidence * np.cumsum(third) - np.cumsum(third * incidence))
     )
-    return np.sqrt(np.clip(squared, 0.0, None))
+    # The annotation rather than the inference: numpy's stubs type this as Any under the
+    # version resolved for Python 3.11, and mypy strict refuses to return Any from a declared
+    # ndarray. The value is an ndarray on both.
+    deviation: np.ndarray = np.sqrt(np.clip(squared, 0.0, None))
+    return deviation
