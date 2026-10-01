@@ -122,15 +122,24 @@ class _Jet:
     dee: np.ndarray | float = _ZERO
     der: np.ndarray | float = _ZERO
     drr: np.ndarray | float = _ZERO
+    #: Whether the second derivatives are wanted at all. An optimiser evaluation asks for a
+    #: value and a gradient and nothing else, and the second-order components are **six of the
+    #: eleven multiplications** a chain rule performs and nine of the fourteen a product does:
+    #: measured, carrying them through a gradient-only evaluation costs 420 ns a row against
+    #: 211. Seeded once by `row_likelihood` and carried by every operation, so a jet that was
+    #: never asked for curvature cannot acquire it half way through.
+    curved: bool = True
 
     def __add__(self, other: _Jet) -> _Jet:
+        curved = self.curved and other.curved
         return _Jet(
             _plus(self.v, other.v),
             _plus(self.de, other.de),
             _plus(self.dr, other.dr),
-            _plus(self.dee, other.dee),
-            _plus(self.der, other.der),
-            _plus(self.drr, other.drr),
+            _plus(self.dee, other.dee) if curved else _ZERO,
+            _plus(self.der, other.der) if curved else _ZERO,
+            _plus(self.drr, other.drr) if curved else _ZERO,
+            curved,
         )
 
     def __sub__(self, other: _Jet) -> _Jet:
@@ -144,9 +153,16 @@ class _Jet:
             _negate(self.dee),
             _negate(self.der),
             _negate(self.drr),
+            self.curved,
         )
 
     def __mul__(self, other: _Jet) -> _Jet:
+        curved = self.curved and other.curved
+        value = _times(self.v, other.v)
+        de = _plus(_times(self.de, other.v), _times(self.v, other.de))
+        dr = _plus(_times(self.dr, other.v), _times(self.v, other.dr))
+        if not curved:
+            return _Jet(value, de, dr, _ZERO, _ZERO, _ZERO, False)
         dee = _plus(
             _plus(_times(self.dee, other.v), _times(self.v, other.dee)),
             _times(2.0, _times(self.de, other.de)),
@@ -159,14 +175,7 @@ class _Jet:
             _plus(_times(self.drr, other.v), _times(self.v, other.drr)),
             _times(2.0, _times(self.dr, other.dr)),
         )
-        return _Jet(
-            _times(self.v, other.v),
-            _plus(_times(self.de, other.v), _times(self.v, other.de)),
-            _plus(_times(self.dr, other.v), _times(self.v, other.dr)),
-            dee,
-            der,
-            drr,
-        )
+        return _Jet(value, de, dr, dee, der, drr, True)
 
     def chain(
         self,
@@ -183,13 +192,18 @@ class _Jet:
         `nan`, where autograd's own association gives zero. The test that found it compares a
         Hessian at eta = -500 with the shape on its bound.
         """
+        de = _times(first, self.de)
+        dr = _times(first, self.dr)
+        if not self.curved:
+            return _Jet(value, de, dr, _ZERO, _ZERO, _ZERO, False)
         return _Jet(
             value,
-            _times(first, self.de),
-            _times(first, self.dr),
+            de,
+            dr,
             _plus(_times(first, self.dee), _times(_times(second, self.de), self.de)),
             _plus(_times(first, self.der), _times(_times(second, self.de), self.dr)),
             _plus(_times(first, self.drr), _times(_times(second, self.dr), self.dr)),
+            True,
         )
 
     def scaled(self, by: np.ndarray | float) -> _Jet:
@@ -201,6 +215,7 @@ class _Jet:
             _times(self.dee, by),
             _times(self.der, by),
             _times(self.drr, by),
+            self.curved,
         )
 
 
@@ -311,6 +326,7 @@ def row_likelihood(
     truncated: np.ndarray,
     eta: np.ndarray,
     shape: float,
+    curvature: bool = True,
 ) -> _Jet:
     """One row's log-likelihood and its derivatives in ``eta`` and the shape's coefficient.
 
@@ -333,8 +349,8 @@ def row_likelihood(
         )
         raise ValueError(message)
     family = _FAMILIES[distribution]
-    scale = _Jet(eta, de=1.0)
-    coefficient = _Jet(shape, dr=1.0)
+    scale = _Jet(eta, de=1.0, curved=curvature)
+    coefficient = _Jet(shape, dr=1.0, curved=curvature)
 
     entry, _ = family(log_entry, scale, coefficient)
     _, opened = family(log_start, scale, coefficient)
@@ -366,8 +382,16 @@ class Rows:
 
     @property
     def nbytes(self) -> int:
-        """What the rows cost. The two tables are shared by every block and counted once."""
-        return int(self.i.nbytes + self.j.nbytes + self.age.nbytes + self.event.nbytes)
+        """What the rows cost: fifteen bytes each, and the two tables counted once elsewhere.
+
+        Four for each index, two for the age, one for the exit and four for the weight -- which
+        is a count of loan-months and an integer, never an amount. The expanded design the
+        present engine hands the likelihood is 208 bytes a row at 26 columns, and the whole
+        training half fits here in 0.8 GB.
+        """
+        return int(
+            self.i.nbytes + self.j.nbytes + self.age.nbytes + self.event.nbytes + self.weight.nbytes
+        )
 
 
 def _stable_codes(frame: pd.DataFrame, names: Sequence[str]) -> np.ndarray:
@@ -392,6 +416,29 @@ def _stable_codes(frame: pd.DataFrame, names: Sequence[str]) -> np.ndarray:
             raise ValueError(message)
         columns.append(values.to_numpy(dtype=float))
     return np.column_stack(columns) if columns else np.zeros((len(frame), 1))
+
+
+def _counts(weight: np.ndarray) -> np.ndarray:
+    """The weight as the count of loan-months it is, in four bytes rather than eight.
+
+    `aft._check_weights` already refuses a weight that is not a positive whole number, because
+    lifelines' variance estimates treat it as a replication count and Basel defines the
+    probability per obligor rather than per dollar. So it is an integer, and storing it as one
+    takes four bytes off every row of the training half -- 212 MB.
+    """
+    rounded = np.rint(weight)
+    if (
+        not np.array_equal(rounded, weight)
+        or rounded.min() < 1
+        or rounded.max() > np.iinfo(np.uint32).max
+    ):
+        message = (
+            "The weight is not a count of loan-months that fits in four bytes. Grouped "
+            "estimation expects frequency weights: whole numbers, at least one, and the "
+            "largest cell of the production table holds far fewer than four billion."
+        )
+        raise ValueError(message)
+    return rounded.astype(np.uint32)
 
 
 def _a_function_of(design: np.ndarray, codes: np.ndarray, size: int) -> np.ndarray:
@@ -454,13 +501,12 @@ class Factorisation:
         self._grow(self._loan_rows, design[:, self._loan_positions], i)
         self._grow(self._calendar_rows, design[:, self._calendar_positions], j)
         self._verify(design, i, j)
-        age = frame[self._age_column].to_numpy()
         return Rows(
             i=i.astype(np.uint32),
             j=j.astype(np.uint32),
-            age=age.astype(np.int32),
+            age=frame[self._age_column].to_numpy().astype(np.uint16),
             event=np.asarray(event, dtype=bool),
-            weight=np.asarray(weight, dtype=np.float64),
+            weight=_counts(np.asarray(weight)),
         )
 
     def tables(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -565,3 +611,152 @@ class _Growing:
 
     def __len__(self) -> int:
         return self._rows
+
+
+@dataclass(frozen=True)
+class _Totals:
+    """The objective, its gradient, and its curvature where one was asked for."""
+
+    value: float
+    gradient: np.ndarray
+    curvature: np.ndarray | None
+
+
+#: The oldest loan age the log-time tables cover. `panel.MAX_AGE_MONTHS` is 360 and the
+#: production table reaches 326; a few more costs three floats.
+_MAX_AGE: Final = 400
+
+
+@dataclass(frozen=True)
+class Kernel:
+    """The objective over every row, as a sum over two small tables.
+
+    ``loan`` and ``calendar`` are the design's two sides, **already divided by lifelines'
+    column standard deviations**, so this works in the same scaled space the optimiser does.
+    ``loan_index``, ``calendar_index`` and ``shape_index`` say where each side's coefficients
+    sit in the parameter vector, so what comes back is a gradient and a curvature in the
+    order lifelines reads them.
+
+    What it computes is lifelines' own objective: the **mean negative** log-likelihood over
+    every loan-month, weights counted as the replications they are. The penalty is not here;
+    it is a function of the parameters alone and the caller adds it once.
+
+    The work per row is two table lookups, three cumulative hazards and two survivals, and the
+    gradient and the curvature cost two scatter-adds and a handful of small matrix products on
+    top -- so a Hessian is about three times a gradient rather than the 5.8 autograd charges,
+    and neither grows with the number of parameters.
+    """
+
+    distribution: str
+    loan: np.ndarray
+    calendar: np.ndarray
+    loan_index: np.ndarray
+    calendar_index: np.ndarray
+    shape_index: int
+    blocks: tuple[Rows, ...]
+    total_weight: float
+    #: Rows evaluated at a time, and the measurement rather than a guess: swept from 2,048 to
+    #: 1,048,576 on five million rows, a value-and-gradient runs 289, 347, 241, **212**, 217
+    #: and 265 ns a row, so the curve is shallow and 131,072 is the floor of it. Small chunks
+    #: pay numpy's per-call overhead and large ones leave cache; neither effect is worth more
+    #: than about 30%. What the chunking is really for is a working set that does not grow
+    #: with the table, and boundaries fixed by the block's length -- which is what keeps the
+    #: summation order, and so the answer, identical on every run.
+    chunk: int = 1 << 17
+
+    def __call__(self, x: np.ndarray, *, curvature: bool = False) -> _Totals:
+        """The value, the gradient, and the curvature when it is asked for."""
+        entry, following, far = log_times(self.distribution, np.arange(_MAX_AGE + 1))
+        loans, calendars = len(self.loan), len(self.calendar)
+        total = 0.0
+        by_loan = np.zeros(loans)
+        by_calendar = np.zeros(calendars)
+        shape_first = 0.0
+        curved_loan = np.zeros(loans) if curvature else None
+        curved_calendar = np.zeros(calendars) if curvature else None
+        crossed = np.zeros((loans, self.calendar.shape[1])) if curvature else None
+        mixed_loan = np.zeros(loans) if curvature else None
+        mixed_calendar = np.zeros(calendars) if curvature else None
+        shape_second = 0.0
+
+        eta_loan = self.loan @ x[self.loan_index]
+        eta_calendar = self.calendar @ x[self.calendar_index]
+        shape = float(x[self.shape_index])
+
+        for block in self.blocks:
+            for start in range(0, block.rows, self.chunk):
+                stop = start + self.chunk
+                i = block.i[start:stop].astype(np.intp)
+                j = block.j[start:stop].astype(np.intp)
+                age = block.age[start:stop].astype(np.intp)
+                weight = block.weight[start:stop].astype(np.float64)
+                event = block.event[start:stop]
+                jet = row_likelihood(
+                    self.distribution,
+                    log_entry=entry[age],
+                    log_start=np.where(event, entry[age], following[age]),
+                    log_stop=np.where(event, following[age], far),
+                    truncated=(age > 0).astype(np.float64),
+                    eta=eta_loan[i] + eta_calendar[j],
+                    shape=shape,
+                    curvature=curvature,
+                )
+                total += float(np.dot(weight, np.asarray(jet.v)))
+                scaled = weight * np.asarray(jet.de)
+                by_loan += np.bincount(i, weights=scaled, minlength=loans)
+                by_calendar += np.bincount(j, weights=scaled, minlength=calendars)
+                shape_first += float(np.dot(weight, np.broadcast_to(jet.dr, weight.shape)))
+                if not curvature:
+                    continue
+                assert curved_loan is not None
+                assert curved_calendar is not None
+                assert crossed is not None
+                assert mixed_loan is not None
+                assert mixed_calendar is not None
+                second = weight * np.asarray(jet.dee)
+                curved_loan += np.bincount(i, weights=second, minlength=loans)
+                curved_calendar += np.bincount(j, weights=second, minlength=calendars)
+                for column in range(self.calendar.shape[1]):
+                    crossed[:, column] += np.bincount(
+                        i, weights=second * self.calendar[j, column], minlength=loans
+                    )
+                mixing = weight * np.broadcast_to(jet.der, weight.shape)
+                mixed_loan += np.bincount(i, weights=mixing, minlength=loans)
+                mixed_calendar += np.bincount(j, weights=mixing, minlength=calendars)
+                shape_second += float(np.dot(weight, np.broadcast_to(jet.drr, weight.shape)))
+
+        value = -float(total) / self.total_weight
+        gradient = np.zeros(len(x))
+        gradient[self.loan_index] = -(self.loan.T @ by_loan) / self.total_weight
+        gradient[self.calendar_index] = -(self.calendar.T @ by_calendar) / self.total_weight
+        gradient[self.shape_index] = -shape_first / self.total_weight
+        if not curvature:
+            return _Totals(value, gradient, None)
+        assert curved_loan is not None
+        assert curved_calendar is not None
+        assert crossed is not None
+        assert mixed_loan is not None
+        assert mixed_calendar is not None
+        hessian = np.zeros((len(x), len(x)))
+        loan_block = self.loan.T @ (self.loan * curved_loan[:, None])
+        calendar_block = self.calendar.T @ (self.calendar * curved_calendar[:, None])
+        cross = self.loan.T @ crossed
+        hessian[np.ix_(self.loan_index, self.loan_index)] = loan_block
+        hessian[np.ix_(self.calendar_index, self.calendar_index)] = calendar_block
+        hessian[np.ix_(self.loan_index, self.calendar_index)] = cross
+        hessian[np.ix_(self.calendar_index, self.loan_index)] = cross.T
+        hessian[self.loan_index, self.shape_index] = self.loan.T @ mixed_loan
+        hessian[self.shape_index, self.loan_index] = self.loan.T @ mixed_loan
+        hessian[self.calendar_index, self.shape_index] = self.calendar.T @ mixed_calendar
+        hessian[self.shape_index, self.calendar_index] = self.calendar.T @ mixed_calendar
+        hessian[self.shape_index, self.shape_index] = shape_second
+        return _Totals(value, gradient, -hessian / self.total_weight)
+
+    @property
+    def rows(self) -> int:
+        return sum(block.rows for block in self.blocks)
+
+    @property
+    def nbytes(self) -> int:
+        tables = self.loan.nbytes + self.calendar.nbytes
+        return tables + sum(block.nbytes for block in self.blocks)

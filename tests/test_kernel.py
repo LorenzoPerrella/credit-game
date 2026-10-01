@@ -31,6 +31,7 @@ from creditsurv.models.kernel import (
     SURVIVAL_CEILING,
     SURVIVAL_FLOOR,
     Factorisation,
+    Kernel,
     log_times,
     row_likelihood,
 )
@@ -58,7 +59,7 @@ def _weibull(
         return safe_exp(-cumulative(log_time))
 
     interval = anp.clip(survival(log_start) - survival(log_stop), INTERVAL_FLOOR, INTERVAL_CEILING)
-    return (anp.log(interval) + left * cumulative(log_entry))[0]
+    return anp.log(interval) + left * cumulative(log_entry)
 
 
 def _loglogistic(
@@ -85,10 +86,19 @@ def _loglogistic(
         return anp.clip(anp.exp(-cumulative(log_time)), SURVIVAL_FLOOR, SURVIVAL_CEILING)
 
     interval = anp.clip(survival(log_start) - survival(log_stop), INTERVAL_FLOOR, INTERVAL_CEILING)
-    return (anp.log(interval) + left * cumulative(log_entry))[0]
+    return anp.log(interval) + left * cumulative(log_entry)
 
 
 REFERENCE = {"weibull": _weibull, "loglogistic": _loglogistic}
+
+
+def _one_row(reference: Any) -> Any:
+    """The reference on a single row, as a scalar autograd can differentiate."""
+
+    def scalar(params: np.ndarray, *rest: np.ndarray) -> Any:
+        return reference(params, *rest)[0]
+
+    return scalar
 
 
 def _agree(mine: np.ndarray, theirs: np.ndarray, where: str) -> None:
@@ -159,7 +169,7 @@ def _rows(distribution: str) -> list[tuple[int, bool, float, float]]:
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
 @pytest.mark.parametrize("distribution", ["weibull", "loglogistic"])
 def test_the_written_out_likelihood_is_what_autograd_differentiates(distribution: str) -> None:
-    reference = REFERENCE[distribution]
+    reference = _one_row(REFERENCE[distribution])
     gradient = grad(reference)
     curvature = hessian(reference)
 
@@ -488,3 +498,85 @@ def test_plain_text_is_refused_because_its_codes_would_be_this_blocks_own() -> N
             event=frame["outcome"].to_numpy(dtype=bool),
             weight=frame["loan_months"].to_numpy(dtype=float),
         )
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+@pytest.mark.parametrize("distribution", ["weibull", "loglogistic"])
+def test_the_kernel_is_the_objective_autograd_gives_over_the_whole_design(
+    distribution: str,
+) -> None:
+    """The accumulation, end to end, against the design it exists not to build.
+
+    The reference is the objective lifelines optimises -- the mean negative log-likelihood over
+    every loan-month, weights counted as the replications they are -- written over a
+    materialised design and differentiated by autograd in the full parameter space. The kernel
+    gets to the same numbers through two tables, two scatter-adds and three small matrix
+    products, and never holds a design at all.
+
+    The column standard deviations are deliberately not one, because lifelines optimises each
+    coefficient multiplied by its column's and the tables carry that division: a scale of one
+    everywhere would let a missing division pass.
+    """
+    frame = _book(range(0, 5), range(0, 7))
+    design = _design(frame)
+    weight = frame["loan_months"].to_numpy(dtype=float)
+    event = frame["outcome"].to_numpy(dtype=bool)
+
+    factorisation = _factorisation()
+    rows = factorisation.add(frame, design, event=event, weight=weight)
+    loan, calendar, loan_positions, calendar_positions = factorisation.tables()
+
+    # lifelines' design carries the shape's own column -- a constant, whose standard deviation
+    # it sets to one -- after the scale's, and the parameter vector follows that order.
+    shape_position = design.shape[1]
+    deviations = np.array([1.0, 0.4, 17.5, 0.5, 0.06, 2.3, 1.0])
+    kernel = Kernel(
+        distribution=distribution,
+        loan=loan / deviations[loan_positions],
+        calendar=calendar / deviations[calendar_positions],
+        loan_index=loan_positions,
+        calendar_index=calendar_positions,
+        shape_index=shape_position,
+        blocks=(rows,),
+        total_weight=float(weight.sum()),
+    )
+
+    full = np.column_stack([design, np.ones(len(frame))]) / deviations
+    entry, following, far = log_times(distribution, frame["age"].to_numpy())
+    times = (
+        entry,
+        np.where(event, entry, following),
+        np.where(event, following, np.full(len(frame), far)),
+    )
+    truncated = (frame["age"].to_numpy() > 0).astype(float)
+    reference = REFERENCE[distribution]
+
+    def objective(params: np.ndarray) -> Any:
+        eta = full[:, :shape_position] @ params[:shape_position]
+        shape = full[:, shape_position] * params[shape_position]
+        return -anp.sum(weight * reference(anp.array([eta, shape]), *times, truncated)) / float(
+            weight.sum()
+        )
+
+    rng = np.random.default_rng(7)
+    for attempt in range(3):
+        x = np.concatenate([[7.0], rng.standard_normal(shape_position - 1) * 0.3, [0.35]])
+        got = kernel(x, curvature=True)
+        where = f"{distribution} attempt {attempt}"
+
+        assert got.value == pytest.approx(float(objective(x)), rel=1e-12), where
+        np.testing.assert_allclose(
+            got.gradient, np.asarray(grad(objective)(x), dtype=float), rtol=1e-10, err_msg=where
+        )
+        assert got.curvature is not None
+        expected = np.asarray(hessian(objective)(x), dtype=float)
+        scale = max(1.0, float(np.max(np.abs(expected))))
+        np.testing.assert_allclose(
+            got.curvature, expected, rtol=1e-9, atol=1e-10 * scale, err_msg=where
+        )
+
+    # And the gradient alone is the same gradient, with no curvature computed.
+    cheap = kernel(x, curvature=False)
+    assert cheap.curvature is None
+    np.testing.assert_array_equal(cheap.gradient, got.gradient)
+    assert cheap.value == got.value
