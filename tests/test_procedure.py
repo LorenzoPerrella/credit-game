@@ -1070,3 +1070,23 @@ def test_a_pinned_optimiser_is_not_refitted_cold() -> None:
     with pytest.raises(Pinned):
         fits._estimate(spec, where=None, parity=None, start=parent)
     assert attempts == [parent], "being pinned is not a starting point's fault"
+
+
+def test_the_reference_levels_are_one_set_written_twice_and_held_together() -> None:
+    """`config.CATEGORICAL_REFERENCE` is `procedure`'s two blocks merged, and must stay so.
+
+    It cannot be derived: `procedure` imports `config`, so the arrow only goes one way, and the
+    other direction is forbidden on purpose -- the comment above `CANDIDATE_CATEGORICAL` argues
+    that which covariates are *candidates* must not be read back from the configuration, because
+    the configuration is the selection's output and that would be a circle in the argument, not
+    just in the imports.
+
+    So the levels are written twice and this holds them equal. A reference level that drifted
+    would not fail anything else: both spellings produce a valid formula, the coefficients would
+    simply be measured against different baselines in the selection and in the report.
+    """
+    from creditsurv.config import CATEGORICAL_REFERENCE
+    from creditsurv.models.procedure import BASE_CATEGORICAL, CANDIDATE_CATEGORICAL
+
+    assert dict(CATEGORICAL_REFERENCE) == {**BASE_CATEGORICAL, **CANDIDATE_CATEGORICAL}
+    assert not set(BASE_CATEGORICAL) & set(CANDIDATE_CATEGORICAL), "a covariate in both blocks"

@@ -198,8 +198,16 @@ def interim_dir() -> Path:
     return data_dir() / "interim"
 
 
+#: The ingest's own record of which quarters are on disk, and how many rows each holds.
+#:
+#: `views.tables.MANIFEST` is a different register with the same conventional filename -- the
+#: tables committed for the site -- and they are deliberately not one thing: one says what data
+#: exists, the other what has been published from it.
+MANIFEST: Final = "manifest.json"
+
+
 def manifest_path() -> Path:
-    return interim_dir() / "manifest.json"
+    return interim_dir() / MANIFEST
 
 
 def discover_years(directory: Path | None = None) -> list[int]:

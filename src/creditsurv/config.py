@@ -389,13 +389,6 @@ ECONOMIC_DIMENSION: Final[dict[str, str]] = {
     "consumer_sentiment": "confidence",
 }
 
-#: Order in which collinear macro covariates are given up, most expendable first.
-#:
-#: Fixed in advance, the way `nmds` fixes its own scale before running the selection,
-#: because a priority chosen after seeing the VIF table is not a priority -- it is a
-#: preference for whichever answer came out. The principle: keep what is specific to
-#: mortgage credit, give up what is a general business-cycle proxy, and among
-#: equivalents keep the series with the longest clean history.
 #: Macro candidates removed by the selection, each with the rule that removed it.
 #: Recorded here rather than only in the documentation, so the list and the model
 #: cannot drift apart -- and so the omissions read as decisions.
@@ -449,6 +442,13 @@ ELIMINATED: Final[dict[str, str]] = {
     "inflation_change": "1 sd effect +0.0032 on log survival time, under the 0.02 of rule 3",
 }
 
+#: Order in which collinear macro covariates are given up, most expendable first.
+#:
+#: Fixed in advance, the way `nmds` fixes its own scale before running the selection, because a
+#: priority chosen after seeing the VIF table is not a priority -- it is a preference for
+#: whichever answer came out. The principle: keep what is specific to mortgage credit, give up
+#: what is a general business-cycle proxy, and among equivalents keep the series with the longest
+#: clean history.
 MACRO_ELIMINATION_PRIORITY: Final[tuple[str, ...]] = (
     "equity_return",
     "equity_volatility",

@@ -27,6 +27,16 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 import pandas as pd
 
+from creditsurv.data.book import (
+    DEFAULT_DELINQUENCY as _DEFAULT_DELINQUENCY,
+)
+from creditsurv.data.book import (
+    DEFAULT_ZERO_BALANCE as _DEFAULT_ZERO_BALANCE,
+)
+from creditsurv.data.book import (
+    PREPAYMENT_ZERO_BALANCE as _PREPAYMENT_ZERO_BALANCE,
+)
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -117,13 +127,18 @@ _MISSING_SENTINELS: Final[dict[str, float]] = {
     "original_cltv": 999,
 }
 
-#: Zero-balance codes that terminate a loan through credit loss rather than
-#: repayment. 01 is a voluntary payoff and is censoring, not an event.
-DEFAULT_ZERO_BALANCE_CODES: Final[frozenset[str]] = frozenset({"02", "03", "09", "15"})
-PREPAYMENT_ZERO_BALANCE_CODE: Final = "01"
-
-#: Delinquency at which a loan is treated as defaulted: three missed payments.
-DEFAULT_DELINQUENCY_MONTHS: Final = 3
+#: The event definition, from the one place it is argued: `creditsurv.data.book`.
+#:
+#: It was written out again here, and the two copies had already come apart in type -- a
+#: `frozenset` against a tuple, a bare string against a one-element tuple -- while agreeing on
+#: the codes. They cannot disagree now, which matters because they decide what a default is.
+#:
+#: This module's comment used to add that "01 is a voluntary payoff and is censoring, not an
+#: event". That stopped being true when prepayment became a competing risk: 01 is an event of its
+#: own cause, and 16 and 96 are the censoring.
+DEFAULT_ZERO_BALANCE_CODES: Final[frozenset[str]] = frozenset(_DEFAULT_ZERO_BALANCE)
+PREPAYMENT_ZERO_BALANCE_CODE: Final = _PREPAYMENT_ZERO_BALANCE[0]
+DEFAULT_DELINQUENCY_MONTHS: Final = _DEFAULT_DELINQUENCY
 
 _CENSUS_REGIONS: Final[dict[str, tuple[str, ...]]] = {
     "Northeast": ("CT", "ME", "MA", "NH", "NJ", "NY", "PA", "RI", "VT"),

@@ -28,8 +28,6 @@ from typing import Final, TypeAlias
 
 import duckdb
 
-from creditsurv.data.ingest import completed_files
-
 #: What the readers accept: nothing (use the manifest), one path, or many.
 PathSpec: TypeAlias = str | Path | Sequence[str] | None
 
@@ -578,7 +576,14 @@ def connect() -> duckdb.DuckDBPyConnection:
 
 
 def sources(spec: PathSpec, kind: str) -> list[str]:
-    """Turn a caller's argument into a concrete list of parquet paths."""
+    """Turn a caller's argument into a concrete list of parquet paths.
+
+    The manifest is read here rather than imported at the top, because `data.ingest` imports the
+    record layout from `data.freddiemac` and that module needs the event definition from this
+    one. A function-local import is how the rest of this package breaks such a knot.
+    """
+    from creditsurv.data.ingest import completed_files
+
     if spec is None:
         return completed_files(kind)
     if isinstance(spec, str | Path):

@@ -23,15 +23,21 @@ from plotly.subplots import make_subplots
 
 from creditsurv import names
 from creditsurv.backtest.runner import ACCEPTANCE
+from creditsurv.models.nonparametric import EXPOSURE_FLOOR as _EXPOSURE_FLOOR
 from creditsurv.views.segments import SEGMENTS
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
-#: Loan-months a point must rest on to be drawn. At 100,000 a monthly default rate of 10 basis
-#: points has a standard error of 1 basis point; below it a curve draws the noise of a few
-#: hundred loans as if it were a shape.
-EXPOSURE_FLOOR: float = 100_000
+#: Loan-months a point must rest on to be drawn, re-exported so the figures and the number the
+#: site prints come from one place.
+#:
+#: It is the estimator's floor, not the drawing's: `creditsurv.models.nonparametric` sets it
+#: because that is where it is argued -- at 100,000 a monthly default rate of 10 basis points has
+#: a standard error of 1 basis point, and below it a curve draws the noise of a few hundred loans
+#: as if it were a shape. Written here too, it was an int beside a float with the same
+#: justification in both docstrings, and the site publishes this one in running text.
+EXPOSURE_FLOOR: Final[float] = _EXPOSURE_FLOOR
 
 #: The parameter block a covariate acts on, whatever the family calls it.
 SCALE_PARAMETERS: Final = ("lambda_", "alpha_", "mu_")
