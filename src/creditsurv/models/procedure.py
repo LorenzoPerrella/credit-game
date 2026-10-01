@@ -188,6 +188,17 @@ class Fits:
         start: FitResult | None = None,
         parent: Specification | None = None,
     ) -> FitResult:
+        # The floor and the nested check both compare this fit's log-likelihood against the
+        # parent's, which says nothing unless the two saw the same rows: the floor is the
+        # parent's optimum divided by the parent's exposure. Step 9 fits the same
+        # specification on two halves of the book, warm-started from the whole, and a parent
+        # passed there would hand a fit on half the rows a bound computed on all of them.
+        if parent is not None and (where is not None or parity is not None):
+            message = (
+                "A nested parent bounds a fit only on the rows the parent itself saw; "
+                f"{sample!r} is a different sample, so it cannot be given one."
+            )
+            raise ValueError(message)
         described = selection_description(
             identity=self.identity,
             as_of=self.as_of,
@@ -611,10 +622,17 @@ def run_selection(
     for name, reference in kept:
         current = current.plus(name, reference=reference)
     previous = base_fit
+    # Which specification `previous` is a fit *of*. Carried from here to the end of step 10,
+    # because `_floor` and `_check_nested` need it and only step 8 used to say it: the bound
+    # that keeps a nested fit out of lifelines' clipped region was wired into one call site
+    # out of four. It is not always a parent -- on the first pass here `previous` is the fit
+    # of `base`, a model *smaller* than `current` -- and `_floor` returns nothing when the
+    # subset test fails, which is why the honest thing to pass is what it is a fit of.
+    previous_spec = base
     steps: list[dict[str, object]] = []
     unfittable: set[str] = set()
     while True:
-        result = fits.fit(current, start=previous)
+        result = fits.fit(current, start=previous, parent=previous_spec)
         worst = _worst(current, result, alone=alone, signs=signs, skip=unfittable)
         if worst is None:
             break
@@ -647,7 +665,7 @@ def run_selection(
             }
         )
         eliminated[name] = f"step 8: {reason}"
-        current, previous = candidate, fitted
+        current, previous, previous_spec = candidate, fitted, candidate
     elimination = pd.DataFrame(steps, columns=_ELIMINATION_COLUMNS)
 
     # 9. Stability, on two halves of the book.
@@ -656,7 +674,7 @@ def run_selection(
         log.info("step 9: stability on two halves")
         mask = None if isinstance(stability, bool) else stability
         while True:
-            whole = fits.fit(current, start=previous)
+            whole = fits.fit(current, start=previous, parent=previous_spec)
             even = fits.fit(
                 current,
                 sample="even origination years",
@@ -684,8 +702,8 @@ def run_selection(
                 f"beside {partner} ({_number(indexed, partner, 'effect_all'):+.3f}), both "
                 f"{indexed.loc[name, 'dimension']}"
             )
+            previous, previous_spec = whole, current
             current = current.minus(name)
-            previous = whole
     rounds_table = pd.concat(rounds, ignore_index=True) if rounds else pd.DataFrame()
 
     # 10. Materiality. A macro covariate whose effect of one standard deviation on log
@@ -699,7 +717,7 @@ def run_selection(
     log.info("step 10: materiality")
     material: list[dict[str, object]] = []
     while True:
-        result = fits.fit(current, start=previous)
+        result = fits.fit(current, start=previous, parent=previous_spec)
         smallest = _immaterial(current, result, deviations, macro=macro)
         if smallest is None:
             break
@@ -717,8 +735,8 @@ def run_selection(
             f"step 10: 1 sd effect {effect:+.4f} on log survival time, under "
             f"{MATERIALITY_THRESHOLD:g}"
         )
+        previous, previous_spec = result, current
         current = current.minus(name)
-        previous = result
     materiality = pd.DataFrame(material, columns=_MATERIALITY_COLUMNS)
 
     return SelectionRecord(

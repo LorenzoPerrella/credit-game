@@ -1090,3 +1090,108 @@ def test_the_reference_levels_are_one_set_written_twice_and_held_together() -> N
 
     assert dict(CATEGORICAL_REFERENCE) == {**BASE_CATEGORICAL, **CANDIDATE_CATEGORICAL}
     assert not set(BASE_CATEGORICAL) & set(CANDIDATE_CATEGORICAL), "a covariate in both blocks"
+
+
+@pytest.mark.parametrize(
+    ("step", "verdict"),
+    [("step 9", "_not_identified"), ("step 10", "_immaterial")],
+)
+def test_every_nested_fit_of_the_selection_is_bounded_by_its_parent(
+    train: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    step: str,
+    verdict: str,
+) -> None:
+    """The floor reaches a fit only when its call site says which model this one is nested in.
+
+    Step 8 said it and the other three did not. Steps 9 and 10 both refit a strictly nested
+    model warm-started from its parent -- ``current.minus(name)`` from the fit of ``current``
+    -- so either could walk into the region where lifelines' clipped likelihood is unbounded
+    below and be cached as an optimum, which is what ``_floor`` exists to prevent.
+
+    Neither step eliminates anything on twelve hundred loans, so the verdict each one reads is
+    replaced by one that removes a covariate once. What is then checked is the invariant that
+    cannot be read off a call site: whatever a fit was started from, if this specification is
+    strictly inside that one, a parent was named. The two stability halves are the mirror image
+    -- different rows, so no parent can bound them -- and that is checked too.
+    """
+    from creditsurv.models import procedure
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+
+    removals = {"left": 1}
+
+    def unstable(table: pd.DataFrame) -> tuple[str, str] | None:
+        if removals["left"] and len(table) > 1:
+            removals["left"] -= 1
+            names = table["covariate"].astype(str).tolist()
+            return names[0], names[1]
+        return None
+
+    def immaterial(
+        spec: Specification, result: FitResult, deviations: pd.Series, *, macro: list[str]
+    ) -> tuple[str, float] | None:
+        eligible = [name for name in spec.covariates if name in macro]
+        if removals["left"] and len(eligible) > 1:
+            removals["left"] -= 1
+            return eligible[0], 0.001
+        return None
+
+    monkeypatch.setattr(
+        procedure, verdict, unstable if verdict == "_not_identified" else immaterial
+    )
+
+    asked: list[tuple[Specification, Specification | None, str, Specification | None]] = []
+    fitted_on: dict[int, Specification] = {}
+    original = Fits.fit
+
+    def spy(
+        self: Fits,
+        spec: Specification,
+        *,
+        sample: str = "training half",
+        start: FitResult | None = None,
+        parent: Specification | None = None,
+        **rest: object,
+    ) -> FitResult:
+        came_from = None if start is None else fitted_on.get(id(start))
+        result = original(self, spec, sample=sample, start=start, parent=parent, **rest)  # type: ignore[arg-type]
+        fitted_on[id(result)] = spec
+        asked.append((spec, parent, sample, came_from))
+        return result
+
+    monkeypatch.setattr(Fits, "fit", spy)
+    _run(train, identity=f"floor-{verdict}")
+
+    assert not removals["left"], f"{step}: the forced removal never happened"
+    nested = [
+        (spec, parent, sample)
+        for spec, parent, sample, came_from in asked
+        if came_from is not None and set(spec.covariates) < set(came_from.covariates)
+    ]
+    assert nested, f"{step}: no strictly nested model was refitted"
+    for spec, parent, sample in nested:
+        assert parent is not None, f"{sample}: {spec.formula} refitted without its parent"
+        assert set(spec.covariates) <= set(parent.covariates)
+
+    halves = [(parent, sample) for _, parent, sample, _ in asked if "origination years" in sample]
+    assert halves, "the fixture runs the stability step"
+    assert all(parent is None for parent, _ in halves), "a half cannot be bounded by the whole"
+
+
+def test_a_parent_cannot_bound_a_fit_that_sees_other_rows(train: pd.DataFrame) -> None:
+    """The floor is the parent's optimum divided by the parent's exposure, so it bounds only
+    the rows the parent itself saw. Step 9 fits one specification three times -- the whole and
+    two halves of the book -- and a parent passed to a half would hand a fit on half the rows
+    a bound computed on all of them. Refused before anything is fitted.
+    """
+    fits = Fits(train, identity="fixture", as_of="2008-12", moratorium="exclude")
+    parent = Specification(continuous=("credit_score", "ltv_change"))
+    child = Specification(continuous=("credit_score",))
+
+    with pytest.raises(ValueError, match="different sample"):
+        fits.fit(child, sample="even origination years", parity=0, parent=parent)
+    with pytest.raises(ValueError, match="different sample"):
+        fits.fit(child, sample="odd", where=np.zeros(len(train), dtype=bool), parent=parent)
+    assert not fits.record, "nothing may be fitted before the bound is checked"
