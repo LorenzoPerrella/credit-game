@@ -995,3 +995,40 @@ def test_the_parent_evaluates_its_own_share_while_the_workers_evaluate_theirs() 
         objective(np.array([-1.0]))
     assert pool.pending == 0, "an uncollected answer would be read at the next point"
     assert pool.discarded == 1
+
+
+def test_a_filter_that_selects_every_row_is_not_a_copy_of_the_design() -> None:
+    """The common case on this panel, and it was the most expensive one.
+
+    lifelines' interval-censored likelihood filters the design by the event flag and by its
+    complement. The event flag here is `exact_observation`, which `panel.to_interval_censored`
+    sets `False` with no condition -- the reporting interval tells us the month, never the day
+    -- so one filter selects no rows and the other selects all of them. The second was boolean
+    fancy-indexing the whole design into a new Fortran-ordered array, 50 MB on a 242,000-row
+    block of the production table, at every evaluation and again at every Hessian.
+
+    The filtered design with every row *is* the design, so it is the same slicer. Measured, a
+    value-and-gradient on one such block went from 232.9 ms to 166.8.
+    """
+    from creditsurv.models.blocks import _Slicer
+
+    design = np.asfortranarray(np.arange(24, dtype=float).reshape(8, 3))
+    columns = pd.MultiIndex.from_tuples(
+        [("lambda_", "Intercept"), ("lambda_", "credit_score"), ("rho_", "Intercept")]
+    )
+    slicer = _Slicer(design, columns)
+
+    every = np.ones(8, dtype=bool)
+    assert slicer.filter(every) is slicer, "no copy when nothing is excluded"
+    np.testing.assert_array_equal(slicer.filter(every)["lambda_"], slicer["lambda_"])
+
+    none = np.zeros(8, dtype=bool)
+    assert slicer.filter(none).size == 0
+    assert slicer.filter(none)["lambda_"].shape == (0, 2)
+
+    # A real subset is still a copy, and still answered from the cache the second time.
+    some = np.array([True, False] * 4)
+    taken = slicer.filter(some)
+    assert taken.size == 4
+    assert slicer.filter(some) is taken
+    np.testing.assert_array_equal(taken["lambda_"], design[some][:, :2])
