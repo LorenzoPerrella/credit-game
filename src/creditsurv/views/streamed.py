@@ -30,7 +30,8 @@ import numpy as np
 import pandas as pd
 
 from creditsurv.backtest.runner import predicted_hazard
-from creditsurv.data.panel import DEFAULT_CAUSE, WEIGHT
+from creditsurv.config import DEFAULT_CAUSE
+from creditsurv.data.panel import WEIGHT
 from creditsurv.views.calibration import curves_from, exposure_totals, rates_from, risk_sets
 
 if TYPE_CHECKING:

@@ -20,7 +20,8 @@ import pandas as pd
 
 from creditsurv.backtest.metrics import exposure_buckets, weighted_gini
 from creditsurv.backtest.runner import ACCEPTANCE
-from creditsurv.data.panel import DEFAULT_CAUSE, EVENT, LOAN_ID, WEIGHT
+from creditsurv.config import DEFAULT_CAUSE
+from creditsurv.data.panel import EVENT, LOAN_ID, WEIGHT
 from creditsurv.models.aft import coefficient_table
 from creditsurv.models.lifetime_pd import (
     conditional_pd,

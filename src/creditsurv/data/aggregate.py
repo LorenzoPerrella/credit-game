@@ -360,7 +360,7 @@ def _levels_for(spec: CellSpec, quarters: Sequence[str]) -> dict[str, tuple[str,
     causes the aggregation writes, and ``vintage`` from the quarters being aggregated -- which
     are the files on disk, so they are known at the top of the run rather than discovered by it.
     """
-    from creditsurv.data.panel import CENSORED, DEFAULT_CAUSE, PREPAYMENT_CAUSE
+    from creditsurv.config import CENSORED, DEFAULT_CAUSE, PREPAYMENT_CAUSE
 
     levels = {
         name: CATEGORICAL_LEVELS[name] for name in spec.categorical if name in CATEGORICAL_LEVELS

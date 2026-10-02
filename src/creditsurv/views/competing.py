@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 
 from creditsurv.backtest.metrics import grade_backtest, master_scale_passed
-from creditsurv.data.panel import AGE, CAUSES, DEFAULT_CAUSE, WEIGHT, ended_in
+from creditsurv.config import CAUSES, DEFAULT_CAUSE
+from creditsurv.data.panel import AGE, WEIGHT, ended_in
 from creditsurv.models.nonparametric import cumulative_incidence, predicted_incidence_curve
 from creditsurv.views.tables import View
 

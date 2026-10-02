@@ -27,16 +27,8 @@ import pandas as pd
 from lifelines import KaplanMeierFitter
 from scipy.stats import norm
 
-from creditsurv.data.panel import (
-    AGE,
-    CAUSES,
-    DEFAULT_CAUSE,
-    EVENT,
-    WEIGHT,
-    duration_view,
-    ended_in,
-    to_loan_level,
-)
+from creditsurv.config import CAUSES, DEFAULT_CAUSE
+from creditsurv.data.panel import AGE, EVENT, WEIGHT, duration_view, ended_in, to_loan_level
 from creditsurv.models.aft import episode_hazards
 
 if TYPE_CHECKING:

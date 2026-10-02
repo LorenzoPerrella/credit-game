@@ -29,7 +29,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from creditsurv.data.panel import AGE, DEFAULT_CAUSE, WEIGHT, ended_in
+from creditsurv.config import DEFAULT_CAUSE
+from creditsurv.data.panel import AGE, WEIGHT, ended_in
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

@@ -11,12 +11,13 @@ Commands that need a model fit one.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Final, cast
+from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 
 from creditsurv.config import (
     CATEGORICAL_REFERENCE,
+    DEFAULT_CAUSE,
     DISTRIBUTION,
     MACRO_SERIES,
     STATIC_CONTINUOUS,
@@ -25,12 +26,6 @@ from creditsurv.config import (
     default_formula,
     reports_dir,
 )
-
-#: The exit a fit is of unless another is asked for, spelled here rather than imported
-#: from ``creditsurv.data.panel``: that module pulls pandas in, and importing it at the top
-#: of the CLI put **0.85 s on every ``creditsurv --help``**. ``tests/test_smoke.py`` holds the
-#: two to each other.
-DEFAULT_CAUSE: Final = "default"
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -690,12 +685,9 @@ def family(
 
     import pandas as pd
 
+    from creditsurv.config import PREPAYMENT_CAUSE, record_name
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import (
-        PREPAYMENT_CAUSE,
-        WEIGHT,
-        month_ordinal,
-    )
+    from creditsurv.data.panel import WEIGHT, month_ordinal
     from creditsurv.data.store import cells_identity, outcomes_by_age
     from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
     from creditsurv.models.fits import cell_source, selected_fit
@@ -707,7 +699,6 @@ def family(
     )
     from creditsurv.models.selection import PREPAYMENT_SIGNS, signs_against_prior
     from creditsurv.reporting import family as family_report
-    from creditsurv.reporting.selection import record_name
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     macro = load_macro_panel()

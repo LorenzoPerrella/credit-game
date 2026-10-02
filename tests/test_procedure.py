@@ -364,9 +364,9 @@ def test_the_prepayment_macro_block_is_what_its_own_selection_chose() -> None:
         PREPAYMENT_TIME_VARYING_CONTINUOUS,
         STRESSED_COVARIATES,
         TIME_VARYING_CONTINUOUS,
+        record_name,
         reports_dir,
     )
-    from creditsurv.reporting.selection import record_name
 
     path = reports_dir() / f"{record_name(distribution='weibull', cause='prepayment')}.json"
     if not path.exists():
@@ -734,21 +734,16 @@ def test_two_selections_write_two_records(
     """
     from dataclasses import replace as replace_field
 
+    from creditsurv.config import record_name
     from creditsurv.reporting import selection
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     record, _ = _run(train)
     reports = tmp_path / "reports"
 
-    assert selection.record_name(distribution="weibull", cause="default") == "selection"
-    assert (
-        selection.record_name(distribution="loglogistic", cause="default")
-        == "selection_loglogistic"
-    )
-    assert (
-        selection.record_name(distribution="weibull", cause="prepayment")
-        == "selection_weibull_prepayment"
-    )
+    assert record_name(distribution="weibull", cause="default") == "selection"
+    assert record_name(distribution="loglogistic", cause="default") == "selection_loglogistic"
+    assert record_name(distribution="weibull", cause="prepayment") == "selection_weibull_prepayment"
 
     selection.generate(record, reports_dir=reports)
     other = selection.generate(

@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Final
 from lifelines import exceptions
 
 from creditsurv.config import (
+    DEFAULT_CAUSE,
     DISTRIBUTION,
     SELECTION_RECORD,
     default_covariates,
@@ -44,7 +45,6 @@ from creditsurv.config import (
 )
 from creditsurv.data.panel import (
     AGE_START,
-    DEFAULT_CAUSE,
     EXACT_OBSERVATION,
     LOWER_BOUND,
     UPPER_BOUND,

@@ -16,13 +16,7 @@ import pytest
 
 from creditsurv.data.aggregate import build_cells
 from creditsurv.data.ingest import ingest
-from creditsurv.data.panel import (
-    WEIGHT,
-    CellBlocks,
-    cell_blocks,
-    cell_shape,
-    cells_to_episodes,
-)
+from creditsurv.data.panel import WEIGHT, CellBlocks, cell_blocks, cell_shape, cells_to_episodes
 from creditsurv.data.store import save_cells
 from creditsurv.models.aft import fit_aft, fit_streamed
 from fixtures import write_book_archives
@@ -199,7 +193,8 @@ def test_the_same_cells_stream_a_default_model_and_a_prepayment_one(
     and then it was not there for another reason -- which is what makes the two hazards
     separable and what stops a second aggregation from being needed.
     """
-    from creditsurv.data.panel import PREPAYMENT_CAUSE, ended_in
+    from creditsurv.config import PREPAYMENT_CAUSE
+    from creditsurv.data.panel import ended_in
 
     prepaid = fit_streamed(
         CellBlocks(

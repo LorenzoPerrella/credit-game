@@ -38,7 +38,10 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 
-from creditsurv.config import MACRO_LAG_MONTHS
+from creditsurv.config import (
+    DEFAULT_CAUSE,
+    MACRO_LAG_MONTHS,
+)
 from creditsurv.features import MACRO_DERIVED, absorb_not_reported, add_macro_family
 
 if TYPE_CHECKING:
@@ -55,12 +58,12 @@ UPPER_BOUND: Final = "upper_bound"
 EXACT_OBSERVATION: Final = "exact_observation"
 WEIGHT: Final = "loan_months"
 
-#: How a cell's loan-months ended: in default, in a voluntary repayment, or in neither.
+#: How a cell's loan-months ended: in default, in a voluntary repayment, or in neither. The
+#: column is here; the three names it takes are declared in `config`, which is below the
+#: modules that need them without needing this one -- `config.record_name` and the command
+#: line, which was keeping a private copy to avoid the 0.85 s that importing this module puts
+#: on every `--help`. Every reader imports them from there, so there is one spelling.
 OUTCOME: Final = "outcome"
-DEFAULT_CAUSE: Final = "default"
-PREPAYMENT_CAUSE: Final = "prepayment"
-CENSORED: Final = "none"
-CAUSES: Final = (DEFAULT_CAUSE, PREPAYMENT_CAUSE)
 
 #: Columns every canonical loan-month panel must carry.
 REQUIRED_COLUMNS: Final[tuple[str, ...]] = (LOAN_ID, AGE, EVENT)

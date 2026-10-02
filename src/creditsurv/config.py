@@ -526,6 +526,39 @@ BANDED_REFERENCE: Final[dict[str, float]] = {
 SELECTION_RECORD: Final = "selection.json"
 
 
+#: How a cell's loan-months ended: in default, in a voluntary repayment, or in neither.
+#:
+#: Declared here rather than in `data.panel`, which is where the columns are, because three
+#: things below that module need the names: this file's `record_name`, and the command line,
+#: which was keeping a private copy to avoid the **0.85 s** importing `data.panel` puts on
+#: every `creditsurv --help`. `data.panel` re-exports them, so the forty-odd call sites that
+#: read them from there are unchanged.
+DEFAULT_CAUSE: Final = "default"
+PREPAYMENT_CAUSE: Final = "prepayment"
+CENSORED: Final = "none"
+CAUSES: Final[tuple[str, ...]] = (DEFAULT_CAUSE, PREPAYMENT_CAUSE)
+
+
+def record_name(*, distribution: str, cause: str, published: str = DISTRIBUTION) -> str:
+    """What this run's files are called.
+
+    Beside the record's own name, and below both the report that writes these files and
+    the fit that reads them: an address is configuration.
+
+    ``selection`` is the **published** model's record, which ``tests/test_procedure.py``
+    holds the configuration to. Every other run -- the other family, the prepayment model --
+    is a record of a run rather than of the model in the configuration, and would otherwise
+    overwrite it: two selections write two records, and the family rule then decides which
+    one the configuration should agree with.
+    """
+    if distribution == published and cause == DEFAULT_CAUSE:
+        return "selection"
+    parts = ["selection", distribution]
+    if cause != DEFAULT_CAUSE:
+        parts.append(cause)
+    return "_".join(parts)
+
+
 def default_covariates() -> list[str]:
     """Every column the default formula is allowed to read.
 
