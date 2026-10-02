@@ -501,10 +501,21 @@ class Factorisation:
         self._grow(self._loan_rows, design[:, self._loan_positions], i)
         self._grow(self._calendar_rows, design[:, self._calendar_positions], j)
         self._verify(design, i, j)
+        age = frame[self._age_column].to_numpy()
+        if age.min() < 0 or age.max() > _MAX_AGE:
+            message = (
+                f"The loan ages run {age.min()} to {age.max()}, outside the 0 to {_MAX_AGE} the "
+                "log-time tables cover. `panel.MAX_AGE_MONTHS` is 360 and the production table "
+                "reaches 326, so this is either a different time scale or a broken age."
+            )
+            raise ValueError(message)
+        if not np.array_equal(age, np.rint(age)):
+            message = "The loan ages are not whole months, so they cannot index a table."
+            raise ValueError(message)
         return Rows(
             i=i.astype(np.uint32),
             j=j.astype(np.uint32),
-            age=frame[self._age_column].to_numpy().astype(np.uint16),
+            age=age.astype(np.uint16),
             event=np.asarray(event, dtype=bool),
             weight=_counts(np.asarray(weight)),
         )

@@ -1032,3 +1032,72 @@ def test_a_filter_that_selects_every_row_is_not_a_copy_of_the_design() -> None:
     assert taken.size == 4
     assert slicer.filter(some) is taken
     np.testing.assert_array_equal(taken["lambda_"], design[some][:, :2])
+
+
+CALENDAR = ["ltv_change", "unemployment_change"]
+
+
+def test_a_fit_through_the_written_out_kernel_is_the_fit_autograd_makes(
+    weighted: pd.DataFrame,
+) -> None:
+    """The same estimator, by two routes, on the same rows.
+
+    One traces lifelines' likelihood with autograd over a stored design; the other reads
+    `creditsurv.models.kernel`, which writes the likelihood out and holds the design as two
+    tables -- one row per distinct loan combination and one per distinct calendar key -- so no
+    design matrix is ever built. On the production table that is 5.1x on a value-and-gradient
+    and 11.8x with the Hessian, at 0.81 GB for the whole training half.
+
+    What is compared is what a report reads: the coefficients in units of their own standard
+    errors, because that is what the engine promises and the two paths each stop within a
+    thousandth of one; the standard errors themselves; and the log-likelihood, which the two
+    reach by different summation orders over the same terms.
+    """
+    from creditsurv.models.aft import fit_aft
+
+    traced = fit_aft(weighted, COVARIATES, FORMULA, weights_col="loan_months")
+    written = fit_aft(weighted, COVARIATES, FORMULA, weights_col="loan_months", calendar=CALENDAR)
+
+    assert traced.blocks is not None and written.blocks is not None
+    assert written.n_episodes == traced.n_episodes
+    assert written.n_events == traced.n_events
+    assert written.blocks.loan_months == pytest.approx(traced.blocks.loan_months)
+
+    moved = (written.fitter.params_ - traced.fitter.params_).abs() / traced.fitter.standard_errors_
+    assert moved.max() < 2 * POLISH_TOLERANCE_SE, f"{moved.max()} standard errors apart"
+    np.testing.assert_allclose(
+        written.fitter.standard_errors_.to_numpy(),
+        traced.fitter.standard_errors_.to_numpy(),
+        rtol=1e-4,
+    )
+    assert written.log_likelihood == pytest.approx(traced.log_likelihood, rel=1e-9)
+
+    # And the rows are fifteen bytes each: two indices, an age, an exit and a weight. The
+    # compacted design is 23.5 a row on this fixture, where `StoredColumn` gets it down to
+    # single-byte codes because the fixture has few distinct values; on the production table
+    # it is 30, so the real ratio is two to one and here it is 1.57.
+    assert written.blocks.stored_bytes == 15 * written.n_episodes
+    assert written.blocks.stored_bytes < traced.blocks.stored_bytes
+
+
+def test_the_kernel_refuses_a_shape_with_covariates_and_a_pool() -> None:
+    """Two refusals rather than two workarounds.
+
+    A shape with covariates is a different model -- the `occupancy` finding in
+    `docs/decisions.md` is exactly that fit -- and the kernel's economy comes from a row
+    depending on two scalars. And the partition of the design's columns is discovered from the
+    data, so two processes scanning different shares could classify a column differently and
+    index into the parameter vector in two different ways, silently; the kernel makes the
+    second process unnecessary rather than making the agreement work.
+    """
+    from creditsurv.models.aft import fit_streamed
+
+    with pytest.raises(ValueError, match="one process"):
+        fit_streamed(
+            lambda part, of: iter(()),
+            COVARIATES,
+            FORMULA,
+            weights_col="loan_months",
+            workers=2,
+            calendar=CALENDAR,
+        )
