@@ -241,3 +241,31 @@ def test_a_prepayment_fit_is_cached_under_a_name_of_its_own() -> None:
     assert "cause" not in default, "the fits made before prepayment existed keep their names"
     assert prepayment["cause"] == "prepayment"
     assert fit_fingerprint(**default) != fit_fingerprint(**prepayment)
+
+
+def test_a_refused_fit_leaves_no_worker_processes_behind(
+    cell_file: Path, macro_module: pd.DataFrame
+) -> None:
+    """`pool.close()` used to sit on the one path out of the fit that works.
+
+    It was called just before the result was stored, after every `raise` in the body: a fit
+    refused by the domain check, by the interior check, by the polish or by the method chain
+    left `workers - 1` processes alive, each parked waiting for a command it would never get
+    and each still holding its share of the stored blocks. `procedure._estimate` then started
+    a cold retry beside them. They are daemons, so they die with the parent -- and a selection
+    makes twenty-odd fits before the parent exits.
+
+    The refusal here is the floor: a bound no real objective can clear, so every evaluation
+    comes back as the wall and the fit gives up.
+    """
+    import multiprocessing
+
+    from lifelines import exceptions
+
+    source = CellBlocks(str(cell_file), macro_module, tuple(COVARIATES), rows=400)
+    before = {process.pid for process in multiprocessing.active_children()}
+
+    with pytest.raises(exceptions.ConvergenceError):
+        fit_streamed(source, COVARIATES, FORMULA, weights_col=WEIGHT, workers=2, floor=1e9)
+
+    assert {process.pid for process in multiprocessing.active_children()} == before

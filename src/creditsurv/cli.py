@@ -467,6 +467,13 @@ def fit(
     cause: Annotated[
         str, typer.Option(help="default or prepayment: which exit the model is of.")
     ] = DEFAULT_CAUSE,
+    traced: Annotated[
+        bool,
+        typer.Option(
+            "--traced/--written-out",
+            help="Trace lifelines' likelihood with autograd instead of writing it out.",
+        ),
+    ] = False,
 ) -> None:
     """Fit the model and print its coefficients.
 
@@ -496,6 +503,7 @@ def fit(
             workers=workers,
             block_rows=block_rows,
             cause=cause,
+            traced=traced,
         )
     else:
         # Already encoded: cells_to_episodes writes the interval bounds as it expands,
@@ -628,6 +636,7 @@ def windows(
 
     from creditsurv.backtest.metrics import grade_backtest
     from creditsurv.backtest.runner import ACCEPTANCE, backtest_windows, predicted_hazard, score
+    from creditsurv.config import MACRO_CANDIDATES
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import (
         WEIGHT,
@@ -660,7 +669,11 @@ def windows(
             distribution=DISTRIBUTION,
             weights_col=WEIGHT,
             initial_point=None if start is None else start.fitter.params_,
-            workers=workers,
+            # One process, because the written-out likelihood needs no more: fifteen bytes a
+            # row puts the whole window under a gigabyte. Each cut is warm-started from the
+            # one before, so this is a few Newton steps at 39 seconds a Hessian.
+            workers=1,
+            calendar=[name for name in covariates if name in MACRO_CANDIDATES],
         )
         record = result.blocks
         assert record is not None
@@ -1296,9 +1309,16 @@ def select(
         str, typer.Option(help="default or prepayment: which exit is being modelled.")
     ] = DEFAULT_CAUSE,
     workers: Annotated[
-        int, typer.Option(help="Processes each fit's likelihood is evaluated in.")
+        int, typer.Option(help="Processes each fit's likelihood is evaluated in; traced only.")
     ] = 1,
     block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
+    traced: Annotated[
+        bool,
+        typer.Option(
+            "--traced/--written-out",
+            help="Trace lifelines' likelihood with autograd, re-reading the rows for every fit.",
+        ),
+    ] = False,
 ) -> None:
     """Run the variable selection on the training half, and write what it chose.
 
@@ -1317,6 +1337,15 @@ def select(
     model's. They are not the same priors and cannot be -- a credit score that lengthens
     survival shortens the time to repayment -- so a run with one map and the other cause
     would eliminate covariates for disagreeing with the wrong economics.
+
+    The rows are read **once** and every fit of the run is made from that reading, through
+    ``creditsurv.models.kernel``. On the production table a fit is 53 seconds of arithmetic
+    behind 12.1 minutes of reading, and the selection used to pay the reading once per
+    candidate -- about thirty times, with the fifteen step-7 fits each beginning by
+    recomputing the identical base objective to twelve digits. ``--traced`` goes back to
+    tracing lifelines' likelihood with autograd and re-reading for every fit: the same
+    estimator, and what the equivalence tests hold the other to. ``--workers`` applies to it
+    only; a reading is one process and needs no more, at fifteen bytes a row.
 
     The report goes to ``docs/reports/selection.md`` with ``selection.json`` beside it, the
     record the configuration is tested against. See ``creditsurv.models.procedure``.
@@ -1372,7 +1401,8 @@ def select(
     identity = cells_identity(moratorium)
     typer.echo(
         f"Selecting {cause} on {moments.rows:,} cells, {int(moments.loan_months):,} "
-        f"loan-months, with the {dist} family in {workers} process(es)."
+        f"loan-months, with the {dist} family"
+        + (f" in {workers} process(es), re-reading for every fit." if traced else ", read once.")
     )
 
     fits = Fits(
@@ -1384,6 +1414,10 @@ def select(
         cause=cause,
         blocks=source,
         workers=workers,
+        # Declared in `config` before any fit, with its own argument: "a macro covariate is a
+        # function of the vintage quarter and the loan age, both already in the aggregation
+        # key". That is exactly the split the kernel needs.
+        calendar=None if traced else MACRO_CANDIDATES,
     )
     record = run_selection(
         None,
@@ -1521,15 +1555,20 @@ def _fit_streamed(
     workers: int,
     block_rows: int,
     cause: str = DEFAULT_CAUSE,
+    traced: bool = False,
 ) -> FitResult:
-    """Fit from the cell file, in ``workers`` processes, and save it under its fingerprint.
+    """Fit from the cell file and save it under its fingerprint.
 
-    The rows are never held: each process reads its share of the cells, expands it, and keeps
-    it compactly. The fit is cached under the same description a fit made in memory is, so
-    `report` and `views` find it by the specification rather than by how it was made.
+    The rows are never held. By default the likelihood is the one `models.kernel` writes out,
+    over two tables rather than a stored design: 11.8x on a value-and-gradient-with-Hessian,
+    and a fit of the training half is 10.2 minutes against 43.8. ``traced`` goes back to
+    tracing lifelines' likelihood with autograd in ``workers`` processes, which is what the
+    equivalence tests hold the other to. The fit is cached under the same description either
+    way, so `report` and `views` find it by the specification rather than by how it was made.
     """
     import pandas as pd
 
+    from creditsurv.config import MACRO_CANDIDATES
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import WEIGHT, month_ordinal
     from creditsurv.data.store import fit_fingerprint, save_fit
@@ -1548,14 +1587,19 @@ def _fit_streamed(
         until=cut,
         cause=cause,
     )
-    typer.echo(f"Reading {source.source} in {workers} process(es)...")
+    written = None if traced else [n for n in default_covariates() if n in MACRO_CANDIDATES]
+    typer.echo(
+        f"Reading {source.source}"
+        + (f" in {workers} process(es)..." if traced else ", writing the likelihood out...")
+    )
     result = fit_streamed(
         source,
         default_covariates(),
         formula,
         distribution=distribution,
         weights_col=WEIGHT,
-        workers=workers,
+        workers=workers if traced else 1,
+        calendar=written,
     )
     record = result.blocks
     assert record is not None

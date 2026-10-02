@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 
 from creditsurv.data.panel import to_interval_censored
+from creditsurv.models.blocks import Pinned
 from creditsurv.models.procedure import (
     Fits,
     SelectionRecord,
@@ -1090,3 +1091,292 @@ def test_the_reference_levels_are_one_set_written_twice_and_held_together() -> N
 
     assert dict(CATEGORICAL_REFERENCE) == {**BASE_CATEGORICAL, **CANDIDATE_CATEGORICAL}
     assert not set(BASE_CATEGORICAL) & set(CANDIDATE_CATEGORICAL), "a covariate in both blocks"
+
+
+@pytest.mark.parametrize(
+    ("step", "verdict"),
+    [("step 9", "_not_identified"), ("step 10", "_immaterial")],
+)
+def test_every_nested_fit_of_the_selection_is_bounded_by_its_parent(
+    train: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    step: str,
+    verdict: str,
+) -> None:
+    """The floor reaches a fit only when its call site says which model this one is nested in.
+
+    Step 8 said it and the other three did not. Steps 9 and 10 both refit a strictly nested
+    model warm-started from its parent -- ``current.minus(name)`` from the fit of ``current``
+    -- so either could walk into the region where lifelines' clipped likelihood is unbounded
+    below and be cached as an optimum, which is what ``_floor`` exists to prevent.
+
+    Neither step eliminates anything on twelve hundred loans, so the verdict each one reads is
+    replaced by one that removes a covariate once. What is then checked is the invariant that
+    cannot be read off a call site: whatever a fit was started from, if this specification is
+    strictly inside that one, a parent was named. The two stability halves are the mirror image
+    -- different rows, so no parent can bound them -- and that is checked too.
+    """
+    from creditsurv.models import procedure
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+
+    removals = {"left": 1}
+
+    def unstable(table: pd.DataFrame) -> tuple[str, str] | None:
+        if removals["left"] and len(table) > 1:
+            removals["left"] -= 1
+            names = table["covariate"].astype(str).tolist()
+            return names[0], names[1]
+        return None
+
+    def immaterial(
+        spec: Specification, result: FitResult, deviations: pd.Series, *, macro: list[str]
+    ) -> tuple[str, float] | None:
+        eligible = [name for name in spec.covariates if name in macro]
+        if removals["left"] and len(eligible) > 1:
+            removals["left"] -= 1
+            return eligible[0], 0.001
+        return None
+
+    monkeypatch.setattr(
+        procedure, verdict, unstable if verdict == "_not_identified" else immaterial
+    )
+
+    asked: list[tuple[Specification, Specification | None, str, Specification | None]] = []
+    fitted_on: dict[int, Specification] = {}
+    original = Fits.fit
+
+    def spy(
+        self: Fits,
+        spec: Specification,
+        *,
+        sample: str = "training half",
+        start: FitResult | None = None,
+        parent: Specification | None = None,
+        **rest: object,
+    ) -> FitResult:
+        came_from = None if start is None else fitted_on.get(id(start))
+        result = original(self, spec, sample=sample, start=start, parent=parent, **rest)  # type: ignore[arg-type]
+        fitted_on[id(result)] = spec
+        asked.append((spec, parent, sample, came_from))
+        return result
+
+    monkeypatch.setattr(Fits, "fit", spy)
+    _run(train, identity=f"floor-{verdict}")
+
+    assert not removals["left"], f"{step}: the forced removal never happened"
+    nested = [
+        (spec, parent, sample)
+        for spec, parent, sample, came_from in asked
+        if came_from is not None and set(spec.covariates) < set(came_from.covariates)
+    ]
+    assert nested, f"{step}: no strictly nested model was refitted"
+    for spec, parent, sample in nested:
+        assert parent is not None, f"{sample}: {spec.formula} refitted without its parent"
+        assert set(spec.covariates) <= set(parent.covariates)
+
+    halves = [(parent, sample) for _, parent, sample, _ in asked if "origination years" in sample]
+    assert halves, "the fixture runs the stability step"
+    assert all(parent is None for parent, _ in halves), "a half cannot be bounded by the whole"
+
+
+def test_a_parent_cannot_bound_a_fit_that_sees_other_rows(train: pd.DataFrame) -> None:
+    """The floor is the parent's optimum divided by the parent's exposure, so it bounds only
+    the rows the parent itself saw. Step 9 fits one specification three times -- the whole and
+    two halves of the book -- and a parent passed to a half would hand a fit on half the rows
+    a bound computed on all of them. Refused before anything is fitted.
+    """
+    fits = Fits(train, identity="fixture", as_of="2008-12", moratorium="exclude")
+    parent = Specification(continuous=("credit_score", "ltv_change"))
+    child = Specification(continuous=("credit_score",))
+
+    with pytest.raises(ValueError, match="different sample"):
+        fits.fit(child, sample="even origination years", parity=0, parent=parent)
+    with pytest.raises(ValueError, match="different sample"):
+        fits.fit(child, sample="odd", where=np.zeros(len(train), dtype=bool), parent=parent)
+    assert not fits.record, "nothing may be fitted before the bound is checked"
+
+
+def test_a_rebuilt_table_starts_from_the_same_model_fitted_on_the_old_one(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fit is cached under the cell table's name, size and time of writing, so rebuilding the
+    table invalidates every fit made before it: 36 of the 175 on disk are a selection run on a
+    table that has since been replaced, 17.5 hours of them.
+
+    They are not useless. The specification is the same and the book is mostly the same book,
+    so the old optimum is a far better guess at the new one than lifelines' seed -- a cold fit
+    of the training half is 45 to 91 minutes and a warm one 4.7 to 13.
+
+    The rows here are deliberately **identical** and only the declared identity differs,
+    because what has to be shown is not that the lookup finds something but that what it finds
+    cannot move the answer: the borrowed start must be used, the fit must still be made, and it
+    must land where the cold fit landed, inside the thousandth of a standard error the polish
+    promises.
+    """
+    from creditsurv.models.blocks import POLISH_TOLERANCE_SE
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    spec = Specification(continuous=("credit_score", "unemployment_change"))
+
+    before = Fits(
+        train, identity="cells_exclude.parquet:1:1", as_of="2008-12", moratorium="exclude"
+    )
+    cold = before.fit(spec)
+    assert cold.blocks is not None
+
+    after = Fits(train, identity="cells_exclude.parquet:2:2", as_of="2008-12", moratorium="exclude")
+    # What has to be shown is that the lookup was consulted and answered, and the recorded
+    # method no longer distinguishes that: damped Newton goes first from any starting point, so
+    # a cold fit says `newton` too.
+    borrowed: list[FitResult | None] = []
+    original = Fits._elsewhere
+
+    def spy(self: Fits, described: dict[str, object]) -> FitResult | None:
+        found = original(self, described)
+        borrowed.append(found)
+        return found
+
+    monkeypatch.setattr(Fits, "_elsewhere", spy)
+    warm = after.fit(spec)
+
+    assert borrowed and borrowed[0] is not None, "the old table's fit was not found"
+    assert warm.blocks is not None
+    assert warm.blocks.method == "newton"
+    assert after.record[-1]["cached"] is False, "a start is not a result"
+    assert warm is not cold
+
+    moved = (warm.fitter.params_ - cold.fitter.params_).abs() / cold.fitter.standard_errors_
+    assert moved.max() < 2 * POLISH_TOLERANCE_SE, f"the start moved the optimum by {moved.max()}"
+
+
+def test_a_start_borrowed_from_another_table_can_never_fail_a_fit(
+    train: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Pinned` says the surface, not the start: an optimiser held against the parent's optimum
+    has found a boundary that sits in the same place for every method and every starting point,
+    so a cold retry would spend another hour reaching the same refusal. That reasoning does not
+    hold for a start borrowed from a *different* cell table, which is a guess about these rows
+    -- so there, and only there, `Pinned` is retried cold.
+    """
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    spec = Specification(continuous=("credit_score",))
+
+    before = Fits(
+        train, identity="cells_exclude.parquet:1:1", as_of="2008-12", moratorium="exclude"
+    )
+    before.fit(spec)
+
+    after = Fits(train, identity="cells_exclude.parquet:2:2", as_of="2008-12", moratorium="exclude")
+    attempts: list[bool] = []
+    original = Fits._once
+
+    def refuse_the_warm_one(self: Fits, spec: Specification, **rest: object) -> FitResult:
+        warm = rest.get("start") is not None
+        attempts.append(warm)
+        if warm:
+            message = "the optimiser is circling a boundary it cannot cross"
+            raise Pinned(message)
+        return original(self, spec, **rest)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Fits, "_once", refuse_the_warm_one)
+    result = after.fit(spec)
+
+    assert attempts == [True, False], "the borrowed start was tried, then given up on"
+    assert result.log_likelihood < 0
+
+
+def test_a_selection_from_one_encoding_chooses_what_a_re_reading_chooses(
+    selection_cells: Path,
+    macro_module: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The claim at the level of the procedure rather than of one fit.
+
+    A selection makes about thirty fits and every one of them used to re-read the cell file,
+    re-derive the macro family, rebuild the design and throw all of it away. On the production
+    table that reading is 12.1 minutes against 53 seconds of arithmetic, and the fifteen
+    step-7 fits of one logged run each began by recomputing the identical base objective to
+    twelve digits.
+
+    Naming the calendar covariates reads the rows **once** -- once per sample, so three times
+    in a run with a stability step -- and builds each candidate's design from the keys. What
+    has to come out of it is the same specification, with the same covariates eliminated for
+    the same reasons.
+    """
+    from creditsurv.data.panel import WEIGHT, CellBlocks
+    from creditsurv.models.selection import weighted_moments
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    source = CellBlocks(
+        str(selection_cells), macro_module, tuple(STREAMED_CANDIDATES), rows=4_000
+    ).prepared()
+    moments = weighted_moments(source(), STREAMED_CANDIDATES, weight=WEIGHT)
+
+    def run(fits: Fits) -> SelectionRecord:
+        return run_selection(
+            None,
+            fits,
+            static=["credit_score", "original_ltv"],
+            ordinal=[],
+            macro=["ltv_change", "unemployment_change"],
+            base_categorical={"purpose": "purchase"},
+            candidate_categorical={},
+            stability=True,
+            moments=moments,
+        )
+
+    expected = run(
+        Fits(None, identity="re-read", as_of="2014-12", moratorium="exclude", blocks=source)
+    )
+    once = Fits(
+        None,
+        identity="encoded",
+        as_of="2014-12",
+        moratorium="exclude",
+        blocks=source,
+        calendar=["ltv_change", "unemployment_change"],
+    )
+    got = run(once)
+
+    assert got.selected.formula == expected.selected.formula
+    assert got.eliminated == expected.eliminated
+    assert got.rows == expected.rows
+    assert int(got.loan_months) == int(expected.loan_months)
+
+    # One reading a sample, not one a candidate: the whole half and the two halves of step 9.
+    assert len(once.held) <= 3
+    assert len(once.record) > len(once.held), "the run must have made more fits than readings"
+
+
+def test_a_row_mask_is_refused_where_the_rows_are_read_rather_than_held(
+    selection_cells: Path, macro_module: pd.DataFrame
+) -> None:
+    """A mask selects rows of a frame the reading path never builds.
+
+    The sample is a property of the reading -- `vintage_parity`, applied while the cells are
+    read -- so a mask silently ignored here would fit the whole half and record it as a half,
+    which is the stability step's two rounds comparing the same numbers with themselves.
+    """
+    from creditsurv.data.panel import CellBlocks
+
+    source = CellBlocks(
+        str(selection_cells), macro_module, tuple(STREAMED_CANDIDATES), rows=4_000
+    ).prepared()
+    fits = Fits(
+        None,
+        identity="encoded",
+        as_of="2014-12",
+        moratorium="exclude",
+        blocks=source,
+        calendar=["ltv_change", "unemployment_change"],
+    )
+
+    with pytest.raises(ValueError, match="has no meaning when the rows are read"):
+        fits.fit(
+            Specification(continuous=("credit_score",)),
+            sample="even origination years",
+            where=np.ones(3, dtype=bool),
+        )

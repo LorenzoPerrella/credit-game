@@ -50,11 +50,19 @@ from creditsurv.config import (
     MACRO_CANDIDATES,
     MACRO_ELIMINATION_PRIORITY,
 )
-from creditsurv.data.panel import DEFAULT_CAUSE, WEIGHT, CellBlocks
-from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
+from creditsurv.data.panel import (
+    AGE_START,
+    DEFAULT_CAUSE,
+    EXACT_OBSERVATION,
+    LOWER_BOUND,
+    UPPER_BOUND,
+    WEIGHT,
+    CellBlocks,
+)
+from creditsurv.data.store import find_fits, fit_fingerprint, load_fit, save_fit
 from creditsurv.explore import collinear_pairs
-from creditsurv.models.aft import FitResult, fit_aft, fit_streamed
-from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, Pinned
+from creditsurv.models.aft import FitResult, fit_aft, fit_encoding, fit_streamed
+from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, Encoding, Pinned, encode_blocks
 from creditsurv.models.selection import (
     EXPECTED_SIGNS,
     PVALUE_THRESHOLD,
@@ -176,7 +184,23 @@ class Fits:
     #: same model at every step -- and walking the chain each time cost over an hour a fit on
     #: the prepayment model.
     preferred: str | None = None
+    #: The covariates that are functions of the calendar rather than of the loan. Given, the
+    #: rows are **read once** and every fit of the run is made from that reading, through
+    #: `models.kernel`: a fit on the production table is 53 seconds of arithmetic behind 12.1
+    #: minutes of reading, and a selection used to pay the reading once per candidate. The
+    #: list is `config.MACRO_CANDIDATES`, declared before any fit with its own argument -- "a
+    #: macro covariate is a function of the vintage quarter and the loan age, both already in
+    #: the aggregation key".
+    calendar: Sequence[str] | None = None
     record: list[dict[str, object]] = field(default_factory=list)
+    #: One encoding per sample, kept for the life of the run. Three at most: the training half
+    #: and the two origination-year halves step 9 compares, against thirty readings.
+    held: dict[int | None, Encoding] = field(default_factory=dict, repr=False)
+    #: Every covariate the run will ever read, which a reading has to cover because it is made
+    #: once and before the first specification exists. `run_selection` sets it from its own
+    #: candidate lists; without it the description's own covariates are all that is assumed,
+    #: and a formula naming anything else fails where it is expanded rather than silently.
+    covering: tuple[str, ...] | None = None
 
     def fit(
         self,
@@ -188,6 +212,17 @@ class Fits:
         start: FitResult | None = None,
         parent: Specification | None = None,
     ) -> FitResult:
+        # The floor and the nested check both compare this fit's log-likelihood against the
+        # parent's, which says nothing unless the two saw the same rows: the floor is the
+        # parent's optimum divided by the parent's exposure. Step 9 fits the same
+        # specification on two halves of the book, warm-started from the whole, and a parent
+        # passed there would hand a fit on half the rows a bound computed on all of them.
+        if parent is not None and (where is not None or parity is not None):
+            message = (
+                "A nested parent bounds a fit only on the rows the parent itself saw; "
+                f"{sample!r} is a different sample, so it cannot be given one."
+            )
+            raise ValueError(message)
         described = selection_description(
             identity=self.identity,
             as_of=self.as_of,
@@ -208,8 +243,16 @@ class Fits:
 
         log.info("fitting: %s on the %s", spec.formula, sample)
         started = time.perf_counter()
+        # `_floor` and `_check_nested` keep reading the caller's own start, never the
+        # borrowed one: a bound taken from a fit on another cell table bounds nothing here.
+        elsewhere = self._elsewhere(described) if start is None else None
         result = self._estimate(
-            spec, where=where, parity=parity, start=start, floor=_floor(spec, parent, start)
+            spec,
+            where=where,
+            parity=parity,
+            start=start if elsewhere is None else elsewhere,
+            floor=_floor(spec, parent, start),
+            speculative=elsewhere is not None,
         )
         _check_nested(spec, result, parent=parent, parent_fit=start)
         minutes = (time.perf_counter() - started) / 60
@@ -220,6 +263,68 @@ class Fits:
         )
         return result
 
+    def _encoding(self, parity: int | None) -> Encoding:
+        """The rows of one sample, read once and kept for every fit that wants them.
+
+        A reading involves no formula -- no design to expand, no moments over 26 columns,
+        nothing through formulaic -- and keeps fifteen bytes a row plus the key of every
+        combination, 1.09 GB for the production table's training half. Each candidate's design
+        is then two tables built from those keys.
+
+        The two halves of step 9 are different rows, so they are different readings; nothing
+        else in a selection is.
+        """
+        held = self.held.get(parity)
+        if held is not None:
+            return held
+        assert self.blocks is not None
+        assert self.calendar is not None
+        calendar = set(self.calendar)
+        covering = self.covering or self.blocks.covariates
+        source = replace(self.blocks, covariates=tuple(covering), vintage_parity=parity).prepared()
+        held = encode_blocks(
+            source(),
+            loan=[name for name in covering if name not in calendar],
+            calendar=[name for name in covering if name in calendar],
+            lower_bound_col=LOWER_BOUND,
+            upper_bound_col=UPPER_BOUND,
+            event_col=EXACT_OBSERVATION,
+            entry_col=AGE_START,
+            weights_col=WEIGHT,
+        )
+        self.held[parity] = held
+        return held
+
+    def _elsewhere(self, described: dict[str, object]) -> FitResult | None:
+        """The same specification fitted on **another** cell table, as a starting point only.
+
+        A fit is cached under the table's name, size and time of writing, so rebuilding the
+        table invalidates every fit made before it -- 36 of the 175 on disk are a selection run
+        on a table that has since been replaced, 17.5 hours of them. They are not useless. The
+        specification is the same and the book is mostly the same book, so the old optimum is a
+        far better guess at the new one than lifelines' seed: a cold fit of the training half is
+        45 to 91 minutes and a warm one 4.7 to 13.
+
+        **It can only ever be a starting point.** Where a fit ends is settled by the polish,
+        which measures the distance to the optimum on the gradient and the curvature of *these*
+        rows and refuses a fit it cannot drive under a thousandth of a standard error. A start
+        changes how long that takes, not where it arrives -- and because this start is a guess
+        about a different table, a failure from it is retried cold rather than reported.
+        """
+        wanted = {key: value for key, value in described.items() if key != "cells"}
+        # `find_fits` reads `None` as "this key must be absent", which is how a default-cause
+        # fit is told from a prepayment one: `selection_description` omits the key for the
+        # default, so every fit made before the prepayment model existed keeps its name.
+        wanted.setdefault("cause", None)
+        for fingerprint, found in find_fits(**wanted):
+            if found.get("cells") == described["cells"]:
+                continue
+            cached = load_fit(fingerprint)
+            if isinstance(cached, FitResult) and cached.log_likelihood < 0:
+                log.info("starting from the same model fitted on %s", found.get("cells"))
+                return cached
+        return None
+
     def _estimate(
         self,
         spec: Specification,
@@ -228,6 +333,7 @@ class Fits:
         parity: int | None,
         start: FitResult | None,
         floor: float | None = None,
+        speculative: bool = False,
     ) -> FitResult:
         """One fit, from the rows in hand or from the cell file.
 
@@ -246,8 +352,13 @@ class Fits:
         try:
             return self._once(spec, where=where, parity=parity, start=start, floor=floor)
         except Pinned:
-            # Not a bad starting point but the shape of the surface: see blocks.Pinned.
-            raise
+            # Not a bad starting point but the shape of the surface: see blocks.Pinned. The
+            # exception is a start borrowed from another cell table, which is a guess about
+            # these rows and must never be able to fail a fit that would otherwise succeed.
+            if not speculative:
+                raise
+            log.warning("a start from another table was pinned; refitting cold: %s", spec.formula)
+            return self._once(spec, where=where, parity=parity, start=None, floor=floor)
         except exceptions.ConvergenceError:
             if start is None:
                 raise
@@ -263,8 +374,30 @@ class Fits:
         start: FitResult | None,
         floor: float | None = None,
     ) -> FitResult:
-        """One attempt, from the rows in hand or from the cell file."""
+        """One attempt, from the rows in hand, from an encoding of them, or from the file."""
         initial_point = None if start is None else start.fitter.params_
+        if self.blocks is not None and self.calendar is not None:
+            if where is not None:
+                # A mask selects rows of a frame this path never builds. The sample is a
+                # property of the reading -- `vintage_parity` while the cells are read -- and
+                # a mask silently ignored here would fit the whole half and call it a half.
+                message = (
+                    "A row mask has no meaning when the rows are read from the cell file: "
+                    "the sample is taken while reading, through the parity."
+                )
+                raise ValueError(message)
+            fitted = fit_encoding(
+                self._encoding(parity),
+                spec.covariates,
+                spec.formula,
+                distribution=self.distribution,
+                initial_point=initial_point,
+                prefer=self.preferred,
+                floor=floor,
+            )
+            if fitted.blocks is not None and fitted.blocks.method not in {"newton", "warm"}:
+                self.preferred = fitted.blocks.method
+            return fitted
         if self.blocks is None:
             if self.train is None:
                 message = "Fits needs either an episode frame or a CellBlocks to read."
@@ -521,6 +654,10 @@ def run_selection(
     loan = [*static, *ordinal]
     continuous = [*loan, *macro]
     eliminated: dict[str, str] = {}
+    # What a reading has to cover, said before the first specification exists: a reading is
+    # made once and serves every fit of the run, so it cannot be narrowed to the first
+    # formula's columns. The order is the one the candidate lists were given in.
+    fits.covering = tuple(dict.fromkeys([*continuous, *base_categorical, *candidate_categorical]))
 
     # 5. Pairs that say the same thing -- reported, not resolved.
     log.info("step 5: weighted correlation of %d candidates", len(continuous))
@@ -611,10 +748,17 @@ def run_selection(
     for name, reference in kept:
         current = current.plus(name, reference=reference)
     previous = base_fit
+    # Which specification `previous` is a fit *of*. Carried from here to the end of step 10,
+    # because `_floor` and `_check_nested` need it and only step 8 used to say it: the bound
+    # that keeps a nested fit out of lifelines' clipped region was wired into one call site
+    # out of four. It is not always a parent -- on the first pass here `previous` is the fit
+    # of `base`, a model *smaller* than `current` -- and `_floor` returns nothing when the
+    # subset test fails, which is why the honest thing to pass is what it is a fit of.
+    previous_spec = base
     steps: list[dict[str, object]] = []
     unfittable: set[str] = set()
     while True:
-        result = fits.fit(current, start=previous)
+        result = fits.fit(current, start=previous, parent=previous_spec)
         worst = _worst(current, result, alone=alone, signs=signs, skip=unfittable)
         if worst is None:
             break
@@ -647,7 +791,7 @@ def run_selection(
             }
         )
         eliminated[name] = f"step 8: {reason}"
-        current, previous = candidate, fitted
+        current, previous, previous_spec = candidate, fitted, candidate
     elimination = pd.DataFrame(steps, columns=_ELIMINATION_COLUMNS)
 
     # 9. Stability, on two halves of the book.
@@ -656,7 +800,7 @@ def run_selection(
         log.info("step 9: stability on two halves")
         mask = None if isinstance(stability, bool) else stability
         while True:
-            whole = fits.fit(current, start=previous)
+            whole = fits.fit(current, start=previous, parent=previous_spec)
             even = fits.fit(
                 current,
                 sample="even origination years",
@@ -684,8 +828,8 @@ def run_selection(
                 f"beside {partner} ({_number(indexed, partner, 'effect_all'):+.3f}), both "
                 f"{indexed.loc[name, 'dimension']}"
             )
+            previous, previous_spec = whole, current
             current = current.minus(name)
-            previous = whole
     rounds_table = pd.concat(rounds, ignore_index=True) if rounds else pd.DataFrame()
 
     # 10. Materiality. A macro covariate whose effect of one standard deviation on log
@@ -699,7 +843,7 @@ def run_selection(
     log.info("step 10: materiality")
     material: list[dict[str, object]] = []
     while True:
-        result = fits.fit(current, start=previous)
+        result = fits.fit(current, start=previous, parent=previous_spec)
         smallest = _immaterial(current, result, deviations, macro=macro)
         if smallest is None:
             break
@@ -717,8 +861,8 @@ def run_selection(
             f"step 10: 1 sd effect {effect:+.4f} on log survival time, under "
             f"{MATERIALITY_THRESHOLD:g}"
         )
+        previous, previous_spec = result, current
         current = current.minus(name)
-        previous = result
     materiality = pd.DataFrame(material, columns=_MATERIALITY_COLUMNS)
 
     return SelectionRecord(

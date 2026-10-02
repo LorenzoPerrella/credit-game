@@ -68,6 +68,20 @@ def weighted(book_dir: Path, macro_module: pd.DataFrame) -> pd.DataFrame:
     return encoded.sort_values(["purpose", "age"], kind="stable").reset_index(drop=True)
 
 
+@pytest.fixture
+def through_the_optimiser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the fit fall through to the method chain, which is now the fallback.
+
+    Damped Newton from the starting point goes first -- 10.18 minutes against 43.79 for SLSQP
+    on the production table, to the same log-likelihood -- so the chain is reached only when
+    Newton declines. Everything the chain does is still reachable and still has to work, and a
+    test of it that let Newton answer instead would pass without exercising anything.
+    """
+    from creditsurv.models import blocks
+
+    monkeypatch.setattr(blocks, "_newton_steps_first", lambda objective, start: None)
+
+
 def single_level_rows(frame: pd.DataFrame) -> int:
     """A block size that leaves the first two blocks with one purpose only."""
     rows = int((frame["purpose"] == frame["purpose"].iloc[0]).sum() // 2)
@@ -368,7 +382,9 @@ def test_the_slicer_hands_lifelines_the_columns_it_asks_for(macro: pd.DataFrame)
 
 
 def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
-    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+    weighted: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    through_the_optimiser: None,
 ) -> None:
     """SLSQP solves a quadratic subproblem at each step, and on an ill-conditioned design it
     reports "Rank-deficient equality constraint subproblem" and gives up -- which is what the
@@ -425,7 +441,9 @@ def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
 
 
 def test_the_optimisers_report_is_used_for_nothing_but_its_point(
-    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+    weighted: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    through_the_optimiser: None,
 ) -> None:
     """Each optimiser reports its value and gradient its own way: SLSQP's ``jac`` is the
     gradient, trust-constr's is shaped for its constraint machinery. Reading that field cost a
@@ -520,7 +538,9 @@ def test_the_shape_is_bounded_far_more_tightly_than_the_coefficients() -> None:
 
 
 def test_a_method_that_stops_short_of_its_tolerance_is_finished_by_the_polish(
-    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+    weighted: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    through_the_optimiser: None,
 ) -> None:
     """lifelines caps SLSQP at 200 iterations, and a fit that reaches the cap comes back
     `success=False` although it is at the answer: on the prepayment model one had been stable
@@ -589,7 +609,9 @@ def test_the_region_that_is_not_a_likelihood_is_a_wall() -> None:
 
 
 def test_a_point_outside_the_likelihood_stops_the_chain(
-    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+    weighted: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    through_the_optimiser: None,
 ) -> None:
     """Ending outside the likelihood is a statement about the **surface**: the optimiser found
     nothing better than the wall, so the specification has the spurious minimum lifelines'
@@ -884,3 +906,357 @@ def test_a_polish_the_floor_stalled_is_not_offered_to_another_optimiser() -> Non
     assert warm.against_the_floor, "9 of 11 refusals are the floor's"
 
     assert issubclass(Pinned, exceptions.ConvergenceError)
+
+
+def test_a_worker_that_dies_ends_the_fit_instead_of_blocking_it() -> None:
+    """The parent used to wait for an answer that was never coming.
+
+    `_collect`'s `get` had no timeout, so a worker killed by the memory pressure this engine
+    exists to manage left the parent blocked for ever, with nothing in the log after the last
+    evaluation. There is no honest fixed deadline -- one logged fit spent 457 minutes on four
+    evaluations -- so the wait polls and looks at whether the processes that owe answers are
+    still alive. A missing answer from a live worker is patience; a missing answer from a
+    process that has exited is the end of the fit, because its share of the rows is gone and a
+    sum over the parts that remain is a different likelihood.
+    """
+    import queue
+    from types import SimpleNamespace
+
+    from creditsurv.models.blocks import _Workers
+
+    pool = cast("Any", object.__new__(_Workers))
+    pool._results = queue.Queue()
+    pool._processes = [SimpleNamespace(exitcode=None), SimpleNamespace(exitcode=None)]
+
+    # Both alive and both answered: the parts come back in their own order, not in arrival
+    # order, which is what keeps a pooled fit reproducible bit for bit.
+    pool._results.put((2, "second"))
+    pool._results.put((1, "first"))
+    assert pool._collect() == ["first", "second"]
+
+    # One alive, one exited, and the answer owed by the dead one never arrives.
+    pool._processes = [SimpleNamespace(exitcode=None), SimpleNamespace(exitcode=-9)]
+    pool._results.put((1, "first"))
+    with (
+        pytest.raises(RuntimeError, match="stopped before answering"),
+        pytest.MonkeyPatch.context() as patch,
+    ):
+        patch.setattr("creditsurv.models.blocks._WORKER_POLL_SECONDS", 0.05)
+        pool._collect()
+
+
+def test_the_parent_evaluates_its_own_share_while_the_workers_evaluate_theirs() -> None:
+    """The point goes out before the parent starts, and a failed share drains the queue.
+
+    `_ask` put the commands and then blocked on the answers, so the workers computed while the
+    parent waited and then the parent computed while the workers waited: `of` processes were
+    worth `of/2`. Measured on 1.95 million rows of the production table, four workers went from
+    1,747 ms an evaluation to 803, against 2,913 at one -- 3.6x of a possible 4x where it had
+    been 1.75x.
+
+    What the split costs is a hazard the single call did not have. One queue serves the whole
+    pool, so an answer nobody collects is still there at the *next* evaluation, and a sum of two
+    different points is worse than the failure that caused it. So a local share that raises
+    drains the pool on its way out.
+    """
+
+    from creditsurv.models.blocks import _Pinned, _Pooled
+
+    class Pool:
+        def __init__(self) -> None:
+            self.sent: list[tuple[str, float]] = []
+            self.pending = 0
+            self.discarded = 0
+
+        def send(self, command: str, x: np.ndarray) -> None:
+            self.sent.append((command, float(x[0])))
+            self.pending += 1
+
+        def value_and_gradient(self) -> list[tuple[float, np.ndarray]]:
+            self.pending -= 1
+            return [(0.25, np.array([1.0]))]
+
+        def curvature(self) -> list[np.ndarray]:
+            self.pending -= 1
+            return [np.array([[2.0]])]
+
+        def discard(self) -> None:
+            self.pending -= 1
+            self.discarded += 1
+
+    pool = Pool()
+    order: list[str] = []
+
+    def local(x: np.ndarray) -> tuple[float, np.ndarray]:
+        order.append("parent")
+        if float(x[0]) < 0:
+            message = "the parent's own share failed"
+            raise ArithmeticError(message)
+        return 0.75, np.array([3.0])
+
+    objective = cast("Any", object.__new__(_Pooled))
+    objective._local = local
+    objective._workers = pool
+    objective.floor = None
+    objective.pinned = _Pinned()
+    objective._started = 0.0
+    objective._reported = np.inf
+    objective.total_weight = 1.0
+    objective.evaluations = 0
+    objective._penalty = None
+
+    value, gradient = objective(np.array([1.0]))
+
+    assert pool.sent == [("value", 1.0)], "the point is sent before the parent's own share"
+    assert order == ["parent"], "the parent evaluated rather than waited"
+    assert value == pytest.approx(1.0), "the parent's share plus the workers'"
+    np.testing.assert_allclose(gradient, [4.0])
+    assert pool.pending == 0 and pool.discarded == 0
+
+    with pytest.raises(ArithmeticError, match="own share failed"):
+        objective(np.array([-1.0]))
+    assert pool.pending == 0, "an uncollected answer would be read at the next point"
+    assert pool.discarded == 1
+
+
+def test_a_filter_that_selects_every_row_is_not_a_copy_of_the_design() -> None:
+    """The common case on this panel, and it was the most expensive one.
+
+    lifelines' interval-censored likelihood filters the design by the event flag and by its
+    complement. The event flag here is `exact_observation`, which `panel.to_interval_censored`
+    sets `False` with no condition -- the reporting interval tells us the month, never the day
+    -- so one filter selects no rows and the other selects all of them. The second was boolean
+    fancy-indexing the whole design into a new Fortran-ordered array, 50 MB on a 242,000-row
+    block of the production table, at every evaluation and again at every Hessian.
+
+    The filtered design with every row *is* the design, so it is the same slicer. Measured, a
+    value-and-gradient on one such block went from 232.9 ms to 166.8.
+    """
+    from creditsurv.models.blocks import _Slicer
+
+    design = np.asfortranarray(np.arange(24, dtype=float).reshape(8, 3))
+    columns = pd.MultiIndex.from_tuples(
+        [("lambda_", "Intercept"), ("lambda_", "credit_score"), ("rho_", "Intercept")]
+    )
+    slicer = _Slicer(design, columns)
+
+    every = np.ones(8, dtype=bool)
+    assert slicer.filter(every) is slicer, "no copy when nothing is excluded"
+    np.testing.assert_array_equal(slicer.filter(every)["lambda_"], slicer["lambda_"])
+
+    none = np.zeros(8, dtype=bool)
+    assert slicer.filter(none).size == 0
+    assert slicer.filter(none)["lambda_"].shape == (0, 2)
+
+    # A real subset is still a copy, and still answered from the cache the second time.
+    some = np.array([True, False] * 4)
+    taken = slicer.filter(some)
+    assert taken.size == 4
+    assert slicer.filter(some) is taken
+    np.testing.assert_array_equal(taken["lambda_"], design[some][:, :2])
+
+
+CALENDAR = ["ltv_change", "unemployment_change"]
+
+
+def test_a_fit_through_the_written_out_kernel_is_the_fit_autograd_makes(
+    weighted: pd.DataFrame,
+) -> None:
+    """The same estimator, by two routes, on the same rows.
+
+    One traces lifelines' likelihood with autograd over a stored design; the other reads
+    `creditsurv.models.kernel`, which writes the likelihood out and holds the design as two
+    tables -- one row per distinct loan combination and one per distinct calendar key -- so no
+    design matrix is ever built. On the production table that is 5.1x on a value-and-gradient
+    and 11.8x with the Hessian, at 0.81 GB for the whole training half.
+
+    What is compared is what a report reads: the coefficients in units of their own standard
+    errors, because that is what the engine promises and the two paths each stop within a
+    thousandth of one; the standard errors themselves; and the log-likelihood, which the two
+    reach by different summation orders over the same terms.
+    """
+    from creditsurv.models.aft import fit_aft
+
+    traced = fit_aft(weighted, COVARIATES, FORMULA, weights_col="loan_months")
+    written = fit_aft(weighted, COVARIATES, FORMULA, weights_col="loan_months", calendar=CALENDAR)
+
+    assert traced.blocks is not None and written.blocks is not None
+    assert written.n_episodes == traced.n_episodes
+    assert written.n_events == traced.n_events
+    assert written.blocks.loan_months == pytest.approx(traced.blocks.loan_months)
+
+    moved = (written.fitter.params_ - traced.fitter.params_).abs() / traced.fitter.standard_errors_
+    assert moved.max() < 2 * POLISH_TOLERANCE_SE, f"{moved.max()} standard errors apart"
+    np.testing.assert_allclose(
+        written.fitter.standard_errors_.to_numpy(),
+        traced.fitter.standard_errors_.to_numpy(),
+        rtol=1e-4,
+    )
+    assert written.log_likelihood == pytest.approx(traced.log_likelihood, rel=1e-9)
+
+    # And the rows are fifteen bytes each: two indices, an age, an exit and a weight. The
+    # compacted design is 23.5 a row on this fixture, where `StoredColumn` gets it down to
+    # single-byte codes because the fixture has few distinct values; on the production table
+    # it is 30, so the real ratio is two to one and here it is 1.57.
+    assert written.blocks.stored_bytes == 15 * written.n_episodes
+    assert written.blocks.stored_bytes < traced.blocks.stored_bytes
+
+
+def test_the_kernel_refuses_a_shape_with_covariates_and_a_pool() -> None:
+    """Two refusals rather than two workarounds.
+
+    A shape with covariates is a different model -- the `occupancy` finding in
+    `docs/decisions.md` is exactly that fit -- and the kernel's economy comes from a row
+    depending on two scalars. And the partition of the design's columns is discovered from the
+    data, so two processes scanning different shares could classify a column differently and
+    index into the parameter vector in two different ways, silently; the kernel makes the
+    second process unnecessary rather than making the agreement work.
+    """
+    from creditsurv.models.aft import fit_streamed
+
+    with pytest.raises(ValueError, match="one process"):
+        fit_streamed(
+            lambda part, of: iter(()),
+            COVARIATES,
+            FORMULA,
+            weights_col="loan_months",
+            workers=2,
+            calendar=CALENDAR,
+        )
+
+
+NARROWER = "credit_score + unemployment_change + C(purpose)"
+
+
+def test_two_models_are_fitted_from_one_reading_of_the_rows(weighted: pd.DataFrame) -> None:
+    """The change the branch is for: a selection's thirty fits, one scan.
+
+    A fit through the written-out kernel on the production table is 53 seconds of arithmetic
+    behind 12.1 minutes of reading, and every candidate used to pay that reading again -- the
+    fifteen step-7 fits of one logged run each began by recomputing the identical base
+    objective to twelve digits.
+
+    Here the rows are read once, with no formula involved, and two different models are fitted
+    from the same encoding. Each must land where a fit that read the rows for itself lands.
+    """
+    from creditsurv.data.panel import model_blocks
+    from creditsurv.models.aft import FITTERS, fit_aft
+    from creditsurv.models.blocks import encode_blocks, fit_encoded
+
+    encoding = encode_blocks(
+        model_blocks(weighted, COVARIATES, rows=5_000, weights_col="loan_months"),
+        loan=[name for name in COVARIATES if name not in CALENDAR],
+        calendar=CALENDAR,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+    )
+    assert encoding.episodes == len(weighted)
+    assert encoding.nbytes == 15 * len(weighted)
+
+    for formula in (FORMULA, NARROWER):
+        fresh = fit_aft(
+            weighted,
+            COVARIATES,
+            formula,
+            weights_col="loan_months",
+            calendar=CALENDAR,
+        )
+        fitter = FITTERS["weibull"](penalizer=0.0)
+        record = fit_encoded(fitter, encoding, formula=formula)
+
+        assert record.rows == fresh.n_episodes, formula
+        assert record.events == fresh.n_events, formula
+        moved = (fitter.params_ - fresh.fitter.params_).abs() / fresh.fitter.standard_errors_
+        assert moved.max() < 2 * POLISH_TOLERANCE_SE, f"{formula}: {moved.max()} se apart"
+        np.testing.assert_allclose(
+            fitter.standard_errors_.to_numpy(),
+            fresh.fitter.standard_errors_.to_numpy(),
+            rtol=1e-4,
+            err_msg=formula,
+        )
+        assert fitter.log_likelihood_ == pytest.approx(fresh.log_likelihood, rel=1e-9), formula
+
+
+def test_an_unclassified_covariate_has_no_index_to_be_looked_up_by(
+    weighted: pd.DataFrame,
+) -> None:
+    """Between them the two keys must cover every covariate the blocks carry.
+
+    A covariate in neither is not a slow fit but a wrong one: the encoded row would carry no
+    index that distinguishes it, so two rows differing only in it would share a design row.
+    """
+    from creditsurv.data.panel import model_blocks
+    from creditsurv.models.blocks import encode_blocks
+
+    with pytest.raises(ValueError, match="neither in the loan key"):
+        encode_blocks(
+            model_blocks(weighted, COVARIATES, rows=5_000, weights_col="loan_months"),
+            loan=["credit_score"],
+            calendar=CALENDAR,
+            lower_bound_col=LOWER_BOUND,
+            upper_bound_col=UPPER_BOUND,
+            event_col=EXACT_OBSERVATION,
+            entry_col=AGE_START,
+            weights_col="loan_months",
+        )
+
+
+def test_newton_goes_first_from_a_cold_start_and_not_only_from_a_warm_one(
+    weighted: pd.DataFrame,
+) -> None:
+    """The optimiser's long path was the price of an expensive Hessian, and it is not any more.
+
+    A cold fit used to be fifty to a hundred and forty SLSQP evaluations, because a Hessian cost
+    forty-nine times a value and a hundred of them was out of the question. The written-out
+    kernel puts a Hessian at about twice a value-and-gradient, and on the production table the
+    same specification from lifelines' own seed takes **10.18 minutes and 16 evaluations**
+    through damped Newton against **43.79 and 142** through SLSQP, to the same log-likelihood
+    of -10,691,177.6879.
+
+    So Newton is tried first from wherever the fit starts. What the engine promises is unchanged
+    and is what decides: the polish measures the distance to the optimum and refuses a fit it
+    cannot drive under a thousandth of a standard error.
+    """
+    fitter = FITTERS["weibull"]()
+    record = fit_interval_censoring_in_blocks(
+        fitter,
+        model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+        formula=FORMULA,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+        polish=True,
+    )
+
+    assert record.method == "newton", "no optimiser was needed"
+    assert record.polish_steps > 0, "and it got there by taking steps"
+    assert record.residual_error_se < POLISH_TOLERANCE_SE
+    assert fitter.log_likelihood_ < 0
+
+    # `polish=False` is the mode that reproduces lifelines exactly, so it keeps the optimiser.
+    stock = FITTERS["weibull"]()
+    without = fit_interval_censoring_in_blocks(
+        stock,
+        model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+        formula=FORMULA,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+        polish=False,
+    )
+    assert without.method == "slsqp"
+    # The two agree to a fraction of a standard error, and the polished one is the better of
+    # them: lifelines' SLSQP stops on a change of 1e-10 in the *mean* log-likelihood, which
+    # takes no account of how precisely the data pin a coefficient down, and on four quarters
+    # of the book it stopped up to 5.9 standard errors out.
+    apart = (fitter.params_ - stock.params_).abs() / fitter.standard_errors_
+    assert apart.max() < 0.1, f"{apart.max()} standard errors apart"
+    assert fitter.log_likelihood_ >= stock.log_likelihood_, "the polish finished the job"
+    assert without.residual_error_se > record.residual_error_se

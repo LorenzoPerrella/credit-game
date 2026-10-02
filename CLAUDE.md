@@ -40,8 +40,25 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
 - `creditsurv moratorium`, two fits and two backtests, took 4.8 hours.
 - **`report` starts its fit where the selection ended.** Same specification, same rows, so
   the selection's cached fit is already the optimum, and Newton goes from there instead of
-  SLSQP from lifelines' seed. A cell table rebuilt since has another identity, and the fit
-  starts cold.
+  SLSQP from lifelines' seed.
+- **A rebuilt table invalidates every cached fit, and the old optima are still worth having.**
+  `cells_identity` is the file's name, size and time of writing, so 36 of the 175 fits on disk
+  are a selection run on a table since replaced -- 17.5 hours of them. `Fits._elsewhere` finds
+  the same specification fitted on *another* table and hands it to the optimiser as a
+  **starting point, never as a result**: where a fit ends is settled by the polish, on the
+  gradient and curvature of these rows, under a thousandth of a standard error. Because such a
+  start is a guess about a different table, a `Pinned` from it is retried cold, which is the
+  one place that exception is not taken at its word.
+- **The rows are read once a selection, not once a candidate.** A fit through the written-out
+  kernel on the production table is **53 seconds of arithmetic behind 12.1 minutes of reading**,
+  and every one of a selection's thirty fits used to pay that reading again -- the fifteen
+  step-7 fits of one logged run each began by recomputing the identical base objective to
+  twelve digits. `blocks.encode_blocks` reads with **no formula involved** and keeps fifteen
+  bytes a row plus the key of every combination (1.09 GB for the training half); each
+  candidate's design is then two tables built by putting its formula through **3,001** loan
+  combinations and **153,309** calendar keys. `creditsurv select --traced` goes back to tracing
+  autograd and re-reading, which is what the equivalence tests hold the other to; `--workers`
+  applies to it only, because a reading is one process.
 - **Nothing holds the panel any more, and nothing should start again.** Every command that
   used to expand the training half now reads the cell file a batch at a time: the fits
   (`models.blocks`), the selection (`Fits(blocks=...)`), the views (`views.streamed`) and the
@@ -76,18 +93,44 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
 - **Never leave a long run unsaved.** One run completed a 154-minute fit and was then
   killed writing its reports, keeping nothing. That is why the cache exists.
 
-**Where a fit's time actually goes, measured.** On a 250,000-row block of the production table
-with 19 parameters: expanding the design 41 ms, a value 28 ms, a value with its gradient 66 ms,
-**a Hessian 1,381 ms -- 49 times the value**, because autograd takes it forward-over-reverse.
-A cold fit is 50 to 100 SLSQP evaluations and two to six Newton steps, so **the optimiser's
-path is ~85% of a fit and the Hessian ~15%**: speed lives in the evaluation, not in Newton.
+**Where a fit's time actually goes, measured -- and the first two figures of this were wrong
+for a year.** On a 250,000-cell batch of the production table at the **26** parameters rule 12
+produced: expanding the design 39.6 ms, a value with its gradient **234.9 ms**, a Hessian
+**1,373 ms**. The earlier reading of 66 ms was taken at **19** parameters, before the band
+factors, and was never retaken: it is 3.6x light, and it is where the apparent mystery of an
+evaluation reading ~180 s on the training half came from. The Hessian is **5.8 times a
+value-and-gradient**, not the 49 times a value that used to be quoted -- `minimize` is always
+called with `jac=True`, so nothing in the optimiser's path ever buys a value alone. And the cost
+per row **rises with the block size**, 0.83 to 1.33 µs a row from 49,000 to 968,000, because at
+26 columns a million-row block allocates 208 MB of design and ~700 MB of tape per evaluation.
+`docs/reports/engine.md` carries the table and the scaling to the whole training half.
+
+**And the sentence this paragraph used to end with -- "speed lives in the evaluation, not in
+Newton" -- was true only while a Hessian was unaffordable.** It is now about twice a
+value-and-gradient, so **damped Newton goes first from wherever a fit starts**, cold or warm,
+with the method chain behind it as the fallback. On the production table, the same
+specification from lifelines' own seed: **10.18 minutes and 16 evaluations** against **43.79
+and 142**, to the same log-likelihood of -10,691,177.6879. It begins 1.89e+03 standard errors
+out, the first six evaluations are refused as not a likelihood -- the damped step probing the
+clipped region -- and the damping ladder walks it in: 1.26e3, 706, 423, 207, 58.4, 6.61, 0.107,
+3.31e-05. `polish=False` keeps the optimiser, because that mode exists to reproduce lifelines
+exactly.
 
 And the evaluation is not arithmetic-bound. Profiled, a value-and-gradient spent **42% in
 autograd's tape, 32% in `pandas.take` and 20% copying**, with the likelihood's own exp and log a
 minority. The pandas half was waste -- the design and the masks the likelihood filters by do not
 change between evaluations -- and `_Slicer` removed it: **1.9x on every evaluation**. What is
 left is autograd, and reducing that means owning an analytic gradient, which is the second
-implementation of lifelines' likelihood this engine exists to avoid.
+implementation of lifelines' likelihood this engine exists to avoid. **That line was crossed
+deliberately on `perf/fit-engine`**, with the equivalence tests as the contract: every column of
+the design is a function of the loan combination (3,001 of them) or of the calendar key (153,309)
+and never of both, so `eta = A[i] + B[j]`, the interval is always one month and exact
+observations never occur. Measured on the real cardinalities, one thread: a value-and-gradient
+over 53.3 million rows in **10.2 s** and one with the Hessian in **29.9**, against 57.8 and 396
+-- **5.1x and 11.8x** -- with the whole training half resident in 0.81 GB of fifteen-byte rows.
+An earlier draft projected 18x and 41x from a prototype that computed the interval probability
+with one exponential, which matches lifelines only where no clip binds; see
+`docs/reports/engine.md`.
 
 ## lifelines' optimiser stops short of the optimum
 
@@ -361,6 +404,11 @@ per quarter; the decisive one is that parquet row counts still match the manifes
 ## Conventions
 
 - `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not network"`
+- **And `mypy` on the other leg of the matrix before pushing.** `tool.mypy` sets
+  `python_version = "3.12"`, so a local run checks one of the two the CI runs, and numpy's
+  stubs infer differently under 3.11: **twice now** a branch has gone green locally and failed
+  CI on `no-any-return` alone, in a file whose logic was fine. `UV_PYTHON=3.11 uv sync -q &&
+  UV_PYTHON=3.11 uv run mypy`, then sync back.
 - **Notebooks carry evidence, not logic.** Every statistic is a tested function in the
   package; a notebook calls it and shows the result. If a cell contains an algorithm,
   the algorithm is in the wrong place.
