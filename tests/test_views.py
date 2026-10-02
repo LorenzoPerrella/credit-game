@@ -378,7 +378,7 @@ def test_the_cycle_criterion_counts_the_years_inside_the_band() -> None:
     """The previous model ran 0.47 to 1.60 across years and nothing said whether that was
     acceptable. Rule 5 asks for 70% of years in the band, and this is where it is counted.
     """
-    from creditsurv.views.competing import cycle_in_band
+    from creditsurv.backtest.metrics import cycle_in_band
 
     good = pd.DataFrame({"actual_over_expected": [0.9, 1.0, 1.1, 1.2, 0.85, 1.3, 0.95, 1.05]})
     bad = pd.DataFrame({"actual_over_expected": [0.47, 1.60, 1.1, 0.5, 1.9, 1.0]})
