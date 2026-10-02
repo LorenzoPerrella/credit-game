@@ -596,20 +596,27 @@ def _regressors(formula: str, frame: pd.DataFrame) -> Any:
 
 
 def _encoded(frame: pd.DataFrame, formula: str) -> tuple[Factorisation, Any, np.ndarray]:
-    """Encode a book against one formula, through lifelines' expansion of it."""
+    """Encode a book against one formula, through lifelines' expansion of it.
+
+    Only the **scale's** columns are handed over, exactly as `blocks._scan` hands them over.
+    lifelines' design carries the shape's column too -- a constant, and so a function of both
+    sides -- and a version of this that passed the whole design to both sides agreed with
+    itself while the engine fitted a model in which the shape's coefficient was read twice.
+    """
     covariates = frame.drop(columns=["age", "loan_months", "outcome"])
     regressors = _regressors(formula, covariates)
     design = regressors.transform_df(covariates)
     values = design.to_numpy(dtype=np.float64)
+    scale = [position for position, (block, _) in enumerate(design.columns) if block == "lambda_"]
     factorisation = Factorisation(
         loan=LOAN,
         calendar=CALENDAR,
         age_column="age",
-        columns=[str(name) for _, name in design.columns],
+        columns=[str(name) for block, name in design.columns if block == "lambda_"],
     )
     factorisation.add(
         frame,
-        values,
+        values[:, scale],
         event=frame["outcome"].to_numpy(dtype=bool),
         weight=frame["loan_months"].to_numpy(dtype=float),
     )
@@ -629,7 +636,7 @@ def test_the_key_frames_rebuild_the_tables_the_rows_produced() -> None:
     factorisation, regressors, values = _encoded(frame, FULL)
 
     from_rows = factorisation.tables()
-    from_keys = factorisation.expand(regressors.transform_df)
+    from_keys = factorisation.expand(regressors.transform_df, primary="lambda_")
 
     np.testing.assert_array_equal(from_keys.loan, from_rows[0])
     np.testing.assert_array_equal(from_keys.calendar, from_rows[1])
@@ -645,6 +652,13 @@ def test_the_key_frames_rebuild_the_tables_the_rows_produced() -> None:
     np.testing.assert_array_equal(from_keys.high, values.max(axis=0))
     assert factorisation.rows == len(frame)
 
+    # The moments cover every column -- the shape's included, because that is what gives each
+    # coefficient its scale -- while the tables hold only the scale's. Reading the shape's
+    # constant column as a loan-side covariate as well is the defect this asserts against: it
+    # stopped a real fit 2.1 standard errors out while the polish reported 2.5e-4.
+    assert len(from_keys.columns) == values.shape[1]
+    assert from_keys.loan.shape[1] + from_keys.calendar.shape[1] == values.shape[1] - 1
+
 
 def test_a_different_model_is_expanded_without_reading_a_row() -> None:
     """The point of the whole thing: a candidate's tables cost 3,001 rows, not 72 million.
@@ -659,7 +673,7 @@ def test_a_different_model_is_expanded_without_reading_a_row() -> None:
     widest, _, _ = _encoded(frame, FULL)
     narrow, regressors, values = _encoded(frame, SUBSET)
 
-    expanded = widest.expand(regressors.transform_df)
+    expanded = widest.expand(regressors.transform_df, primary="lambda_")
     from_rows = narrow.tables()
 
     np.testing.assert_array_equal(expanded.loan, from_rows[0])
@@ -667,11 +681,8 @@ def test_a_different_model_is_expanded_without_reading_a_row() -> None:
     np.testing.assert_array_equal(expanded.loan_positions, from_rows[2])
     np.testing.assert_array_equal(expanded.calendar_positions, from_rows[3])
     np.testing.assert_allclose(expanded.first, values.sum(axis=0), rtol=1e-12)
-    assert len(expanded.columns) < len(
-        widest.expand(
-            _regressors(FULL, frame.drop(columns=["age", "loan_months", "outcome"])).transform_df
-        ).columns
-    )
+    wider = _regressors(FULL, frame.drop(columns=["age", "loan_months", "outcome"]))
+    assert len(expanded.columns) < len(widest.expand(wider.transform_df, primary="lambda_").columns)
 
 
 def test_a_coupled_column_is_refused_when_the_tables_are_built_from_the_keys() -> None:
@@ -689,4 +700,4 @@ def test_a_coupled_column_is_refused_when_the_tables_are_built_from_the_keys() -
     )
 
     with pytest.raises(ValueError, match="move with the loan"):
-        factorisation.expand(coupled.transform_df)
+        factorisation.expand(coupled.transform_df, primary="lambda_")

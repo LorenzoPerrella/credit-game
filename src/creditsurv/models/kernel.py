@@ -483,7 +483,7 @@ class Factorisation:
         loan: Sequence[str],
         calendar: Sequence[str],
         age_column: str,
-        columns: Sequence[str],
+        columns: Sequence[str] = (),
     ) -> None:
         self._loan = tuple(loan)
         self._calendar = (*calendar, age_column)
@@ -508,22 +508,42 @@ class Factorisation:
         self._calendar_counts = np.zeros(0, dtype=np.int64)
 
     def add(
-        self, frame: pd.DataFrame, design: np.ndarray, *, event: np.ndarray, weight: np.ndarray
+        self,
+        frame: pd.DataFrame,
+        design: np.ndarray | None = None,
+        *,
+        event: np.ndarray,
+        weight: np.ndarray,
     ) -> Rows:
-        """Encode one block, growing the tables with whatever combinations are new to it."""
+        """Encode one block, growing the tables with whatever combinations are new to it.
+
+        With a ``design`` the partition is also decided from it and **verified against these
+        rows**, which is what makes a declared split a fact. Without one, nothing but the keys
+        and the counts is kept, and :meth:`expand` decides the partition from the key frames
+        when a model asks for its tables -- which is the point of encoding at all: the rows are
+        read once and no formula is involved, so there is no design to expand, no moments to
+        accumulate over 26 columns and no 250,000-row block to put through formulaic.
+        """
         i = self._loan_codes.of(_stable_codes(frame, self._loan))
         j = self._calendar_codes.of(_stable_codes(frame, self._calendar))
-        if self._loan_positions is None:
+        if design is not None and self._loan_positions is None:
             self._decide(design, i, j)
-        assert self._loan_positions is not None
-        assert self._calendar_positions is not None
-        fresh = self._grow(self._loan_rows, design[:, self._loan_positions], i)
-        self._keys(self._loan_keys, frame, self._loan, fresh)
-        fresh = self._grow(self._calendar_rows, design[:, self._calendar_positions], j)
-        self._keys(self._calendar_keys, frame, self._calendar, fresh)
+        if design is not None:
+            assert self._loan_positions is not None
+            assert self._calendar_positions is not None
+            fresh = self._grow(self._loan_rows, design[:, self._loan_positions], i)
+            self._keys(self._loan_keys, frame, self._loan, fresh)
+            fresh = self._grow(self._calendar_rows, design[:, self._calendar_positions], j)
+            self._keys(self._calendar_keys, frame, self._calendar, fresh)
+        else:
+            self._keys(self._loan_keys, frame, self._loan, self._unseen(self._loan_keys, i))
+            self._keys(
+                self._calendar_keys, frame, self._calendar, self._unseen(self._calendar_keys, j)
+            )
         self._loan_counts = _tallied(self._loan_counts, i, len(self._loan_codes))
         self._calendar_counts = _tallied(self._calendar_counts, j, len(self._calendar_codes))
-        self._verify(design, i, j)
+        if design is not None:
+            self._verify(design, i, j)
         age = frame[self._age_column].to_numpy()
         if age.min() < 0 or age.max() > _MAX_AGE:
             message = (
@@ -553,7 +573,19 @@ class Factorisation:
             pd.concat(self._calendar_keys, ignore_index=True),
         )
 
-    def expand(self, transform: Callable[[pd.DataFrame], pd.DataFrame]) -> Expanded:
+    def probe(self) -> pd.DataFrame:
+        """One frame carrying every covariate column, for a formula to be built against.
+
+        The loan combinations with the calendar held at one key. What it is for is lifelines'
+        ``CovariateParameterMappings``, which reads the dtypes and the categorical levels to
+        decide the design's columns, and must see the levels the rows were encoded against.
+        """
+        loan_keys, calendar_keys = self.keys()
+        return _completed(loan_keys, calendar_keys)
+
+    def expand(
+        self, transform: Callable[[pd.DataFrame], pd.DataFrame], *, primary: str
+    ) -> Expanded:
         """A model's two design tables and column moments, from the key frames alone.
 
         ``transform`` is the model's own expansion -- lifelines'
@@ -563,6 +595,13 @@ class Factorisation:
         function of the calendar key; the intercept is both and goes to the loan side. A column
         that moves on both couples the two sides, which a sum of two tables cannot represent,
         and it is refused by name.
+
+        ``primary`` names the **scale's** parameter block, and the tables hold only its
+        columns. lifelines' design carries the shape's column too -- a constant, and therefore
+        a function of both sides -- so without this the shape's coefficient would be read once
+        as the shape and again as a loan-side column, and the fit would stop 2.1 standard
+        errors out while reporting 2.5e-4. The moments still cover every column, because that
+        is what gives each coefficient its scale.
         """
         loan_keys, calendar_keys = self.keys()
         on_loan = transform(_completed(loan_keys, calendar_keys))
@@ -585,16 +624,14 @@ class Factorisation:
                 "belongs on the autograd evaluator."
             )
             raise ValueError(message)
-        loan_positions = np.flatnonzero(held)
-        calendar_positions = np.flatnonzero(~held & moving)
-        loan = by_loan[:, loan_positions]
-        calendar = by_calendar[:, calendar_positions]
+        everywhere_loan = np.flatnonzero(held)
+        everywhere_calendar = np.flatnonzero(~held & moving)
         width = len(columns)
         first, second = np.zeros(width), np.zeros(width)
         low, high = np.zeros(width), np.zeros(width)
         for positions, table, counts in (
-            (loan_positions, loan, self._loan_counts),
-            (calendar_positions, calendar, self._calendar_counts),
+            (everywhere_loan, by_loan[:, everywhere_loan], self._loan_counts),
+            (everywhere_calendar, by_calendar[:, everywhere_calendar], self._calendar_counts),
         ):
             if not positions.size:
                 continue
@@ -603,6 +640,11 @@ class Factorisation:
             second[positions] = counts @ (table * table)
             low[positions] = table[seen].min(axis=0)
             high[positions] = table[seen].max(axis=0)
+        scale = _only(cast("pd.MultiIndex", columns), primary)
+        loan_positions = _within(everywhere_loan, scale)
+        calendar_positions = _within(everywhere_calendar, scale)
+        loan = by_loan[:, scale.start + loan_positions]
+        calendar = by_calendar[:, scale.start + calendar_positions]
         return Expanded(
             columns=cast("pd.MultiIndex", columns),
             loan=loan,
@@ -671,6 +713,27 @@ class Factorisation:
             index = int(code)
             if index in missing:
                 rows[index] = design[position].copy()
+                taken[index] = position
+                missing.discard(index)
+                if not missing:
+                    break
+        return taken
+
+    @staticmethod
+    def _unseen(pieces: list[pd.DataFrame], codes: np.ndarray) -> dict[int, int]:
+        """Which combinations this block is the first to carry, and where they are in it.
+
+        The same accounting `_grow` does while storing a design row, for the path that stores
+        no design: codes are handed out in order of first appearance, so the new ones are the
+        indices past the end of what has been kept.
+        """
+        held = sum(len(piece) for piece in pieces)
+        wanted = int(codes.max()) + 1 if len(codes) else 0
+        missing = set(range(held, wanted))
+        taken: dict[int, int] = {}
+        for position, code in enumerate(codes):
+            index = int(code)
+            if index in missing:
                 taken[index] = position
                 missing.discard(index)
                 if not missing:
@@ -915,6 +978,29 @@ class Expanded:
     second: np.ndarray
     low: np.ndarray
     high: np.ndarray
+
+
+def _only(columns: pd.MultiIndex, parameter: str) -> slice:
+    """Where one parameter's columns sit in the design, as a slice.
+
+    The design is built in the order of its MultiIndex, so a parameter's columns are adjacent;
+    an order that broke that would make the slice wrong rather than slow, so it is refused.
+    """
+    outer = columns.get_level_values(0)
+    positions = np.flatnonzero(outer == parameter)
+    if not positions.size:
+        message = f"The design has no columns for {parameter!r}."
+        raise ValueError(message)
+    if positions[-1] - positions[0] + 1 != len(positions):
+        message = f"The columns of {parameter!r} are not adjacent in the design."
+        raise ValueError(message)
+    return slice(int(positions[0]), int(positions[-1]) + 1)
+
+
+def _within(positions: np.ndarray, scale: slice) -> np.ndarray:
+    """Those positions that fall inside the slice, numbered from its start."""
+    inside = positions[(positions >= scale.start) & (positions < scale.stop)]
+    return np.asarray(inside - scale.start)
 
 
 def _unchanging(values: np.ndarray) -> np.ndarray:

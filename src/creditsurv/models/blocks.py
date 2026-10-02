@@ -59,7 +59,7 @@ from autograd.misc import flatten
 from lifelines import exceptions, utils
 from scipy.optimize import minimize
 
-from creditsurv.models.kernel import Factorisation, Kernel, Rows
+from creditsurv.models.kernel import Expanded, Factorisation, Kernel, Rows
 
 if TYPE_CHECKING:
     from multiprocessing.queues import Queue
@@ -474,6 +474,9 @@ class _Scan:
     #: and a weight, fifteen bytes each, with the design never stored at all.
     encoded: list[Rows] = field(default_factory=list)
     factorisation: Factorisation | None = None
+    #: This model's two design tables, when they came from the key frames rather than from the
+    #: rows -- which is how a fit from an :class:`Encoding` gets them.
+    expanded: Expanded | None = None
     rows: int = 0
     first: np.ndarray | None = None
     second: np.ndarray | None = None
@@ -822,6 +825,217 @@ def _fit_from_scan(
     )
 
 
+@dataclass(frozen=True)
+class Encoding:
+    """The rows read **once**, reusable by every model whose covariates it covers.
+
+    A fit through the written-out kernel on the production table is 53 seconds of arithmetic
+    behind 12.1 minutes of reading, and a selection pays that reading once per candidate --
+    about thirty times, plus the fifteen step-7 fits that each begin by recomputing the
+    identical base objective to twelve digits. None of it is necessary: the rows carry two
+    indices into the combinations of a widest key, and every design column is a function of
+    one side, so a candidate's two tables are built by putting its formula through 3,001 and
+    153,309 rows.
+
+    So this pass involves no formula at all. There is no design to expand, no moments to
+    accumulate over 26 columns and nothing to put through formulaic -- only the keys, the
+    counts, and fifteen bytes a row.
+    """
+
+    factorisation: Factorisation
+    rows: tuple[Rows, ...]
+    #: The distinct ``(lower, upper, entry)`` with their weights summed, which is all the
+    #: univariate seed needs: lifelines fits the matching one-parameter model to the bounds,
+    #: and rows sharing them contribute identically.
+    bounds: pd.Series
+    events: float
+    weight: float
+    categories: dict[str, pd.Index]
+    names: tuple[str, str, str, str | None, str | None]
+
+    @property
+    def episodes(self) -> int:
+        return self.factorisation.rows
+
+    @property
+    def nbytes(self) -> int:
+        return sum(block.nbytes for block in self.rows)
+
+
+def encode_blocks(
+    blocks: Iterable[pd.DataFrame],
+    *,
+    loan: Sequence[str],
+    calendar: Sequence[str],
+    lower_bound_col: str,
+    upper_bound_col: str,
+    event_col: str,
+    entry_col: str | None = None,
+    weights_col: str | None = None,
+) -> Encoding:
+    """Read the rows once, keeping fifteen bytes of each and the key of every combination.
+
+    ``loan`` names the covariates the cell key carries and ``calendar`` those that are
+    functions of the calendar; between them they must cover every covariate column the blocks
+    carry, because a covariate in neither has no index to be looked up by. The lists are the
+    project's own declaration -- ``config.MACRO_CANDIDATES`` is the calendar side, and its
+    comment says why: "a macro covariate is a function of the vintage quarter and the loan
+    age, both already in the aggregation key".
+    """
+    names = (lower_bound_col, upper_bound_col, event_col, entry_col, weights_col)
+    special = [name for name in names if name is not None]
+    wanted = {*loan, *calendar}
+    scan = _Scan()
+    factorisation: Factorisation | None = None
+    tallies: list[pd.Series] = []
+
+    for number, frame in enumerate(blocks):
+        if frame.empty:
+            continue
+        lower = frame[lower_bound_col].to_numpy(dtype=np.float64)
+        upper = frame[upper_bound_col].to_numpy(dtype=np.float64)
+        exact = frame[event_col].to_numpy(dtype=bool)
+        if ((lower == upper) != exact).any():
+            message = (
+                "For all rows, lower_bound == upper_bound if and only if event observed = 1 "
+                "(uncensored). Likewise, lower_bound < upper_bound if and only if event "
+                "observed = 0 (censored)"
+            )
+            raise ValueError(message)
+        if (lower > upper).any():
+            message = "All upper bound measurements must be >= lower bound measurements."
+            raise ValueError(message)
+        weights = (
+            frame[weights_col].to_numpy(dtype=np.float64)
+            if weights_col is not None
+            else np.ones(len(frame))
+        )
+        entries = (
+            frame[entry_col].to_numpy(dtype=np.float64)
+            if entry_col is not None
+            else np.zeros(len(frame))
+        )
+        covariates = frame.drop(columns=special)
+        _check_categories(scan, covariates, number)
+        unclassified = [name for name in covariates.columns if name not in wanted]
+        if unclassified:
+            message = (
+                f"The covariate(s) {', '.join(map(str, unclassified))} are neither in the loan "
+                "key nor in the calendar key, so an encoded row has no index to look them up "
+                "by. Name them on one side, or drop them from the block's columns."
+            )
+            raise ValueError(message)
+        used_upper = np.clip(upper, 0, INFINITY_STAND_IN)
+        _check_rows_like_lifelines(used_upper, exact, weights, entries, names)
+        if factorisation is None:
+            factorisation = Factorisation(
+                loan=[name for name in covariates.columns if name in set(loan)],
+                calendar=[name for name in covariates.columns if name in set(calendar)],
+                age_column=entry_col if entry_col is not None else lower_bound_col,
+            )
+        scan.encoded.append(
+            # The exit is whether the interval closes, never `exact`: on this panel no
+            # observation is exact, and the event is carried by a finite upper bound.
+            factorisation.add(frame, event=np.isfinite(upper), weight=weights)
+        )
+        distinct = pd.DataFrame(
+            {"lower": lower, "upper": used_upper, "entry": entries, "weight": weights}
+        )
+        tallies.append(distinct.groupby(["lower", "upper", "entry"], sort=False)["weight"].sum())
+        scan.rows += len(frame)
+        scan.events += float(weights[np.isfinite(upper)].sum())
+        scan.weight += float(weights.sum())
+        log.debug("block %d: %s rows", number, f"{len(frame):,}")
+
+    if factorisation is None:
+        message = "Nothing was encoded: every block was empty."
+        raise ValueError(message)
+    held = sum(block.nbytes for block in scan.encoded)
+    log.info(
+        "encoded %s rows in %d blocks: %.2f GB, %.0f bytes a row; %s loan and %s calendar keys",
+        f"{scan.rows:,}",
+        len(scan.encoded),
+        held / 1e9,
+        held / max(scan.rows, 1),
+        f"{len(factorisation.keys()[0]):,}",
+        f"{len(factorisation.keys()[1]):,}",
+    )
+    return Encoding(
+        factorisation=factorisation,
+        rows=tuple(scan.encoded),
+        bounds=pd.concat(tallies).groupby(level=[0, 1, 2]).sum(),
+        events=scan.events,
+        weight=scan.weight,
+        categories=dict(scan.categories),
+        names=names,
+    )
+
+
+def fit_encoded(
+    fitter: ParametericAFTRegressionFitter,
+    encoding: Encoding,
+    *,
+    formula: str,
+    ancillary: str | bool | None = None,
+    initial_point: np.ndarray | dict[str, np.ndarray] | pd.Series | None = None,
+    fit_options: dict[str, Any] | None = None,
+    show_progress: bool = False,
+    polish: bool = True,
+    prefer: str | None = None,
+    floor: float | None = None,
+) -> BlockFit:
+    """Fit one model from rows that were read once, without reading them again.
+
+    The model's design is two tables, built by putting its formula through the key frames --
+    3,001 loan combinations and 153,309 calendar keys on the production table -- and its
+    column moments come from the counts the encoding kept, because a column is a function of
+    one side and its sum over every row is the sum over combinations of its value times its
+    count.
+    """
+    started = time.perf_counter()
+    _set_censoring(fitter, encoding.names)
+    regressors = utils.CovariateParameterMappings(
+        _seed_regressors(fitter, formula, ancillary),
+        encoding.factorisation.probe(),
+        force_intercept=fitter.fit_intercept,
+        force_no_intercept=fitter.force_no_intercept,
+    )
+    expanded = encoding.factorisation.expand(
+        regressors.transform_df, primary=fitter._primary_parameter_name
+    )
+    # The design checks lifelines makes, on the two tables rather than on 72 million rows:
+    # a design column is a function of one side, so a NaN in it is a NaN in a key.
+    utils.check_nans_or_infs(expanded.loan)
+    utils.check_nans_or_infs(expanded.calendar)
+    scan = _Scan(
+        regressors=regressors,
+        columns=expanded.columns,
+        categories=dict(encoding.categories),
+        encoded=list(encoding.rows),
+        factorisation=encoding.factorisation,
+        expanded=expanded,
+        rows=encoding.episodes,
+        first=expanded.first,
+        second=expanded.second,
+        low=expanded.low,
+        high=expanded.high,
+        bounds=[encoding.bounds],
+        events=encoding.events,
+        weight=encoding.weight,
+    )
+    return _fit_from_scan(
+        fitter,
+        scan,
+        initial_point=initial_point,
+        fit_options=fit_options,
+        show_progress=show_progress,
+        polish=polish,
+        prefer=prefer,
+        floor=floor,
+        started=started,
+    )
+
+
 def _seed_regressors(
     fitter: ParametericAFTRegressionFitter, formula: str, ancillary: str | bool | None
 ) -> dict[str, str]:
@@ -1016,7 +1230,12 @@ def _kernel(
             "would be reading a different number."
         )
         raise ValueError(message)
-    loan, calendar, loan_positions, calendar_positions = scan.factorisation.tables()
+    expanded = scan.expanded
+    if expanded is None:
+        loan, calendar, loan_positions, calendar_positions = scan.factorisation.tables()
+    else:
+        loan, calendar = expanded.loan, expanded.calendar
+        loan_positions, calendar_positions = expanded.loan_positions, expanded.calendar_positions
     loan_index = primary.start + loan_positions
     calendar_index = primary.start + calendar_positions
     return Kernel(
@@ -1093,14 +1312,31 @@ def _check_like_lifelines(
     names: tuple[str, str, str, str | None, str | None],
 ) -> None:
     """``ParametricRegressionFitter._check_values_pre_fitting``, on one block."""
-    *_, entry_col, weights_col = names
     utils.check_for_numeric_dtypes_or_raise(design)
     utils.check_nans_or_infs(design)
+    _check_rows_like_lifelines(upper, exact, weights, entries, names, robust=fitter.robust)
+
+
+def _check_rows_like_lifelines(
+    upper: np.ndarray,
+    exact: np.ndarray,
+    weights: np.ndarray,
+    entries: np.ndarray,
+    names: tuple[str, str, str, str | None, str | None],
+    *,
+    robust: bool = False,
+) -> None:
+    """The half of lifelines' pre-fitting checks that is about the rows, not the design.
+
+    Separated because an encoding pass has no design to check: it reads the rows once and
+    without a formula, and each model's own columns are checked when its tables are built.
+    """
+    *_, entry_col, weights_col = names
     utils.check_nans_or_infs(upper)
     utils.check_nans_or_infs(exact)
     utils.check_positivity(upper)
     if weights_col is not None:
-        if (weights.astype(int) != weights).any() and not fitter.robust:
+        if (weights.astype(int) != weights).any() and not robust:
             warnings.warn(
                 "Non-integer weights bias the naive variance estimates.",
                 exceptions.StatisticalWarning,

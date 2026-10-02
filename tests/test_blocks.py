@@ -1101,3 +1101,82 @@ def test_the_kernel_refuses_a_shape_with_covariates_and_a_pool() -> None:
             workers=2,
             calendar=CALENDAR,
         )
+
+
+NARROWER = "credit_score + unemployment_change + C(purpose)"
+
+
+def test_two_models_are_fitted_from_one_reading_of_the_rows(weighted: pd.DataFrame) -> None:
+    """The change the branch is for: a selection's thirty fits, one scan.
+
+    A fit through the written-out kernel on the production table is 53 seconds of arithmetic
+    behind 12.1 minutes of reading, and every candidate used to pay that reading again -- the
+    fifteen step-7 fits of one logged run each began by recomputing the identical base
+    objective to twelve digits.
+
+    Here the rows are read once, with no formula involved, and two different models are fitted
+    from the same encoding. Each must land where a fit that read the rows for itself lands.
+    """
+    from creditsurv.data.panel import model_blocks
+    from creditsurv.models.aft import FITTERS, fit_aft
+    from creditsurv.models.blocks import encode_blocks, fit_encoded
+
+    encoding = encode_blocks(
+        model_blocks(weighted, COVARIATES, rows=5_000, weights_col="loan_months"),
+        loan=[name for name in COVARIATES if name not in CALENDAR],
+        calendar=CALENDAR,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+    )
+    assert encoding.episodes == len(weighted)
+    assert encoding.nbytes == 15 * len(weighted)
+
+    for formula in (FORMULA, NARROWER):
+        fresh = fit_aft(
+            weighted,
+            COVARIATES,
+            formula,
+            weights_col="loan_months",
+            calendar=CALENDAR,
+        )
+        fitter = FITTERS["weibull"](penalizer=0.0)
+        record = fit_encoded(fitter, encoding, formula=formula)
+
+        assert record.rows == fresh.n_episodes, formula
+        assert record.events == fresh.n_events, formula
+        moved = (fitter.params_ - fresh.fitter.params_).abs() / fresh.fitter.standard_errors_
+        assert moved.max() < 2 * POLISH_TOLERANCE_SE, f"{formula}: {moved.max()} se apart"
+        np.testing.assert_allclose(
+            fitter.standard_errors_.to_numpy(),
+            fresh.fitter.standard_errors_.to_numpy(),
+            rtol=1e-4,
+            err_msg=formula,
+        )
+        assert fitter.log_likelihood_ == pytest.approx(fresh.log_likelihood, rel=1e-9), formula
+
+
+def test_an_unclassified_covariate_has_no_index_to_be_looked_up_by(
+    weighted: pd.DataFrame,
+) -> None:
+    """Between them the two keys must cover every covariate the blocks carry.
+
+    A covariate in neither is not a slow fit but a wrong one: the encoded row would carry no
+    index that distinguishes it, so two rows differing only in it would share a design row.
+    """
+    from creditsurv.data.panel import model_blocks
+    from creditsurv.models.blocks import encode_blocks
+
+    with pytest.raises(ValueError, match="neither in the loan key"):
+        encode_blocks(
+            model_blocks(weighted, COVARIATES, rows=5_000, weights_col="loan_months"),
+            loan=["credit_score"],
+            calendar=CALENDAR,
+            lower_bound_col=LOWER_BOUND,
+            upper_bound_col=UPPER_BOUND,
+            event_col=EXACT_OBSERVATION,
+            entry_col=AGE_START,
+            weights_col="loan_months",
+        )
