@@ -258,7 +258,7 @@ def test_the_safe_exponential_reports_the_derivative_lifelines_reports() -> None
     autograd's surface, not on the mathematical one. Reproducing the cap but not its derivative
     would move a wall this engine's guards are calibrated against.
     """
-    from creditsurv.models.kernel import _Jet, _safe_exp
+    from creditsurv.models.kernel.likelihood import _Jet, _safe_exp
 
     above = MAX_EXPONENT + 10.0
     jet = _safe_exp(_Jet(np.array([above]), de=1.0))

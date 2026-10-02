@@ -50,11 +50,12 @@ fit. Three implementations satisfy it: autograd over a stored design, the writte
 likelihood, and the pool that adds up what several processes computed. Everything above it is
 algebra on a handful of numbers and does not know which one it has.
 
-**The arithmetic, as the objective sees it.** `models/kernel` takes the encoded rows and the two
-design tables and returns a scalar, a gradient and a curvature. It imports **nothing** from this
-package — the test checks that — because that is what makes a compiled implementation a drop-in
-rather than a fork. The moment it reads a declared constant it stops being a port and becomes
-part of the model.
+**The arithmetic, as the objective sees it.** `models/kernel/terms.py` takes the encoded rows
+and the two design tables and returns a scalar, a gradient and a curvature. The package imports
+**nothing** from the rest of this one — the test checks that — because that is what makes a
+compiled implementation a drop-in rather than a fork. The moment it reads a declared constant it
+stops being a port and becomes part of the model. Its two siblings are the row's likelihood with
+lifelines' clips reproduced exactly, and the factorisation that turns a design into two tables.
 
 ## The patterns, named where they are
 
