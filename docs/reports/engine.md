@@ -132,6 +132,42 @@ four for the weight, which is a count of loan-months and therefore an integer --
 bytes a row an expanded 26-column design costs. The whole training half is 0.81 GB of rows and
 tables, with a peak of 1.31 GB including the chunk's working set.
 
+## The same fit, on the whole book
+
+The equivalence tests run on a fixture. This is the same question at the size the engine exists
+for: the specification the selection ended on, refitted through the written-out kernel on the
+production table, started from the optimum already in the cache. If the two paths are the same
+estimator, Newton has nothing to do.
+
+| | |
+|---|---|
+| rows | **72,671,500**, and 1,440,771 exits -- the cached fit's own counts |
+| log-likelihood | **-10,691,177.687932** against the cache's -10,691,177.687932, 5.55e-16 relative |
+| coefficients | **0** standard errors moved |
+| standard errors | 7.45e-13 relative at worst |
+| rows held | **1.09 GB**, 15 bytes a row, 443 blocks, **one** process |
+| footprint | 2.49 GB |
+| one value-and-gradient | **17 s** |
+| the whole fit after the scan | **53 s** |
+| the scan | **12.1 minutes** |
+
+The standard errors are the stronger half of that. They come from the curvature, so agreeing to
+seven parts in 10^13 is the analytic Hessian confirmed against autograd's on 72 million rows --
+not on a fixture, and not on the gradient alone.
+
+**And it says where the time now is.** Fitting is 53 seconds and reading is twelve minutes. The
+scan was always this expensive; it was paid by four processes at once and nobody noticed, because
+an evaluation cost as much again. What it buys is spent immediately: every fit of a selection
+re-reads the whole cell file, re-derives the macro family, rebuilds the design and throws all of
+it away, **once per candidate**, and the fifteen step-7 fits of one logged run each began by
+recomputing the identical base objective to twelve digits.
+
+That is the next thing to fix, and the kernel is what makes it possible rather than what makes
+it necessary. The encoded rows are 1.09 GB, so they can simply be kept; and because every design
+column is a function of the loan combination or of the calendar key, a *different* model's two
+tables are built by putting the formula through frames of **3,001 and 153,309 rows**. One scan,
+then every candidate fitted without touching the 72 million again.
+
 ## The gate for compiling anything
 
 The compiled kernel is measured **against the NumPy above**, not against autograd. Measuring it
@@ -145,6 +181,12 @@ themselves are 1.3 ns a row for an exponential, 0.3 for a multiply, 1.7 for a ga
 a scatter-add into 153,309 bins. A fused loop holds the six jet components in registers, lets
 the compiler delete the structural zeros outright, and traverses the fifteen bytes of a row once.
 
-So the gate: **value+gradient+Hessian over the whole training half at least three times faster
-than 29.9 s, with resident memory no higher than the 1.31 GB measured here.** If it misses, it
-is abandoned and the number is reported here.
+So the gate, if it is still worth passing: **value+gradient+Hessian over the whole half at
+least three times faster than 29.9 s, with resident memory no higher than the 1.31 GB measured
+here.**
+
+**But the measurement above has moved it down the queue.** A fit is now 53 seconds of
+arithmetic behind twelve minutes of reading, so compiling the evaluation would take the 53 to
+perhaps fifteen and leave the twelve minutes exactly where they are. Removing the re-scan is
+worth an order of magnitude on a selection where the compiled kernel is worth a few per cent,
+and it should be done first. The gate stands; the priority does not.
