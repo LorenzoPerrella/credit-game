@@ -37,14 +37,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
-import numpy as np
 import pandas as pd
 from lifelines import exceptions
 
 from creditsurv.config import (
-    ECONOMIC_DIMENSION,
     MACRO_CANDIDATES,
     MACRO_ELIMINATION_PRIORITY,
 )
@@ -53,6 +51,15 @@ from creditsurv.data.panel import (
 )
 from creditsurv.explore import collinear_pairs
 from creditsurv.models.fits import _terms
+from creditsurv.models.rules import (
+    CORRELATION_THRESHOLD,
+    MATERIALITY_THRESHOLD,
+    immaterial,
+    not_identified,
+    screen,
+    stability_table,
+    worst,
+)
 from creditsurv.models.selection import (
     EXPECTED_SIGNS,
     PVALUE_THRESHOLD,
@@ -64,9 +71,10 @@ from creditsurv.models.selection import (
 from creditsurv.models.specification import Specification
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping, Sequence
+    from collections.abc import Mapping, Sequence
 
-    from creditsurv.models.aft import FitResult
+    import numpy as np
+
     from creditsurv.models.fits import Fits
 
 log = logging.getLogger(__name__)
@@ -99,16 +107,6 @@ BASE_CATEGORICAL: Final[dict[str, str]] = {
     "occupancy": "owner_occupied",
     "harp": "standard",
 }
-
-#: Correlation above which a pair is reported at step 5.
-CORRELATION_THRESHOLD: Final = 0.8
-
-#: Effect of one standard deviation on log survival time below which a macro covariate is
-#: removed at step 10. Fixed in `docs/rules.md` before any fit of this branch: 0.02 of log
-#: survival time is about a 2% change in expected time to default per standard deviation,
-#: the smallest effect this data can tell from a difference in specification. Identification,
-#: not significance, is the reason -- at 60 million episodes every p-value is zero.
-MATERIALITY_THRESHOLD: Final = 0.02
 
 
 @dataclass
@@ -257,7 +255,14 @@ def run_selection(
             log.warning("step 7: %s did not converge beside the loan block", name)
             eliminated[name] = f"step 7: did not converge beside the loan block ({error!s:.120})"
             continue
-        rows = _screen(name, reference, result, base_fit, deviations, signs=signs)
+        rows = screen(
+            name,
+            reference,
+            _terms(result),
+            2.0 * (result.log_likelihood - base_fit.log_likelihood),
+            deviations,
+            signs=signs,
+        )
         screened.extend(rows)
         if reference is None:
             alone[name] = float(str(rows[0]["coef"]))
@@ -291,10 +296,11 @@ def run_selection(
     unfittable: set[str] = set()
     while True:
         result = fits.fit(current, start=previous, parent=previous_spec)
-        worst = _worst(current, result, alone=alone, signs=signs, skip=unfittable)
-        if worst is None:
+        removal = worst(_terms(result), current, alone=alone, signs=signs, skip=unfittable)
+        if removal is None:
             break
-        name, reason, coefficient, p_value = worst
+        name, reason = removal.covariate, removal.reason
+        coefficient, p_value = removal.coefficient, removal.p_value
         candidate = current.minus(name)
         try:
             fitted = fits.fit(candidate, start=result, parent=current)
@@ -347,19 +353,15 @@ def run_selection(
                 parity=1,
                 start=whole,
             )
-            table = _stability(current, whole, even, odd, deviations).assign(round=len(rounds) + 1)
+            table = stability_table(
+                current, _terms(whole), _terms(even), _terms(odd), deviations
+            ).assign(round=len(rounds) + 1)
             rounds.append(table)
-            verdict = _not_identified(table)
+            verdict = not_identified(table)
             if verdict is None:
                 break
-            name, partner = verdict
-            indexed = table.set_index("covariate")
-            eliminated[name] = (
-                f"step 9: 1 sd effect {_number(indexed, name, 'effect_even'):+.3f} on even "
-                f"and {_number(indexed, name, 'effect_odd'):+.3f} on odd origination years, "
-                f"beside {partner} ({_number(indexed, partner, 'effect_all'):+.3f}), both "
-                f"{indexed.loc[name, 'dimension']}"
-            )
+            name = verdict.covariate
+            eliminated[name] = f"step 9: {verdict.reason}"
             previous, previous_spec = whole, current
             current = current.minus(name)
     rounds_table = pd.concat(rounds, ignore_index=True) if rounds else pd.DataFrame()
@@ -376,23 +378,20 @@ def run_selection(
     material: list[dict[str, object]] = []
     while True:
         result = fits.fit(current, start=previous, parent=previous_spec)
-        smallest = _immaterial(current, result, deviations, macro=macro)
+        smallest = immaterial(current, _terms(result), deviations, macro=macro)
         if smallest is None:
             break
-        name, effect = smallest
+        name = smallest.covariate
         material.append(
             {
                 "step": len(material) + 1,
                 "removed": name,
-                "effect_1sd": effect,
+                "effect_1sd": smallest.effect,
                 "threshold": MATERIALITY_THRESHOLD,
                 "remaining": len(current.covariates) - 1,
             }
         )
-        eliminated[name] = (
-            f"step 10: 1 sd effect {effect:+.4f} on log survival time, under "
-            f"{MATERIALITY_THRESHOLD:g}"
-        )
+        eliminated[name] = f"step 10: {smallest.reason}"
         previous, previous_spec = result, current
         current = current.minus(name)
     materiality = pd.DataFrame(material, columns=_MATERIALITY_COLUMNS)
@@ -433,198 +432,3 @@ _SCREENING_COLUMNS: Final = [
 _ELIMINATION_COLUMNS: Final = ["step", "removed", "coef", "p", "reason", "remaining"]
 
 _MATERIALITY_COLUMNS: Final = ["step", "removed", "effect_1sd", "threshold", "remaining"]
-
-
-def _immaterial(
-    spec: Specification,
-    result: FitResult,
-    deviations: pd.Series,
-    *,
-    macro: Sequence[str],
-) -> tuple[str, float] | None:
-    """The macro covariate step 10 removes next: the smallest effect under the threshold.
-
-    The loan block is not eligible. A small coefficient on the credit score is a statement
-    about this book; a small coefficient on a macro series is usually a statement about
-    which of five correlated series happened to be left, and it is that instability the
-    threshold is aimed at.
-    """
-    effects = {
-        name: _number(_terms(result), name, "coef") * float(deviations[name])
-        for name in spec.continuous
-        if name in macro and name in deviations.index
-    }
-    below = {
-        name: effect for name, effect in effects.items() if abs(effect) < MATERIALITY_THRESHOLD
-    }
-    if not below:
-        return None
-    name = min(below, key=lambda key: abs(below[key]))
-    return name, below[name]
-
-
-def _number(frame: pd.DataFrame, row: str, column: str) -> float:
-    """One cell of a table as a float; the stubs type ``.loc`` as any scalar at all."""
-    return float(cast("float", frame.loc[row, column]))
-
-
-def _screen(
-    name: str,
-    reference: str | None,
-    result: FitResult,
-    base: FitResult,
-    deviations: pd.Series,
-    *,
-    signs: Mapping[str, int] = EXPECTED_SIGNS,
-) -> list[dict[str, object]]:
-    """One row per coefficient a candidate adds, and the likelihood ratio it earns."""
-    summary = _terms(result)
-    keys = (
-        [name]
-        if reference is None
-        else [str(key) for key in summary.index if str(key).startswith(f"C({name},")]
-    )
-    statistic = 2.0 * (result.log_likelihood - base.log_likelihood)
-    expected = signs.get(name, 0)
-    rows = []
-    for key in keys:
-        coefficient = _number(summary, key, "coef")
-        error = _number(summary, key, "se(coef)")
-        effect = coefficient * float(deviations[name]) if name in deviations.index else np.nan
-        rows.append(
-            {
-                "covariate": name,
-                "term": key,
-                "coef": coefficient,
-                "se": error,
-                "z": coefficient / error,
-                "p": _number(summary, key, "p"),
-                "effect_1sd": effect,
-                "expected_sign": expected,
-                "sign_agrees": expected == 0 or coefficient * expected > 0,
-                "lr_statistic": statistic,
-            }
-        )
-    return rows
-
-
-def _worst(
-    spec: Specification,
-    result: FitResult,
-    *,
-    alone: Mapping[str, float] | None = None,
-    signs: Mapping[str, int] = EXPECTED_SIGNS,
-    skip: Collection[str] = (),
-) -> tuple[str, str, float, float] | None:
-    """The covariate step 8 removes next, and why -- or ``None`` when every one stays.
-
-    Three criteria, in order, and only one covariate per step, because removing it moves
-    every other coefficient; of several meeting the same criterion the weakest -- smallest
-    ``|z|`` -- goes first.
-
-    * **A backwards sign** against a declared prior. It outranks everything else: it says
-      the specification is wrong, not that the evidence is thin.
-    * **A reversed sign** on a covariate with no declared prior: its coefficient in the
-      full model points the other way from its coefficient ``alone`` beside the loan block at step
-      7. This is the first run's marginal/conditional reversal rule, which removed
-      ``corporate_bond_spread`` and ``yield_curve_slope`` and which ``docs/variable_selection.md``
-      states "so it can be applied consistently rather than invoked when convenient". A covariate
-      whose conditional effect contradicts its own is carrying something other than what its name
-      says. The first version of this procedure did not run it; its first complete run kept three
-      such covariates.
-    * **A p-value above 0.05**, which at this sample size almost nothing reaches.
-
-    Categorical terms carry no expected sign, are not screened alone, and at this sample
-    size have no p-value.
-
-    ``skip`` names covariates whose removal step 8 has tried and found to leave a model that
-    cannot be fitted. They stay in the model and are not offered again.
-    """
-    summary = _terms(result)
-    backwards: list[tuple[float, str, float, float]] = []
-    reversed_: list[tuple[float, str, float, float]] = []
-    thin: list[tuple[float, str, float, float]] = []
-    for name in (term for term in spec.continuous if term not in skip):
-        coefficient = _number(summary, name, "coef")
-        z = coefficient / _number(summary, name, "se(coef)")
-        p_value = _number(summary, name, "p")
-        expected = signs.get(name)
-        own = None if alone is None else alone.get(name)
-        if expected is not None and coefficient * expected < 0:
-            backwards.append((abs(z), name, coefficient, p_value))
-        elif expected is None and own is not None and coefficient * own < 0:
-            reversed_.append((abs(z), name, coefficient, p_value))
-        elif p_value > PVALUE_THRESHOLD:
-            thin.append((p_value, name, coefficient, p_value))
-    if backwards:
-        _, name, coefficient, p_value = min(backwards)
-        direction = "+" if signs[name] > 0 else "-"
-        return (
-            name,
-            f"wrong sign: {coefficient:+.4g} where {direction} is expected",
-            coefficient,
-            p_value,
-        )
-    if reversed_ and alone is not None:
-        _, name, coefficient, p_value = min(reversed_)
-        return (
-            name,
-            f"reversed sign: {coefficient:+.4g} in the full model, "
-            f"{alone[name]:+.4g} beside the loan block alone",
-            coefficient,
-            p_value,
-        )
-    if thin:
-        _, name, coefficient, p_value = max(thin)
-        return name, f"p = {p_value:.3g}", coefficient, p_value
-    return None
-
-
-def _effect(result: FitResult, name: str, deviations: pd.Series) -> float:
-    """Log survival time per standard deviation of the covariate."""
-    return _number(_terms(result), name, "coef") * float(deviations[name])
-
-
-def _stability(
-    spec: Specification,
-    whole: FitResult,
-    even: FitResult,
-    odd: FitResult,
-    deviations: pd.Series,
-) -> pd.DataFrame:
-    """Each continuous covariate's standardised effect on the whole and on each half."""
-    rows = []
-    for name in spec.continuous:
-        effects = [_effect(result, name, deviations) for result in (whole, even, odd)]
-        rows.append(
-            {
-                "covariate": name,
-                "dimension": ECONOMIC_DIMENSION.get(name, name),
-                "effect_all": effects[0],
-                "effect_even": effects[1],
-                "effect_odd": effects[2],
-                "stable": len({bool(effect > 0) for effect in effects}) == 1,
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def _not_identified(table: pd.DataFrame) -> tuple[str, str] | None:
-    """The smallest unstable covariate that sits beside a larger one of its dimension.
-
-    Returns the covariate and the partner that carries its information, or ``None``. An
-    unstable covariate with no such partner is kept and left visible in the table: the
-    rule is about information entering twice, and there is no second entry to prefer.
-    """
-    ranked = table.assign(size=table["effect_all"].abs()).sort_values("size")
-    for row in ranked.itertuples(index=False):
-        if row.stable:
-            continue
-        partners = ranked[
-            (ranked["dimension"] == row.dimension)
-            & (ranked["covariate"] != row.covariate)
-            & (ranked["size"] > row.size)
-        ]
-        if not partners.empty:
-            return str(row.covariate), str(partners.iloc[-1]["covariate"])
-    return None

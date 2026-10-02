@@ -21,12 +21,8 @@ import pytest
 from creditsurv.data.panel import to_interval_censored
 from creditsurv.models.engine import Pinned
 from creditsurv.models.fits import Fits
-from creditsurv.models.procedure import (
-    SelectionRecord,
-    _not_identified,
-    _worst,
-    run_selection,
-)
+from creditsurv.models.procedure import SelectionRecord, run_selection
+from creditsurv.models.rules import Removal, not_identified, worst
 from creditsurv.models.specification import Specification
 from fixtures import DEFAULT_PARAMS, build_panel
 
@@ -186,14 +182,17 @@ def test_the_formula_states_every_reference_level() -> None:
     assert spec.minus("purpose").formula == "credit_score"
 
 
-def _fitted(rows: dict[str, tuple[float, float, float]]) -> SimpleNamespace:
-    """A stand-in with the one table the rules read: coefficient, error and p-value."""
-    index = pd.MultiIndex.from_tuples([("lambda_", name) for name in rows])
-    summary = pd.DataFrame(
-        [list(values) for values in rows.values()], index=index, columns=["coef", "se(coef)", "p"]
-    )
-    return SimpleNamespace(
-        fitter=SimpleNamespace(summary=summary, _primary_parameter_name="lambda_")
+def _coefficients(rows: dict[str, tuple[float, float, float]]) -> pd.DataFrame:
+    """The one table the rules read: a coefficient, its error and its p-value, by covariate.
+
+    It used to be a whole stand-in `FitResult`, built so that `_terms` could reduce it to
+    exactly this. The rules take the table now, so the fake is gone and what the test supplies
+    is what the rule uses.
+    """
+    return pd.DataFrame(
+        [list(values) for values in rows.values()],
+        index=list(rows),
+        columns=["coef", "se(coef)", "p"],
     )
 
 
@@ -203,7 +202,7 @@ def test_a_backwards_sign_goes_before_an_insignificant_covariate() -> None:
     spec = Specification(
         continuous=("credit_score", "ltv_change", "unemployment_change", "equity_volatility")
     )
-    result = _fitted(
+    terms = _coefficients(
         {
             "credit_score": (0.3, 0.01, 0.0),
             "ltv_change": (+0.02, 0.001, 0.0),  # expected negative, z = 20
@@ -212,11 +211,11 @@ def test_a_backwards_sign_goes_before_an_insignificant_covariate() -> None:
         }
     )
 
-    worst = _worst(spec, cast("FitResult", result))
+    removal = worst(terms, spec)
 
-    assert worst is not None
-    assert worst[0] == "unemployment_change"
-    assert worst[1].startswith("wrong sign")
+    assert removal is not None
+    assert removal.covariate == "unemployment_change"
+    assert removal.reason.startswith("wrong sign")
 
 
 def test_a_reversed_sign_goes_after_a_backwards_one_and_before_a_thin_one() -> None:
@@ -251,25 +250,25 @@ def test_a_reversed_sign_goes_after_a_backwards_one_and_before_a_thin_one() -> N
         "equity_volatility": (-0.001, 0.01, 0.9),  # prior negative, agrees, insignificant
     }
 
-    worst = _worst(spec, cast("FitResult", _fitted(fitted)), alone=alone)
-    assert worst is not None
-    assert worst[0] == "mortgage_rate_decline"
-    assert worst[1].startswith("reversed sign")
+    removal = worst(_coefficients(fitted), spec, alone=alone)
+    assert removal is not None
+    assert removal.covariate == "mortgage_rate_decline"
+    assert removal.reason.startswith("reversed sign")
 
     backwards = {**fitted, "unemployment_change": (+0.04, 0.0004, 0.0)}
-    worst = _worst(spec, cast("FitResult", _fitted(backwards)), alone=alone)
-    assert worst is not None
-    assert worst[0] == "unemployment_change"
+    removal = worst(_coefficients(backwards), spec, alone=alone)
+    assert removal is not None
+    assert removal.covariate == "unemployment_change"
 
     agreeing = {
         **fitted,
         "mortgage_rate_decline": (-0.018, 0.0008, 0.0),
         "inflation_rate": (+8.0, 0.063, 0.0),
     }
-    worst = _worst(spec, cast("FitResult", _fitted(agreeing)), alone=alone)
-    assert worst is not None
-    assert worst[0] == "equity_volatility"
-    assert worst[1].startswith("p =")
+    removal = worst(_coefficients(agreeing), spec, alone=alone)
+    assert removal is not None
+    assert removal.covariate == "equity_volatility"
+    assert removal.reason.startswith("p =")
 
 
 def test_an_unstable_covariate_goes_only_beside_a_larger_one_of_its_dimension() -> None:
@@ -284,9 +283,11 @@ def test_an_unstable_covariate_goes_only_beside_a_larger_one_of_its_dimension() 
         }
     )
 
-    assert _not_identified(table) == ("financial_conditions", "equity_volatility")
+    verdict = not_identified(table)
+    assert verdict is not None
+    assert (verdict.covariate, verdict.partner) == ("financial_conditions", "equity_volatility")
     # Unstable, but alone in its dimension: kept and left visible.
-    assert _not_identified(table[table["covariate"] != "financial_conditions"]) is None
+    assert not_identified(table[table["covariate"] != "financial_conditions"]) is None
 
 
 def test_the_selection_starts_from_candidates_the_configuration_cannot_change() -> None:
@@ -466,32 +467,24 @@ def test_step_ten_removes_the_macro_covariate_whose_effect_is_immaterial() -> No
     it applies to the macro block only: a small coefficient on a macro series is usually a
     statement about which of five correlated series happened to be left.
     """
-    from creditsurv.models.procedure import MATERIALITY_THRESHOLD, _immaterial
+    from creditsurv.models.rules import MATERIALITY_THRESHOLD, immaterial
 
     spec = Specification(continuous=("credit_score", "ltv_change", "unemployment_change"))
-    summary = pd.DataFrame(
+    terms = pd.DataFrame(
         {"coef": [0.5, 0.004, -0.06]},
         index=["credit_score", "ltv_change", "unemployment_change"],
     )
-    result = cast(
-        "FitResult",
-        SimpleNamespace(
-            fitter=SimpleNamespace(
-                summary=pd.concat({"lambda_": summary}), _primary_parameter_name="lambda_"
-            )
-        ),
-    )
     deviations = pd.Series({"credit_score": 0.001, "ltv_change": 1.0, "unemployment_change": 1.0})
 
-    verdict = _immaterial(spec, result, deviations, macro=["ltv_change", "unemployment_change"])
+    verdict = immaterial(spec, terms, deviations, macro=["ltv_change", "unemployment_change"])
 
     assert verdict is not None
-    name, effect = verdict
-    assert name == "ltv_change"
-    assert effect == pytest.approx(0.004)
-    assert abs(effect) < MATERIALITY_THRESHOLD
+    assert verdict.covariate == "ltv_change"
+    assert verdict.effect == pytest.approx(0.004)
+    assert abs(verdict.effect) < MATERIALITY_THRESHOLD
+    assert verdict.reason == "1 sd effect +0.0040 on log survival time, under 0.02"
     # The credit score's effect is 0.0005, far under the threshold, and it is not eligible.
-    assert _immaterial(spec, result, deviations, macro=["unemployment_change"]) is None, (
+    assert immaterial(spec, terms, deviations, macro=["unemployment_change"]) is None, (
         "the loan block is not screened for materiality"
     )
 
@@ -542,25 +535,17 @@ def test_the_prepayment_model_is_selected_under_its_own_priors() -> None:
 
 
 def test_a_backwards_sign_is_read_against_the_map_the_run_was_given() -> None:
-    from creditsurv.models.procedure import _worst
+    from creditsurv.models.rules import worst
     from creditsurv.models.selection import PREPAYMENT_SIGNS
 
     spec = Specification(continuous=("credit_score",))
-    summary = pd.DataFrame({"coef": [0.5], "se(coef)": [0.01], "p": [0.0]}, index=["credit_score"])
-    result = cast(
-        "FitResult",
-        SimpleNamespace(
-            fitter=SimpleNamespace(
-                summary=pd.concat({"lambda_": summary}), _primary_parameter_name="lambda_"
-            )
-        ),
-    )
+    terms = pd.DataFrame({"coef": [0.5], "se(coef)": [0.01], "p": [0.0]}, index=["credit_score"])
 
-    assert _worst(spec, result) is None, "a positive score is what the default model expects"
-    verdict = _worst(spec, result, signs=PREPAYMENT_SIGNS)
+    assert worst(terms, spec) is None, "a positive score is what the default model expects"
+    verdict = worst(terms, spec, signs=PREPAYMENT_SIGNS)
     assert verdict is not None
-    assert verdict[0] == "credit_score"
-    assert "wrong sign" in verdict[1]
+    assert verdict.covariate == "credit_score"
+    assert "wrong sign" in verdict.reason
 
 
 def test_a_prepayment_selection_is_cached_under_a_name_of_its_own() -> None:
@@ -1095,7 +1080,7 @@ def test_the_reference_levels_are_one_set_written_twice_and_held_together() -> N
 
 @pytest.mark.parametrize(
     ("step", "verdict"),
-    [("step 9", "_not_identified"), ("step 10", "_immaterial")],
+    [("step 9", "not_identified"), ("step 10", "immaterial")],
 )
 def test_every_nested_fit_of_the_selection_is_bounded_by_its_parent(
     train: pd.DataFrame,
@@ -1123,25 +1108,26 @@ def test_every_nested_fit_of_the_selection_is_bounded_by_its_parent(
 
     removals = {"left": 1}
 
-    def unstable(table: pd.DataFrame) -> tuple[str, str] | None:
+    def unstable(table: pd.DataFrame) -> Removal | None:
         if removals["left"] and len(table) > 1:
             removals["left"] -= 1
             names = table["covariate"].astype(str).tolist()
-            return names[0], names[1]
+            return Removal(covariate=names[0], reason="forced", partner=names[1])
         return None
 
     def immaterial(
-        spec: Specification, result: FitResult, deviations: pd.Series, *, macro: list[str]
-    ) -> tuple[str, float] | None:
+        spec: Specification, terms: pd.DataFrame, deviations: pd.Series, *, macro: list[str]
+    ) -> Removal | None:
         eligible = [name for name in spec.covariates if name in macro]
         if removals["left"] and len(eligible) > 1:
             removals["left"] -= 1
-            return eligible[0], 0.001
+            return Removal(covariate=eligible[0], reason="forced", effect=0.001)
         return None
 
-    monkeypatch.setattr(
-        procedure, verdict, unstable if verdict == "_not_identified" else immaterial
-    )
+    # The rules live in `models.rules` now, and `run_selection` imports them by name -- so the
+    # module to substitute on is still the one that calls them, which is what a monkeypatch has
+    # to name. Moving them without moving this would have stopped the substitution silently.
+    monkeypatch.setattr(procedure, verdict, unstable if verdict == "not_identified" else immaterial)
 
     asked: list[tuple[Specification, Specification | None, str, Specification | None]] = []
     fitted_on: dict[int, Specification] = {}

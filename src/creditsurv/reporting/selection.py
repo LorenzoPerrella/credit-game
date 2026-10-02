@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Final
 import pandas as pd
 
 from creditsurv.data.panel import DEFAULT_CAUSE
-from creditsurv.models.procedure import MATERIALITY_THRESHOLD
+from creditsurv.models.rules import MATERIALITY_THRESHOLD
 from creditsurv.reporting.builder import Report, provenance
 
 if TYPE_CHECKING:
