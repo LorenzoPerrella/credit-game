@@ -19,7 +19,6 @@ from creditsurv.config import (
     CATEGORICAL_REFERENCE,
     DISTRIBUTION,
     MACRO_SERIES,
-    ORDINAL,
     STATIC_CONTINUOUS,
     TIME_VARYING_CONTINUOUS,
     default_covariates,
@@ -967,163 +966,38 @@ def views(
     """
     import logging
 
-    import pandas as pd
-
-    from creditsurv.backtest.runner import predicted_hazard
     from creditsurv.config import tables_dir
     from creditsurv.data.book import MoratoriumPolicy
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import (
-        AGE,
-        EVENT,
-        OUTCOME,
-        WEIGHT,
-        cells_to_episodes,
-        ended_in,
-        month_ordinal,
-    )
-    from creditsurv.data.store import (
-        find_fits,
-        load_cells,
-        load_cells_window,
-        load_fit,
-        load_largest_cells,
-    )
-    from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
-    from creditsurv.models.aft import FitResult as Fitted
-    from creditsurv.models.fits import cell_source
-    from creditsurv.models.lifetime_pd import origination_book
-    from creditsurv.models.selection import weighted_moments
-    from creditsurv.views.model import (
-        backtest_views,
-        coefficient_view,
-        covariate_means_recipe,
-        in_sample_recipes,
-        in_sample_views,
-        projection_views,
-    )
+    from creditsurv.data.panel import AGE, EVENT, OUTCOME, WEIGHT, ended_in
+    from creditsurv.data.store import load_cells
+    from creditsurv.views.build import NoCachedFit, model_views
     from creditsurv.views.portfolio import portfolio_views
     from creditsurv.views.selection import selection_views
-    from creditsurv.views.streamed import accumulate, decile_boundaries
-    from creditsurv.views.tables import View, write_views
+    from creditsurv.views.tables import write_views
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     destination = tables_dir()
-    reporting_date = pd.Period(as_of, freq="M")
 
     if model:
-        covariates, formula = default_covariates(), default_formula()
-        # **The training half is never an object.** These tables used to be computed from the
-        # expanded split, which put the footprint near 15 GB on 59.7 million cells; the table
-        # is now 72.7 million. Two passes over the cell file do it instead: the first takes the
-        # decile boundaries, which need the whole distribution, and the second accumulates
-        # every table -- each segment, each family -- from the same read.
-        found = find_fits(
-            as_of=as_of,
-            moratorium=moratorium,
-            formula=formula,
-            distribution=DISTRIBUTION,
-            purpose=None,
-        )
-        if not found:
-            typer.echo(
-                f"No cached fit of this specification at {as_of}. Run `creditsurv report` "
-                "or `creditsurv fit --streamed` first: views never fit."
+        try:
+            built = model_views(
+                as_of=as_of,
+                moratorium=moratorium,
+                covariates=default_covariates(),
+                formula=default_formula(),
+                macro=load_macro_panel(),
+                block_rows=block_rows,
+                loans=loans,
+                horizon=horizon,
             )
-            raise typer.Exit(1)
-        fingerprint, described = found[0]
-        fitted = load_fit(fingerprint)
-        if not isinstance(fitted, Fitted):
-            typer.echo(f"The cached fit {fingerprint} cannot be read; views never fit.")
-            raise typer.Exit(1)
-        typer.echo(f"Scoring with fit {fingerprint} ({described.get('rows'):,} cells)...")
-
-        macro = load_macro_panel()
-        cut = month_ordinal(reporting_date)
-        source = cell_source(
-            moratorium, macro, covariates, block_rows=block_rows, until=cut, model_only=False
-        )
-
-        models: dict[str, tuple[Fitted, list[str]]] = {DISTRIBUTION: (fitted, covariates)}
-        for distribution in CONVERGENT_DISTRIBUTIONS:
-            if distribution == DISTRIBUTION:
-                continue
-            other = find_fits(
-                as_of=as_of, moratorium=moratorium, distribution=distribution, purpose=None
-            )
-            if not other:
-                continue
-            candidate = load_fit(other[0][0])
-            if isinstance(candidate, Fitted):
-                typer.echo(f"  and the cached {distribution} fit {other[0][0]}")
-                models[distribution] = (candidate, covariates)
-
-        typer.echo("Pass one: the decile boundaries...")
-        boundaries = decile_boundaries(source(), fitted, covariates)
-        typer.echo("Pass two: survival, calibration and the covariate means by segment...")
-        accumulated = accumulate(
-            source(),
-            models,
-            [
-                *in_sample_recipes(
-                    primary=DISTRIBUTION,
-                    families=[name for name in models if name != DISTRIBUTION],
-                    boundaries=boundaries,
-                ),
-                covariate_means_recipe(TIME_VARYING_CONTINUOUS),
-            ],
-        )
-
-        tables = [
-            *in_sample_views(accumulated, as_of=as_of),
-            View(
-                "covariates_over_time",
-                "Macro covariates over time",
-                "The exposure-weighted mean of each time-varying covariate across the loans "
-                "observed in each month, up to the reporting date.",
-                accumulated["covariates_over_time"],
-                source="fit",
-            ),
-            coefficient_view(
-                fitted,
-                None,
-                [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL],
-                deviations=weighted_moments(
-                    source(),
-                    [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL],
-                    weight=WEIGHT,
-                ).deviations,
-            ),
-        ]
-
-        # The test window and the projections read only what they need: the months after the
-        # reporting date, and the origination profiles at age zero.
-        typer.echo("The test window, and the projections from the book written today...")
-        test = cells_to_episodes(
-            load_cells_window(moratorium, first=cut + 1), macro, covariates=covariates
-        )
-        test_hazard = predicted_hazard(fitted, test, covariates).to_numpy()
-        tables += [
-            *backtest_views(test, test_hazard, as_of=as_of),
-            *projection_views(
-                fitted,
-                origination_book(
-                    cells_to_episodes(
-                        load_largest_cells(moratorium, age=0, limit=loans),
-                        macro,
-                        covariates=covariates,
-                    ),
-                    macro,
-                    loans,
-                ),
-                macro,
-                covariates,
-                horizon_months=horizon,
-            ),
-        ]
-        write_views(tables, destination, fit=fingerprint)
-        typer.echo(f"  {len(tables)} views of fit {fingerprint}")
-        del test, test_hazard, tables, accumulated
+        except NoCachedFit as missing:
+            # Views never fit, and which command does is something only this layer can say.
+            typer.echo(str(missing))
+            raise typer.Exit(1) from missing
+        write_views(built.tables, destination, fit=built.fingerprint)
+        typer.echo(f"  {len(built.tables)} views of fit {built.fingerprint}")
+        del built
 
     if portfolio:
         typer.echo("The book by segment, the lending, the vintage curves and the macro series...")
