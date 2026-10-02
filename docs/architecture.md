@@ -39,6 +39,27 @@ from `data.book`, which needs the manifest from `data.ingest`. The last edge is 
 function that needs it, with the reason written where it is taken. Every other cycle is a
 mistake, and the test says so by name.
 
+## Where the orchestration is
+
+A command reads options, calls one thing, and writes a report. It took a branch to make that
+true: four of the sixteen were multi-step pipelines written inline, 40% of a 1,809-line file,
+with nested closures raising command-line errors for facts about the book. The file is 1,113
+lines now and the sequences have homes.
+
+| the sequence | lives in |
+|---|---|
+| every fit that is cached, warm-started and parent-bounded | `models/fits.py` |
+| the ten steps of the variable selection | `models/procedure.py` |
+| what decides an elimination, as pure functions of a coefficient table | `models/rules.py` |
+| rule 2 applied: each family against the observed incidence | `models/families.py` |
+| the backtest over the declared cuts, the anchoring and the grades | `backtest/campaign.py` |
+| the two passes that build every view of the fitted model | `views/build.py` |
+
+One command keeps its sequence, and the dependency rule is the reason: `portfolio` reads
+aggregates from `portfolio.py` (layer 5) and draws them with `reporting.charts` (layer 6), so
+the only place that may see both is above both. A plan to move it into `portfolio.py` would
+have put a chart in a layer that cannot import one.
+
 ## The two ports
 
 Two places are deliberately narrow, because something is expected to be swapped behind them.
