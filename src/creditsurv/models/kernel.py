@@ -41,7 +41,7 @@ unbounded below and the reason this engine has a floor and a wall.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 import numpy as np
 import pandas as pd
@@ -441,6 +441,14 @@ def _counts(weight: np.ndarray) -> np.ndarray:
     return rounded.astype(np.uint32)
 
 
+def _tallied(counts: np.ndarray, codes: np.ndarray, size: int) -> np.ndarray:
+    """The running count of rows per combination, grown to hold the newest ones."""
+    if size > len(counts):
+        counts = np.concatenate([counts, np.zeros(size - len(counts), dtype=np.int64)])
+    counts += np.bincount(codes, minlength=size).astype(np.int64)
+    return counts
+
+
 def _a_function_of(design: np.ndarray, codes: np.ndarray, size: int) -> np.ndarray:
     """Which of the design's columns are functions of ``codes``, one column at a time.
 
@@ -487,6 +495,17 @@ class Factorisation:
         self._calendar_positions: np.ndarray | None = None
         self._loan_rows: list[np.ndarray] = []
         self._calendar_rows: list[np.ndarray] = []
+        # The key values themselves, one row per combination, kept so that a **different**
+        # model's two tables can be built by putting its formula through 3,001 and 153,309
+        # rows instead of reading the 72 million again. This is what makes one scan serve a
+        # whole selection, and it is the reason the rows are encoded at all.
+        self._loan_keys: list[pd.DataFrame] = []
+        self._calendar_keys: list[pd.DataFrame] = []
+        # And how many rows each combination carries, which is all the column moments need:
+        # the sum of a loan-side column over every row is the sum over combinations of its
+        # value times its count.
+        self._loan_counts = np.zeros(0, dtype=np.int64)
+        self._calendar_counts = np.zeros(0, dtype=np.int64)
 
     def add(
         self, frame: pd.DataFrame, design: np.ndarray, *, event: np.ndarray, weight: np.ndarray
@@ -498,8 +517,12 @@ class Factorisation:
             self._decide(design, i, j)
         assert self._loan_positions is not None
         assert self._calendar_positions is not None
-        self._grow(self._loan_rows, design[:, self._loan_positions], i)
-        self._grow(self._calendar_rows, design[:, self._calendar_positions], j)
+        fresh = self._grow(self._loan_rows, design[:, self._loan_positions], i)
+        self._keys(self._loan_keys, frame, self._loan, fresh)
+        fresh = self._grow(self._calendar_rows, design[:, self._calendar_positions], j)
+        self._keys(self._calendar_keys, frame, self._calendar, fresh)
+        self._loan_counts = _tallied(self._loan_counts, i, len(self._loan_codes))
+        self._calendar_counts = _tallied(self._calendar_counts, j, len(self._calendar_codes))
         self._verify(design, i, j)
         age = frame[self._age_column].to_numpy()
         if age.min() < 0 or age.max() > _MAX_AGE:
@@ -519,6 +542,83 @@ class Factorisation:
             event=np.asarray(event, dtype=bool),
             weight=_counts(np.asarray(weight)),
         )
+
+    def keys(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """The two key frames, one row per combination, in their codes' own order."""
+        if not self._loan_keys or not self._calendar_keys:
+            message = "Nothing has been encoded, so there are no keys."
+            raise ValueError(message)
+        return (
+            pd.concat(self._loan_keys, ignore_index=True),
+            pd.concat(self._calendar_keys, ignore_index=True),
+        )
+
+    def expand(self, transform: Callable[[pd.DataFrame], pd.DataFrame]) -> Expanded:
+        """A model's two design tables and column moments, from the key frames alone.
+
+        ``transform`` is the model's own expansion -- lifelines'
+        ``CovariateParameterMappings.transform_df`` -- applied to each key frame with the other
+        side held at one row. A column that does not move when only the calendar moves is a
+        function of the loan combination; one that does not move when only the loan moves is a
+        function of the calendar key; the intercept is both and goes to the loan side. A column
+        that moves on both couples the two sides, which a sum of two tables cannot represent,
+        and it is refused by name.
+        """
+        loan_keys, calendar_keys = self.keys()
+        on_loan = transform(_completed(loan_keys, calendar_keys))
+        on_calendar = transform(_completed(calendar_keys, loan_keys))
+        if not on_loan.columns.equals(on_calendar.columns):
+            message = "The formula expanded to different columns on the two key frames."
+            raise ValueError(message)
+        columns = on_loan.columns
+        by_loan = on_loan.to_numpy(dtype=np.float64)
+        by_calendar = on_calendar.to_numpy(dtype=np.float64)
+        held = _unchanging(by_calendar)
+        moving = _unchanging(by_loan)
+        neither = ~held & ~moving
+        if neither.any():
+            named = ", ".join(str(columns[int(position)]) for position in np.flatnonzero(neither))
+            message = (
+                f"The design column(s) {named} move with the loan *and* with the calendar, so "
+                "the linear predictor is not a sum of two tables. A term coupling a loan "
+                "characteristic to the calendar belongs in the calendar key, or the fit "
+                "belongs on the autograd evaluator."
+            )
+            raise ValueError(message)
+        loan_positions = np.flatnonzero(held)
+        calendar_positions = np.flatnonzero(~held & moving)
+        loan = by_loan[:, loan_positions]
+        calendar = by_calendar[:, calendar_positions]
+        width = len(columns)
+        first, second = np.zeros(width), np.zeros(width)
+        low, high = np.zeros(width), np.zeros(width)
+        for positions, table, counts in (
+            (loan_positions, loan, self._loan_counts),
+            (calendar_positions, calendar, self._calendar_counts),
+        ):
+            if not positions.size:
+                continue
+            seen = counts > 0
+            first[positions] = counts @ table
+            second[positions] = counts @ (table * table)
+            low[positions] = table[seen].min(axis=0)
+            high[positions] = table[seen].max(axis=0)
+        return Expanded(
+            columns=cast("pd.MultiIndex", columns),
+            loan=loan,
+            calendar=calendar,
+            loan_positions=loan_positions,
+            calendar_positions=calendar_positions,
+            first=first,
+            second=second,
+            low=low,
+            high=high,
+        )
+
+    @property
+    def rows(self) -> int:
+        """How many rows were encoded, from the counts the two sides agree on."""
+        return int(self._loan_counts.sum())
 
     def tables(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """The loan table, the calendar table, and which design columns each one holds."""
@@ -552,25 +652,43 @@ class Factorisation:
         self._calendar_positions = np.flatnonzero(~loan & calendar)
 
     @staticmethod
-    def _grow(rows: list[np.ndarray], design: np.ndarray, codes: np.ndarray) -> None:
+    def _grow(rows: list[np.ndarray], design: np.ndarray, codes: np.ndarray) -> dict[int, int]:
         """Store a design row for each combination this block is the first to carry.
 
         Codes are handed out in order of first appearance, so a block's new ones are exactly
         the indices past the end of the table, and any row carrying one of them will do: the
-        invariant `_verify` checks is that they all carry the same values.
+        invariant `_verify` checks is that they all carry the same values. What comes back is
+        which row of this block was taken for each new combination, so the key values can be
+        taken from the same rows.
         """
         wanted = int(codes.max()) + 1 if len(codes) else 0
         missing = set(range(len(rows), wanted))
+        taken: dict[int, int] = {}
         if not missing:
-            return
+            return taken
         rows.extend(np.zeros(design.shape[1]) for _ in missing)
         for position, code in enumerate(codes):
             index = int(code)
             if index in missing:
                 rows[index] = design[position].copy()
+                taken[index] = position
                 missing.discard(index)
                 if not missing:
-                    return
+                    break
+        return taken
+
+    @staticmethod
+    def _keys(
+        pieces: list[pd.DataFrame],
+        frame: pd.DataFrame,
+        columns: Sequence[str],
+        taken: dict[int, int],
+    ) -> None:
+        """The key values of the combinations new to this block, in their code's order."""
+        if not taken:
+            return
+        wanted = [taken[code] for code in sorted(taken)]
+        pieces.append(frame.iloc[wanted][list(columns)].reset_index(drop=True))
 
     def _verify(self, design: np.ndarray, i: np.ndarray, j: np.ndarray) -> None:
         """Every row's design is the two tables read at its two indices. Exactly.
@@ -771,3 +889,45 @@ class Kernel:
     def nbytes(self) -> int:
         tables = self.loan.nbytes + self.calendar.nbytes
         return tables + sum(block.nbytes for block in self.blocks)
+
+
+@dataclass(frozen=True)
+class Expanded:
+    """One model's design as two tables, built from the key frames rather than from the rows.
+
+    This is what makes a scan serve a whole selection. The rows carry two indices into the
+    combinations of a **widest** key, and a candidate model's design is a function of those
+    combinations, so its tables come from putting its formula through 3,001 and 153,309 rows.
+    Nothing re-reads the 72 million, nothing rebuilds the macro family, and nothing expands a
+    design again.
+
+    The moments come the same way. Every column is a function of one side, so the sum of it
+    over every row is the sum over combinations of its value times how many rows carry that
+    combination -- which is the one thing the scan has to count.
+    """
+
+    columns: pd.MultiIndex
+    loan: np.ndarray
+    calendar: np.ndarray
+    loan_positions: np.ndarray
+    calendar_positions: np.ndarray
+    first: np.ndarray
+    second: np.ndarray
+    low: np.ndarray
+    high: np.ndarray
+
+
+def _unchanging(values: np.ndarray) -> np.ndarray:
+    """Which columns never move. Exact equality, as `_standard_deviation` reads constancy."""
+    return np.asarray(values.max(axis=0) == values.min(axis=0))
+
+
+def _completed(base: pd.DataFrame, other: pd.DataFrame) -> pd.DataFrame:
+    """``base`` with the other side's columns held at its first row, so a formula can read it.
+
+    Repeating a row through ``iloc`` rather than assigning scalars, because the categoricals
+    have to keep their declared levels: a dummy column exists for a level the probe never
+    shows, and the design's width has to be the width the rows were encoded against.
+    """
+    filler = other.iloc[[0] * len(base)].reset_index(drop=True)
+    return pd.concat([base.reset_index(drop=True), filler], axis=1)

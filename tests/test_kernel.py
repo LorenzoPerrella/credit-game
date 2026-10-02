@@ -580,3 +580,113 @@ def test_the_kernel_is_the_objective_autograd_gives_over_the_whole_design(
     assert cheap.curvature is None
     np.testing.assert_array_equal(cheap.gradient, got.gradient)
     assert cheap.value == got.value
+
+
+FULL = "credit_score + original_ltv + unemployment_change + ltv_change + C(purpose)"
+SUBSET = "credit_score + unemployment_change + C(purpose)"
+
+
+def _regressors(formula: str, frame: pd.DataFrame) -> Any:
+    """lifelines' own expansion of a formula, as `blocks._scan` builds it."""
+    from lifelines import utils
+
+    return utils.CovariateParameterMappings(
+        {"lambda_": formula, "rho_": "1"}, frame, force_intercept=True
+    )
+
+
+def _encoded(frame: pd.DataFrame, formula: str) -> tuple[Factorisation, Any, np.ndarray]:
+    """Encode a book against one formula, through lifelines' expansion of it."""
+    covariates = frame.drop(columns=["age", "loan_months", "outcome"])
+    regressors = _regressors(formula, covariates)
+    design = regressors.transform_df(covariates)
+    values = design.to_numpy(dtype=np.float64)
+    factorisation = Factorisation(
+        loan=LOAN,
+        calendar=CALENDAR,
+        age_column="age",
+        columns=[str(name) for _, name in design.columns],
+    )
+    factorisation.add(
+        frame,
+        values,
+        event=frame["outcome"].to_numpy(dtype=bool),
+        weight=frame["loan_months"].to_numpy(dtype=float),
+    )
+    return factorisation, regressors, values
+
+
+def test_the_key_frames_rebuild_the_tables_the_rows_produced() -> None:
+    """One scan, then any model: the claim that makes a selection affordable.
+
+    The rows carry two indices into the combinations of a widest key, and every design column
+    is a function of one side, so a model's tables come from putting its formula through 3,001
+    and 153,309 rows. Here the same formula is expanded both ways -- from the rows during the
+    scan, and from the key frames afterwards -- and the two tables have to be identical, not
+    close.
+    """
+    frame = _book(range(0, 5), range(0, 7))
+    factorisation, regressors, values = _encoded(frame, FULL)
+
+    from_rows = factorisation.tables()
+    from_keys = factorisation.expand(regressors.transform_df)
+
+    np.testing.assert_array_equal(from_keys.loan, from_rows[0])
+    np.testing.assert_array_equal(from_keys.calendar, from_rows[1])
+    np.testing.assert_array_equal(from_keys.loan_positions, from_rows[2])
+    np.testing.assert_array_equal(from_keys.calendar_positions, from_rows[3])
+
+    # And the moments, which the scan would otherwise have to accumulate over every row. The
+    # sum over combinations of a value times its count is the same sum in another order, so it
+    # agrees to the last digits rather than exactly.
+    np.testing.assert_allclose(from_keys.first, values.sum(axis=0), rtol=1e-12)
+    np.testing.assert_allclose(from_keys.second, (values * values).sum(axis=0), rtol=1e-12)
+    np.testing.assert_array_equal(from_keys.low, values.min(axis=0))
+    np.testing.assert_array_equal(from_keys.high, values.max(axis=0))
+    assert factorisation.rows == len(frame)
+
+
+def test_a_different_model_is_expanded_without_reading_a_row() -> None:
+    """The point of the whole thing: a candidate's tables cost 3,001 rows, not 72 million.
+
+    A selection makes about thirty fits, and every one of them used to re-read the cell file,
+    re-derive the macro family, rebuild the design and throw all of it away -- 12.1 minutes a
+    time on the production table, against 53 seconds of arithmetic. The second formula here
+    drops a loan covariate and a calendar one, and its tables are built from the key frames of
+    an encoding made for the first.
+    """
+    frame = _book(range(0, 5), range(0, 7))
+    widest, _, _ = _encoded(frame, FULL)
+    narrow, regressors, values = _encoded(frame, SUBSET)
+
+    expanded = widest.expand(regressors.transform_df)
+    from_rows = narrow.tables()
+
+    np.testing.assert_array_equal(expanded.loan, from_rows[0])
+    np.testing.assert_array_equal(expanded.calendar, from_rows[1])
+    np.testing.assert_array_equal(expanded.loan_positions, from_rows[2])
+    np.testing.assert_array_equal(expanded.calendar_positions, from_rows[3])
+    np.testing.assert_allclose(expanded.first, values.sum(axis=0), rtol=1e-12)
+    assert len(expanded.columns) < len(
+        widest.expand(
+            _regressors(FULL, frame.drop(columns=["age", "loan_months", "outcome"])).transform_df
+        ).columns
+    )
+
+
+def test_a_coupled_column_is_refused_when_the_tables_are_built_from_the_keys() -> None:
+    """The guard survives the move off the rows, and still names the column.
+
+    `ltv_change` and `mortgage_rate_decline` read a loan characteristic *and* the calendar, and
+    work only because the calendar key carries the LTV band and the term. An interaction written
+    into the formula does not, and it has to be refused here as well as during a scan -- because
+    here is where a candidate model's formula arrives.
+    """
+    frame = _book(range(0, 4), range(0, 5))
+    factorisation, _, _ = _encoded(frame, FULL)
+    coupled = _regressors(
+        "credit_score * unemployment_change", frame.drop(columns=["age", "loan_months", "outcome"])
+    )
+
+    with pytest.raises(ValueError, match="move with the loan"):
+        factorisation.expand(coupled.transform_df)
