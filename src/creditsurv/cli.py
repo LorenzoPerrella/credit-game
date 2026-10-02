@@ -680,139 +680,29 @@ def family(
     hazard is the one the Weibull selection chose, held fixed across the comparison: a
     cumulative incidence needs both hazards, and what the rule is about is the default model.
     """
-    import json
     import logging
 
-    import pandas as pd
-
-    from creditsurv.config import PREPAYMENT_CAUSE, record_name
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import WEIGHT, month_ordinal
-    from creditsurv.data.store import cells_identity, outcomes_by_age
-    from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
-    from creditsurv.models.fits import cell_source, selected_fit
-    from creditsurv.models.nonparametric import (
-        cumulative_incidence,
-        hazard_by_age,
-        incidence_from_hazards,
-        incidence_gap,
-    )
-    from creditsurv.models.selection import PREPAYMENT_SIGNS, signs_against_prior
+    from creditsurv.models.families import NotSelected, compare_families
     from creditsurv.reporting import family as family_report
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    macro = load_macro_panel()
-    identity = cells_identity(moratorium)
-    reporting_date = pd.Period(as_of, freq="M")
-    cut = month_ordinal(reporting_date)
-
-    def record(distribution: str, cause: str = DEFAULT_CAUSE) -> dict[str, object] | None:
-        """One selection's record, read from the JSON it wrote beside its report."""
-        name = record_name(distribution=distribution, cause=cause, published=DISTRIBUTION)
-        path = reports_dir() / f"{name}.json"
-        if not path.exists():
-            return None
-        return cast("dict[str, object]", json.loads(path.read_text()))
-
-    def covariates_of(described: dict[str, object]) -> list[str]:
-        """What the selected model reads, from the record rather than from its formula."""
-        listed = [
-            *cast("list[str]", described["static_continuous"]),
-            *cast("list[str]", described["ordinal"]),
-            *cast("list[str]", described["time_varying_continuous"]),
-            *cast("dict[str, str]", described["categorical"]),
-        ]
-        return listed
-
-    def hazards(described: dict[str, object], cause: str) -> pd.DataFrame:
-        """The selected model's mean hazard by age, over the development window."""
-        distribution = str(described["distribution"])
-        fitted = selected_fit(
-            identity=identity,
+    try:
+        comparison = compare_families(
             as_of=as_of,
             moratorium=moratorium,
-            formula=str(described["formula"]),
-            distribution=distribution,
-            cause=cause,
+            macro=load_macro_panel(),
+            block_rows=block_rows,
         )
-        if fitted is None:
-            flags = f"--dist {distribution}" + (
-                f" --cause {cause}" if cause != DEFAULT_CAUSE else ""
-            )
-            message = (
-                f"No cached fit of the {distribution} {cause} model on these cells. "
-                f"Run `creditsurv select {flags}`."
-            )
-            raise typer.BadParameter(message)
-        covariates = covariates_of(described)
-        source = cell_source(
-            moratorium, macro, covariates, block_rows=block_rows, until=cut, cause=cause
-        )
-        typer.echo(f"  reading the {distribution} {cause} hazards by age...")
-        return hazard_by_age(source(), fitted, covariates, weights_col=WEIGHT)
-
-    # The observed side is a statement about sums, so it is taken inside the parquet reader:
-    # a few hundred rows out of 91.6 million cells, with nothing expanded.
-    typer.echo("The observed cumulative incidence, from the cells...")
-    observed = cumulative_incidence(outcomes_by_age(moratorium, last=cut))
-
-    prepayment = record(DISTRIBUTION, PREPAYMENT_CAUSE)
-    if prepayment is None:
-        message = (
-            "The prepayment model has not been selected on these cells, and a cumulative "
-            "incidence needs both hazards. Run `creditsurv select --cause prepayment`."
-        )
-        raise typer.BadParameter(message)
-    prepaid = hazards(prepayment, PREPAYMENT_CAUSE)
-    prepayment_fit = selected_fit(
-        identity=identity,
-        as_of=as_of,
-        moratorium=moratorium,
-        formula=str(prepayment["formula"]),
-        distribution=str(prepayment["distribution"]),
-        cause=PREPAYMENT_CAUSE,
-    )
-    if prepayment_fit is not None:
-        backwards = signs_against_prior(prepayment_fit, PREPAYMENT_SIGNS)
-        if backwards:
-            typer.echo(
-                f"  the prepayment model turns {', '.join(backwards)} against rule 6's prior; "
-                "rule 11 names the covariates it kept because their removal left an unfittable "
-                "model, and the report says so."
-            )
-
-    gaps: dict[str, pd.DataFrame] = {}
-    signs: dict[str, list[str]] = {}
-    formulas: dict[str, str] = {}
-    for distribution in CONVERGENT_DISTRIBUTIONS:
-        described = record(distribution)
-        if described is None:
-            typer.echo(f"{distribution}: no selection record on these cells; skipped.")
-            continue
-        formulas[distribution] = str(described["formula"])
-        predicted = incidence_from_hazards(
-            {DEFAULT_CAUSE: hazards(described, DEFAULT_CAUSE), PREPAYMENT_CAUSE: prepaid}
-        )
-        gaps[distribution] = incidence_gap(predicted, observed)
-        fitted = selected_fit(
-            identity=identity,
-            as_of=as_of,
-            moratorium=moratorium,
-            formula=formulas[distribution],
-            distribution=distribution,
-        )
-        assert fitted is not None
-        # The default model's priors, which are not the prepayment model's: rule 6 declares its
-        # own, and reading the wrong map would exclude a family under rule 2 for a sign nobody
-        # ever expected of it.
-        signs[distribution] = signs_against_prior(fitted)
-
-    if not gaps:
-        message = "No selection has been run on these cells; there is nothing to compare."
-        raise typer.BadParameter(message)
+    except NotSelected as missing:
+        # Which command to run is something only this layer can say.
+        raise typer.BadParameter(str(missing)) from missing
 
     chosen, written = family_report.generate(
-        gaps, signs, formulas=formulas, reports_dir=reports_dir()
+        comparison.gaps,
+        comparison.signs,
+        formulas=comparison.formulas,
+        reports_dir=reports_dir(),
     )
     typer.echo(f"\nThe rule chooses: {chosen}")
     if chosen != DISTRIBUTION:
