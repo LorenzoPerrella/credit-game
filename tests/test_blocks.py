@@ -68,6 +68,20 @@ def weighted(book_dir: Path, macro_module: pd.DataFrame) -> pd.DataFrame:
     return encoded.sort_values(["purpose", "age"], kind="stable").reset_index(drop=True)
 
 
+@pytest.fixture
+def through_the_optimiser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the fit fall through to the method chain, which is now the fallback.
+
+    Damped Newton from the starting point goes first -- 10.18 minutes against 43.79 for SLSQP
+    on the production table, to the same log-likelihood -- so the chain is reached only when
+    Newton declines. Everything the chain does is still reachable and still has to work, and a
+    test of it that let Newton answer instead would pass without exercising anything.
+    """
+    from creditsurv.models import blocks
+
+    monkeypatch.setattr(blocks, "_newton_steps_first", lambda objective, start: None)
+
+
 def single_level_rows(frame: pd.DataFrame) -> int:
     """A block size that leaves the first two blocks with one purpose only."""
     rows = int((frame["purpose"] == frame["purpose"].iloc[0]).sum() // 2)
@@ -368,7 +382,9 @@ def test_the_slicer_hands_lifelines_the_columns_it_asks_for(macro: pd.DataFrame)
 
 
 def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
-    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+    weighted: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    through_the_optimiser: None,
 ) -> None:
     """SLSQP solves a quadratic subproblem at each step, and on an ill-conditioned design it
     reports "Rank-deficient equality constraint subproblem" and gives up -- which is what the
@@ -425,7 +441,9 @@ def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
 
 
 def test_the_optimisers_report_is_used_for_nothing_but_its_point(
-    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+    weighted: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    through_the_optimiser: None,
 ) -> None:
     """Each optimiser reports its value and gradient its own way: SLSQP's ``jac`` is the
     gradient, trust-constr's is shaped for its constraint machinery. Reading that field cost a
@@ -520,7 +538,9 @@ def test_the_shape_is_bounded_far_more_tightly_than_the_coefficients() -> None:
 
 
 def test_a_method_that_stops_short_of_its_tolerance_is_finished_by_the_polish(
-    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+    weighted: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    through_the_optimiser: None,
 ) -> None:
     """lifelines caps SLSQP at 200 iterations, and a fit that reaches the cap comes back
     `success=False` although it is at the answer: on the prepayment model one had been stable
@@ -589,7 +609,9 @@ def test_the_region_that_is_not_a_likelihood_is_a_wall() -> None:
 
 
 def test_a_point_outside_the_likelihood_stops_the_chain(
-    weighted: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+    weighted: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    through_the_optimiser: None,
 ) -> None:
     """Ending outside the likelihood is a statement about the **surface**: the optimiser found
     nothing better than the wall, so the specification has the spurious minimum lifelines'
@@ -1180,3 +1202,61 @@ def test_an_unclassified_covariate_has_no_index_to_be_looked_up_by(
             entry_col=AGE_START,
             weights_col="loan_months",
         )
+
+
+def test_newton_goes_first_from_a_cold_start_and_not_only_from_a_warm_one(
+    weighted: pd.DataFrame,
+) -> None:
+    """The optimiser's long path was the price of an expensive Hessian, and it is not any more.
+
+    A cold fit used to be fifty to a hundred and forty SLSQP evaluations, because a Hessian cost
+    forty-nine times a value and a hundred of them was out of the question. The written-out
+    kernel puts a Hessian at about twice a value-and-gradient, and on the production table the
+    same specification from lifelines' own seed takes **10.18 minutes and 16 evaluations**
+    through damped Newton against **43.79 and 142** through SLSQP, to the same log-likelihood
+    of -10,691,177.6879.
+
+    So Newton is tried first from wherever the fit starts. What the engine promises is unchanged
+    and is what decides: the polish measures the distance to the optimum and refuses a fit it
+    cannot drive under a thousandth of a standard error.
+    """
+    fitter = FITTERS["weibull"]()
+    record = fit_interval_censoring_in_blocks(
+        fitter,
+        model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+        formula=FORMULA,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+        polish=True,
+    )
+
+    assert record.method == "newton", "no optimiser was needed"
+    assert record.polish_steps > 0, "and it got there by taking steps"
+    assert record.residual_error_se < POLISH_TOLERANCE_SE
+    assert fitter.log_likelihood_ < 0
+
+    # `polish=False` is the mode that reproduces lifelines exactly, so it keeps the optimiser.
+    stock = FITTERS["weibull"]()
+    without = fit_interval_censoring_in_blocks(
+        stock,
+        model_blocks(weighted, COVARIATES, rows=4_000, weights_col="loan_months"),
+        formula=FORMULA,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+        polish=False,
+    )
+    assert without.method == "slsqp"
+    # The two agree to a fraction of a standard error, and the polished one is the better of
+    # them: lifelines' SLSQP stops on a change of 1e-10 in the *mean* log-likelihood, which
+    # takes no account of how precisely the data pin a coefficient down, and on four quarters
+    # of the book it stopped up to 5.9 standard errors out.
+    apart = (fitter.params_ - stock.params_).abs() / fitter.standard_errors_
+    assert apart.max() < 0.1, f"{apart.max()} standard errors apart"
+    assert fitter.log_likelihood_ >= stock.log_likelihood_, "the polish finished the job"
+    assert without.residual_error_se > record.residual_error_se

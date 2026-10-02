@@ -1225,13 +1225,25 @@ def test_a_rebuilt_table_starts_from_the_same_model_fitted_on_the_old_one(
     )
     cold = before.fit(spec)
     assert cold.blocks is not None
-    assert cold.blocks.method != "newton", "nothing in the cache to start from"
 
     after = Fits(train, identity="cells_exclude.parquet:2:2", as_of="2008-12", moratorium="exclude")
+    # What has to be shown is that the lookup was consulted and answered, and the recorded
+    # method no longer distinguishes that: damped Newton goes first from any starting point, so
+    # a cold fit says `newton` too.
+    borrowed: list[FitResult | None] = []
+    original = Fits._elsewhere
+
+    def spy(self: Fits, described: dict[str, object]) -> FitResult | None:
+        found = original(self, described)
+        borrowed.append(found)
+        return found
+
+    monkeypatch.setattr(Fits, "_elsewhere", spy)
     warm = after.fit(spec)
 
+    assert borrowed and borrowed[0] is not None, "the old table's fit was not found"
     assert warm.blocks is not None
-    assert warm.blocks.method == "newton", "the old table's optimum was not used as a start"
+    assert warm.blocks.method == "newton"
     assert after.record[-1]["cached"] is False, "a start is not a result"
     assert warm is not cold
 

@@ -105,6 +105,17 @@ per row **rises with the block size**, 0.83 to 1.33 µs a row from 49,000 to 968
 26 columns a million-row block allocates 208 MB of design and ~700 MB of tape per evaluation.
 `docs/reports/engine.md` carries the table and the scaling to the whole training half.
 
+**And the sentence this paragraph used to end with -- "speed lives in the evaluation, not in
+Newton" -- was true only while a Hessian was unaffordable.** It is now about twice a
+value-and-gradient, so **damped Newton goes first from wherever a fit starts**, cold or warm,
+with the method chain behind it as the fallback. On the production table, the same
+specification from lifelines' own seed: **10.18 minutes and 16 evaluations** against **43.79
+and 142**, to the same log-likelihood of -10,691,177.6879. It begins 1.89e+03 standard errors
+out, the first six evaluations are refused as not a likelihood -- the damped step probing the
+clipped region -- and the damping ladder walks it in: 1.26e3, 706, 423, 207, 58.4, 6.61, 0.107,
+3.31e-05. `polish=False` keeps the optimiser, because that mode exists to reproduce lifelines
+exactly.
+
 And the evaluation is not arithmetic-bound. Profiled, a value-and-gradient spent **42% in
 autograd's tape, 32% in `pandas.take` and 20% copying**, with the likelihood's own exp and log a
 minority. The pandas half was waste -- the design and the masks the likelihood filters by do not

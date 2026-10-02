@@ -704,12 +704,27 @@ def _fit_from_scan(
         pool.prepare(columns, norm_std.to_numpy(), total_weight, seeded)
         objective = _Pooled(fitter, local, pool, unflatten, floor=floor)
 
-    # From a warm start Newton goes straight to the optimum. SLSQP would rebuild its
-    # curvature estimate from nothing and take as many evaluations as from a cold start:
-    # 27 against 27 on the test fixture.
-    solution = (
-        _newton_from(objective, start) if polish and isinstance(initial_point, pd.Series) else None
-    )
+    # **Newton first, from wherever the fit starts, with the method chain behind it.**
+    #
+    # From a warm start that was always right: SLSQP rebuilds its curvature estimate from
+    # nothing and takes as many evaluations as from a cold start, 27 against 27 on the fixture.
+    # From a **cold** start it used to be unaffordable, because a Hessian cost 49 times a value
+    # and a hundred of them was out of the question. The written-out kernel puts a Hessian at
+    # about twice a value-and-gradient, and the arithmetic changes sides. Measured on the
+    # production table, the same specification from lifelines' own seed:
+    #
+    #     SLSQP then the polish    43.79 min   142 evaluations   2 Newton steps
+    #     Newton from the seed     10.18 min    16 evaluations   8 Newton steps
+    #
+    # to the same log-likelihood, -10,691,177.6879, certified 3.31e-05 standard errors from the
+    # optimum. It begins 1.89e+03 standard errors out and the first six evaluations are refused
+    # as not a likelihood -- the damped step probing lifelines' clipped region -- and then the
+    # damping ladder walks it in: 1.26e3, 706, 423, 207, 58.4, 6.61, 0.107, 3.31e-05.
+    #
+    # The chain stays as the fallback, and anything the Newton attempt raises goes to it rather
+    # than to the caller: this replaces the optimiser's path, so no fit that used to succeed may
+    # fail. `polish=False` skips it, because that mode exists to reproduce lifelines exactly.
+    solution = _newton_steps_first(objective, start) if polish else None
     if solution is None:
         limits = _limits(columns, fitter._primary_parameter_name)
         attempts: list[OptimizeResult] = []
@@ -2218,6 +2233,37 @@ def _from_optimiser(
         return solution
     _, stopped = _newton_step(curvature, gradient, objective.total_weight)
     return x, value, curvature, 0, stopped, stopped
+
+
+def _newton_steps_first(
+    objective: _Evaluator, start: np.ndarray
+) -> tuple[np.ndarray, float, np.ndarray, int, float, float] | None:
+    """Damped Newton from the starting point, or ``None`` if it could not finish.
+
+    Separated from :func:`_newton_from` so that a failure here is a fallback rather than a
+    verdict. What the fallback costs is the attempt -- sixteen evaluations and eight Hessians
+    on the production table -- and what it buys is that the optimiser's path stops being 96%
+    of a cold fit. `Pinned` goes the same way as the rest: against a cold seed it says the
+    damped step met the clipped region, which is what the ladder exists to climb out of, and
+    the method chain is entitled to its own opinion.
+    """
+    try:
+        solution = _newton_from(objective, start)
+    except exceptions.ConvergenceError as error:
+        log.info("Newton from the start did not finish (%s); trying the optimiser", error)
+        return None
+    if solution is None:
+        return None
+    *_, remaining = solution
+    if remaining > POLISH_TOLERANCE_SE:
+        log.info(
+            "Newton from the start left %.3g standard errors, past the %.0e this engine "
+            "promises; trying the optimiser",
+            remaining,
+            POLISH_TOLERANCE_SE,
+        )
+        return None
+    return solution
 
 
 def _newton_from(
