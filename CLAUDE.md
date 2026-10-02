@@ -49,6 +49,16 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
   gradient and curvature of these rows, under a thousandth of a standard error. Because such a
   start is a guess about a different table, a `Pinned` from it is retried cold, which is the
   one place that exception is not taken at its word.
+- **The rows are read once a selection, not once a candidate.** A fit through the written-out
+  kernel on the production table is **53 seconds of arithmetic behind 12.1 minutes of reading**,
+  and every one of a selection's thirty fits used to pay that reading again -- the fifteen
+  step-7 fits of one logged run each began by recomputing the identical base objective to
+  twelve digits. `blocks.encode_blocks` reads with **no formula involved** and keeps fifteen
+  bytes a row plus the key of every combination (1.09 GB for the training half); each
+  candidate's design is then two tables built by putting its formula through **3,001** loan
+  combinations and **153,309** calendar keys. `creditsurv select --traced` goes back to tracing
+  autograd and re-reading, which is what the equivalence tests hold the other to; `--workers`
+  applies to it only, because a reading is one process.
 - **Nothing holds the panel any more, and nothing should start again.** Every command that
   used to expand the training half now reads the cell file a batch at a time: the fits
   (`models.blocks`), the selection (`Fits(blocks=...)`), the views (`views.streamed`) and the

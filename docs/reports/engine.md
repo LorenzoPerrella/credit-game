@@ -168,6 +168,47 @@ column is a function of the loan combination or of the calendar key, a *differen
 tables are built by putting the formula through frames of **3,001 and 153,309 rows**. One scan,
 then every candidate fitted without touching the 72 million again.
 
+## One reading, many fits
+
+The reading is 93% of a fit, so it is read once and every model is fitted from it. Measured on
+the production table, one process:
+
+| | |
+|---|---|
+| the reading, with **no formula involved** | **10.88 minutes**, 1.09 GB of rows, 2.88 GB footprint |
+| the keys it found | **3,001** loan combinations, **152,565** calendar |
+| the selected model, warm from the cached optimum | **0.89 min**, 1 evaluation, 0 Newton steps |
+| a nested candidate, warm from its parent | **5.67 min**, 6 evaluations, 5 Newton steps |
+| the selected model, cold | 43.79 min, **142 evaluations**, 2 Newton steps |
+
+The warm fit lands **9.9e-15** standard errors from the optimum already in the cache and the
+cold one 0.000917, both at the same log-likelihood to four decimals of ten million. The first
+evaluation of the warm fit reads 0.005060834733 -- the same twelve digits the scan path read.
+So the encoding is the same estimator at full scale, not only on a fixture.
+
+**The reading itself barely moved**: 10.88 minutes against the 12.1 of a scan that also built a
+design, accumulated moments over 26 columns and compacted it. What is left is parquet, the
+macro family and the key coding, and it is close to irreducible. The gain is not that a reading
+got cheaper; it is that a selection pays **three** of them -- the training half and the two
+origination-year halves of step 9 -- where it used to pay one per candidate, about thirty.
+
+Finding one of those three took vectorising a lookup: walking each block in Python to find
+which combinations were new to it is two passes over 250,000 rows for each of 443 blocks, 221
+million interpreted iterations, and it made an encoding *slower* than the scan. `np.unique`
+with `return_index` does it in one sorted call.
+
+**And the cold fit says where the next win is.** Its 142 SLSQP evaluations at 17 seconds each
+are 96% of its 43.79 minutes; the two Newton steps that finish it cost 39 seconds a Hessian.
+That ratio is the one the whole engine used to be shaped around -- a Hessian was 49 times a
+value, so Newton was unaffordable and the optimiser's long path was the only option. It is now
+about twice a value-and-gradient, which makes **Newton from the first step** the obvious
+replacement for a hundred and forty SLSQP evaluations. The warm fits are the mirror image: the
+nested candidate's 5.67 minutes are five Hessians and six evaluations, so it is curvature-bound,
+and *that* is the part a compiled kernel shortens.
+
+Put together, a selection run comes to about three and a half hours where the four recorded runs
+averaged ten and a half, and the two things above are what is left to take.
+
 ## The gate for compiling anything
 
 The compiled kernel is measured **against the NumPy above**, not against autograd. Measuring it

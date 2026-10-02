@@ -44,14 +44,18 @@ from creditsurv.data.panel import (
     model_blocks,
     right_censored_frame,
 )
-from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, fit_interval_censoring_in_blocks
+from creditsurv.models.blocks import (
+    DEFAULT_BLOCK_ROWS,
+    fit_encoded,
+    fit_interval_censoring_in_blocks,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
 
     from lifelines.fitters import ParametericAFTRegressionFitter
 
-    from creditsurv.models.blocks import BlockFit
+    from creditsurv.models.blocks import BlockFit, Encoding
 
 
 class Likelihood(StrEnum):
@@ -270,6 +274,59 @@ def fit_aft(
         n_episodes=int(selected.sum()),
         n_events=n_events,
         elapsed_seconds=elapsed,
+        blocks=record,
+    )
+
+
+def fit_encoding(
+    encoding: Encoding,
+    covariates: Sequence[str],
+    formula: str,
+    *,
+    distribution: str = "weibull",
+    penalizer: float = 0.0,
+    ancillary: str | bool | None = None,
+    show_progress: bool = False,
+    initial_point: np.ndarray | pd.Series | None = None,
+    polish: bool = True,
+    prefer: str | None = None,
+    floor: float | None = None,
+) -> FitResult:
+    """Fit one model from rows that have already been read, without reading them again.
+
+    The expensive half of a fit is the reading: 12.1 minutes against 53 seconds of arithmetic
+    on the production table. An :class:`~creditsurv.models.blocks.Encoding` is that reading,
+    done once and with no formula involved, and this is a model fitted from it -- its design
+    built by putting its formula through the key frames, 3,001 loan combinations and 153,309
+    calendar keys, instead of over 72 million rows.
+
+    ``covariates`` is kept in the signature for the record's sake; what the design may read is
+    settled by the formula and by what the encoding's two keys carry.
+    """
+    if distribution not in FITTERS:
+        message = f"Unknown distribution {distribution!r}; expected one of {sorted(FITTERS)}."
+        raise ValueError(message)
+    fitter = FITTERS[distribution](penalizer=penalizer)
+    started = time.perf_counter()
+    record = fit_encoded(
+        fitter,
+        encoding,
+        formula=formula,
+        ancillary=ancillary,
+        initial_point=initial_point,
+        show_progress=show_progress,
+        polish=polish,
+        prefer=prefer,
+        floor=floor,
+    )
+    return FitResult(
+        fitter=fitter,
+        distribution=distribution,
+        likelihood=Likelihood.INTERVAL_CENSORED,
+        formula=formula,
+        n_episodes=record.rows,
+        n_events=int(record.events),
+        elapsed_seconds=time.perf_counter() - started,
         blocks=record,
     )
 

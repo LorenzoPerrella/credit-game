@@ -1273,3 +1273,98 @@ def test_a_start_borrowed_from_another_table_can_never_fail_a_fit(
 
     assert attempts == [True, False], "the borrowed start was tried, then given up on"
     assert result.log_likelihood < 0
+
+
+def test_a_selection_from_one_encoding_chooses_what_a_re_reading_chooses(
+    selection_cells: Path,
+    macro_module: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The claim at the level of the procedure rather than of one fit.
+
+    A selection makes about thirty fits and every one of them used to re-read the cell file,
+    re-derive the macro family, rebuild the design and throw all of it away. On the production
+    table that reading is 12.1 minutes against 53 seconds of arithmetic, and the fifteen
+    step-7 fits of one logged run each began by recomputing the identical base objective to
+    twelve digits.
+
+    Naming the calendar covariates reads the rows **once** -- once per sample, so three times
+    in a run with a stability step -- and builds each candidate's design from the keys. What
+    has to come out of it is the same specification, with the same covariates eliminated for
+    the same reasons.
+    """
+    from creditsurv.data.panel import WEIGHT, CellBlocks
+    from creditsurv.models.selection import weighted_moments
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    source = CellBlocks(
+        str(selection_cells), macro_module, tuple(STREAMED_CANDIDATES), rows=4_000
+    ).prepared()
+    moments = weighted_moments(source(), STREAMED_CANDIDATES, weight=WEIGHT)
+
+    def run(fits: Fits) -> SelectionRecord:
+        return run_selection(
+            None,
+            fits,
+            static=["credit_score", "original_ltv"],
+            ordinal=[],
+            macro=["ltv_change", "unemployment_change"],
+            base_categorical={"purpose": "purchase"},
+            candidate_categorical={},
+            stability=True,
+            moments=moments,
+        )
+
+    expected = run(
+        Fits(None, identity="re-read", as_of="2014-12", moratorium="exclude", blocks=source)
+    )
+    once = Fits(
+        None,
+        identity="encoded",
+        as_of="2014-12",
+        moratorium="exclude",
+        blocks=source,
+        calendar=["ltv_change", "unemployment_change"],
+    )
+    got = run(once)
+
+    assert got.selected.formula == expected.selected.formula
+    assert got.eliminated == expected.eliminated
+    assert got.rows == expected.rows
+    assert int(got.loan_months) == int(expected.loan_months)
+
+    # One reading a sample, not one a candidate: the whole half and the two halves of step 9.
+    assert len(once.held) <= 3
+    assert len(once.record) > len(once.held), "the run must have made more fits than readings"
+
+
+def test_a_row_mask_is_refused_where_the_rows_are_read_rather_than_held(
+    selection_cells: Path, macro_module: pd.DataFrame
+) -> None:
+    """A mask selects rows of a frame the reading path never builds.
+
+    The sample is a property of the reading -- `vintage_parity`, applied while the cells are
+    read -- so a mask silently ignored here would fit the whole half and record it as a half,
+    which is the stability step's two rounds comparing the same numbers with themselves.
+    """
+    from creditsurv.data.panel import CellBlocks
+
+    source = CellBlocks(
+        str(selection_cells), macro_module, tuple(STREAMED_CANDIDATES), rows=4_000
+    ).prepared()
+    fits = Fits(
+        None,
+        identity="encoded",
+        as_of="2014-12",
+        moratorium="exclude",
+        blocks=source,
+        calendar=["ltv_change", "unemployment_change"],
+    )
+
+    with pytest.raises(ValueError, match="has no meaning when the rows are read"):
+        fits.fit(
+            Specification(continuous=("credit_score",)),
+            sample="even origination years",
+            where=np.ones(3, dtype=bool),
+        )

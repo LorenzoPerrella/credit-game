@@ -50,11 +50,19 @@ from creditsurv.config import (
     MACRO_CANDIDATES,
     MACRO_ELIMINATION_PRIORITY,
 )
-from creditsurv.data.panel import DEFAULT_CAUSE, WEIGHT, CellBlocks
+from creditsurv.data.panel import (
+    AGE_START,
+    DEFAULT_CAUSE,
+    EXACT_OBSERVATION,
+    LOWER_BOUND,
+    UPPER_BOUND,
+    WEIGHT,
+    CellBlocks,
+)
 from creditsurv.data.store import find_fits, fit_fingerprint, load_fit, save_fit
 from creditsurv.explore import collinear_pairs
-from creditsurv.models.aft import FitResult, fit_aft, fit_streamed
-from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, Pinned
+from creditsurv.models.aft import FitResult, fit_aft, fit_encoding, fit_streamed
+from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, Encoding, Pinned, encode_blocks
 from creditsurv.models.selection import (
     EXPECTED_SIGNS,
     PVALUE_THRESHOLD,
@@ -176,7 +184,23 @@ class Fits:
     #: same model at every step -- and walking the chain each time cost over an hour a fit on
     #: the prepayment model.
     preferred: str | None = None
+    #: The covariates that are functions of the calendar rather than of the loan. Given, the
+    #: rows are **read once** and every fit of the run is made from that reading, through
+    #: `models.kernel`: a fit on the production table is 53 seconds of arithmetic behind 12.1
+    #: minutes of reading, and a selection used to pay the reading once per candidate. The
+    #: list is `config.MACRO_CANDIDATES`, declared before any fit with its own argument -- "a
+    #: macro covariate is a function of the vintage quarter and the loan age, both already in
+    #: the aggregation key".
+    calendar: Sequence[str] | None = None
     record: list[dict[str, object]] = field(default_factory=list)
+    #: One encoding per sample, kept for the life of the run. Three at most: the training half
+    #: and the two origination-year halves step 9 compares, against thirty readings.
+    held: dict[int | None, Encoding] = field(default_factory=dict, repr=False)
+    #: Every covariate the run will ever read, which a reading has to cover because it is made
+    #: once and before the first specification exists. `run_selection` sets it from its own
+    #: candidate lists; without it the description's own covariates are all that is assumed,
+    #: and a formula naming anything else fails where it is expanded rather than silently.
+    covering: tuple[str, ...] | None = None
 
     def fit(
         self,
@@ -238,6 +262,38 @@ class Fits:
             {**described, "minutes": minutes, "evaluations": evaluations, "cached": False}
         )
         return result
+
+    def _encoding(self, parity: int | None) -> Encoding:
+        """The rows of one sample, read once and kept for every fit that wants them.
+
+        A reading involves no formula -- no design to expand, no moments over 26 columns,
+        nothing through formulaic -- and keeps fifteen bytes a row plus the key of every
+        combination, 1.09 GB for the production table's training half. Each candidate's design
+        is then two tables built from those keys.
+
+        The two halves of step 9 are different rows, so they are different readings; nothing
+        else in a selection is.
+        """
+        held = self.held.get(parity)
+        if held is not None:
+            return held
+        assert self.blocks is not None
+        assert self.calendar is not None
+        calendar = set(self.calendar)
+        covering = self.covering or self.blocks.covariates
+        source = replace(self.blocks, covariates=tuple(covering), vintage_parity=parity).prepared()
+        held = encode_blocks(
+            source(),
+            loan=[name for name in covering if name not in calendar],
+            calendar=[name for name in covering if name in calendar],
+            lower_bound_col=LOWER_BOUND,
+            upper_bound_col=UPPER_BOUND,
+            event_col=EXACT_OBSERVATION,
+            entry_col=AGE_START,
+            weights_col=WEIGHT,
+        )
+        self.held[parity] = held
+        return held
 
     def _elsewhere(self, described: dict[str, object]) -> FitResult | None:
         """The same specification fitted on **another** cell table, as a starting point only.
@@ -318,8 +374,30 @@ class Fits:
         start: FitResult | None,
         floor: float | None = None,
     ) -> FitResult:
-        """One attempt, from the rows in hand or from the cell file."""
+        """One attempt, from the rows in hand, from an encoding of them, or from the file."""
         initial_point = None if start is None else start.fitter.params_
+        if self.blocks is not None and self.calendar is not None:
+            if where is not None:
+                # A mask selects rows of a frame this path never builds. The sample is a
+                # property of the reading -- `vintage_parity` while the cells are read -- and
+                # a mask silently ignored here would fit the whole half and call it a half.
+                message = (
+                    "A row mask has no meaning when the rows are read from the cell file: "
+                    "the sample is taken while reading, through the parity."
+                )
+                raise ValueError(message)
+            fitted = fit_encoding(
+                self._encoding(parity),
+                spec.covariates,
+                spec.formula,
+                distribution=self.distribution,
+                initial_point=initial_point,
+                prefer=self.preferred,
+                floor=floor,
+            )
+            if fitted.blocks is not None and fitted.blocks.method not in {"newton", "warm"}:
+                self.preferred = fitted.blocks.method
+            return fitted
         if self.blocks is None:
             if self.train is None:
                 message = "Fits needs either an episode frame or a CellBlocks to read."
@@ -576,6 +654,10 @@ def run_selection(
     loan = [*static, *ordinal]
     continuous = [*loan, *macro]
     eliminated: dict[str, str] = {}
+    # What a reading has to cover, said before the first specification exists: a reading is
+    # made once and serves every fit of the run, so it cannot be narrowed to the first
+    # formula's columns. The order is the one the candidate lists were given in.
+    fits.covering = tuple(dict.fromkeys([*continuous, *base_categorical, *candidate_categorical]))
 
     # 5. Pairs that say the same thing -- reported, not resolved.
     log.info("step 5: weighted correlation of %d candidates", len(continuous))

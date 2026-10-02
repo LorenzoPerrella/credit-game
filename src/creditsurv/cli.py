@@ -1296,9 +1296,16 @@ def select(
         str, typer.Option(help="default or prepayment: which exit is being modelled.")
     ] = DEFAULT_CAUSE,
     workers: Annotated[
-        int, typer.Option(help="Processes each fit's likelihood is evaluated in.")
+        int, typer.Option(help="Processes each fit's likelihood is evaluated in; traced only.")
     ] = 1,
     block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
+    traced: Annotated[
+        bool,
+        typer.Option(
+            "--traced/--written-out",
+            help="Trace lifelines' likelihood with autograd, re-reading the rows for every fit.",
+        ),
+    ] = False,
 ) -> None:
     """Run the variable selection on the training half, and write what it chose.
 
@@ -1317,6 +1324,15 @@ def select(
     model's. They are not the same priors and cannot be -- a credit score that lengthens
     survival shortens the time to repayment -- so a run with one map and the other cause
     would eliminate covariates for disagreeing with the wrong economics.
+
+    The rows are read **once** and every fit of the run is made from that reading, through
+    ``creditsurv.models.kernel``. On the production table a fit is 53 seconds of arithmetic
+    behind 12.1 minutes of reading, and the selection used to pay the reading once per
+    candidate -- about thirty times, with the fifteen step-7 fits each beginning by
+    recomputing the identical base objective to twelve digits. ``--traced`` goes back to
+    tracing lifelines' likelihood with autograd and re-reading for every fit: the same
+    estimator, and what the equivalence tests hold the other to. ``--workers`` applies to it
+    only; a reading is one process and needs no more, at fifteen bytes a row.
 
     The report goes to ``docs/reports/selection.md`` with ``selection.json`` beside it, the
     record the configuration is tested against. See ``creditsurv.models.procedure``.
@@ -1372,7 +1388,8 @@ def select(
     identity = cells_identity(moratorium)
     typer.echo(
         f"Selecting {cause} on {moments.rows:,} cells, {int(moments.loan_months):,} "
-        f"loan-months, with the {dist} family in {workers} process(es)."
+        f"loan-months, with the {dist} family"
+        + (f" in {workers} process(es), re-reading for every fit." if traced else ", read once.")
     )
 
     fits = Fits(
@@ -1384,6 +1401,10 @@ def select(
         cause=cause,
         blocks=source,
         workers=workers,
+        # Declared in `config` before any fit, with its own argument: "a macro covariate is a
+        # function of the vintage quarter and the loan age, both already in the aggregation
+        # key". That is exactly the split the kernel needs.
+        calendar=None if traced else MACRO_CANDIDATES,
     )
     record = run_selection(
         None,

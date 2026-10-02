@@ -441,6 +441,23 @@ def _counts(weight: np.ndarray) -> np.ndarray:
     return rounded.astype(np.uint32)
 
 
+def _first_seen(codes: np.ndarray, held: int) -> dict[int, int]:
+    """Where each combination new to this block first appears in it.
+
+    Codes are handed out in order of first appearance, so the new ones are exactly the
+    indices from ``held`` up. Finding them by walking the block in Python cost **minutes**:
+    two passes over 250,000 rows for each of 443 blocks is 221 million interpreted
+    iterations, and it made an encoding of the production table slower than the design-building
+    scan it replaces. `np.unique` sorts instead, and returns the first position of every
+    distinct code in one call.
+    """
+    if not len(codes):
+        return {}
+    distinct, first = np.unique(codes, return_index=True)
+    fresh = distinct >= held
+    return dict(zip(distinct[fresh].tolist(), first[fresh].tolist(), strict=True))
+
+
 def _tallied(counts: np.ndarray, codes: np.ndarray, size: int) -> np.ndarray:
     """The running count of rows per combination, grown to hold the newest ones."""
     if size > len(counts):
@@ -703,20 +720,12 @@ class Factorisation:
         which row of this block was taken for each new combination, so the key values can be
         taken from the same rows.
         """
-        wanted = int(codes.max()) + 1 if len(codes) else 0
-        missing = set(range(len(rows), wanted))
-        taken: dict[int, int] = {}
-        if not missing:
+        taken = _first_seen(codes, len(rows))
+        if not taken:
             return taken
-        rows.extend(np.zeros(design.shape[1]) for _ in missing)
-        for position, code in enumerate(codes):
-            index = int(code)
-            if index in missing:
-                rows[index] = design[position].copy()
-                taken[index] = position
-                missing.discard(index)
-                if not missing:
-                    break
+        rows.extend(np.zeros(design.shape[1]) for _ in taken)
+        for code, position in taken.items():
+            rows[code] = design[position].copy()
         return taken
 
     @staticmethod
@@ -724,21 +733,9 @@ class Factorisation:
         """Which combinations this block is the first to carry, and where they are in it.
 
         The same accounting `_grow` does while storing a design row, for the path that stores
-        no design: codes are handed out in order of first appearance, so the new ones are the
-        indices past the end of what has been kept.
+        no design.
         """
-        held = sum(len(piece) for piece in pieces)
-        wanted = int(codes.max()) + 1 if len(codes) else 0
-        missing = set(range(held, wanted))
-        taken: dict[int, int] = {}
-        for position, code in enumerate(codes):
-            index = int(code)
-            if index in missing:
-                taken[index] = position
-                missing.discard(index)
-                if not missing:
-                    break
-        return taken
+        return _first_seen(codes, sum(len(piece) for piece in pieces))
 
     @staticmethod
     def _keys(
