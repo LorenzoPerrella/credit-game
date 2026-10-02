@@ -197,17 +197,55 @@ which combinations were new to it is two passes over 250,000 rows for each of 44
 million interpreted iterations, and it made an encoding *slower* than the scan. `np.unique`
 with `return_index` does it in one sorted call.
 
-**And the cold fit says where the next win is.** Its 142 SLSQP evaluations at 17 seconds each
-are 96% of its 43.79 minutes; the two Newton steps that finish it cost 39 seconds a Hessian.
-That ratio is the one the whole engine used to be shaped around -- a Hessian was 49 times a
-value, so Newton was unaffordable and the optimiser's long path was the only option. It is now
-about twice a value-and-gradient, which makes **Newton from the first step** the obvious
-replacement for a hundred and forty SLSQP evaluations. The warm fits are the mirror image: the
-nested candidate's 5.67 minutes are five Hessians and six evaluations, so it is curvature-bound,
-and *that* is the part a compiled kernel shortens.
+## Newton instead of the optimiser's long path
 
-Put together, a selection run comes to about three and a half hours where the four recorded runs
-averaged ten and a half, and the two things above are what is left to take.
+The cold fit's 142 SLSQP evaluations at 17 seconds each were 96% of its 43.79 minutes, while
+the two Newton steps that finished it cost 39 seconds a Hessian. That ratio is the one the whole
+engine used to be shaped around: a Hessian was 49 times a value, so a hundred of them was out
+of the question and the optimiser's long path was the only option. At twice a
+value-and-gradient the arithmetic changes sides. From lifelines' own seed, nothing else
+changed:
+
+| | time | evaluations | Newton steps | log-likelihood |
+|---|---|---|---|---|
+| SLSQP then the polish | 43.79 min | **142** | 2 | -10,691,177.6879 |
+| **damped Newton** | **10.18 min** | **16** | 8 | -10,691,177.6879 |
+| the nested candidate, from the seed | 10.91 min | 16 | 8 | -10,693,329.3806 |
+| the same candidate, warm from its parent | 5.67 min | 6 | 5 | -10,693,329.3806 |
+
+**4.3x on a cold fit**, to the same optimum, certified 3.31e-05 standard errors from it. The
+path is worth reading: it begins **1,890** standard errors out and the first six evaluations are
+refused as not a likelihood -- the damped step probing the region where lifelines' clipped
+likelihood is unbounded below, which is exactly what the wall is for -- and then the damping
+ladder walks it in: 1.26e3, 706, 423, 207, 58.4, 6.61, 0.107, 3.31e-05.
+
+The last two rows say warm starts are still worth their keep: half the time, the same optimum
+to four decimals of ten million.
+
+The method chain stays behind it as the fallback, because this replaces the optimiser's path
+and no fit that used to succeed may fail. `polish=False` keeps the optimiser untouched, because
+that mode exists to reproduce lifelines exactly and is what the equivalence tests use.
+
+## What is left, and in what order
+
+A selection run now comes to roughly:
+
+    3 readings                   32 min
+    1 cold fit                   10 min   (was 44)
+    ~29 warm candidates         164 min   (5.67 min each)
+                                ------
+                                3.4 hours
+
+against the **10.5 hours** the four recorded runs averaged, and 42.0 hours for all four. The
+reading is no longer the problem and the optimiser's path is no longer the problem; what is left
+is the **curvature**. A warm candidate's 5.67 minutes are five Hessians at 39 seconds and six
+evaluations at 17, so it is Hessian-bound, and a Hessian is where a fused loop has most to
+take: `_times` -- one array multiply -- is 46% of a call, because the chain rule performs about
+180 of them per chunk where the mathematics needs forty, and each allocates and traverses an
+array. The primitives themselves are 1.3 ns a row for an exponential and 0.3 for a multiply.
+
+So the order is: the compiled kernel on the curvature, then the exact row merge (1.36x,
+measured) and step 7's screen.
 
 ## The gate for compiling anything
 
