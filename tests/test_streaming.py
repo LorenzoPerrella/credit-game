@@ -230,11 +230,11 @@ def test_a_prepayment_fit_is_cached_under_a_name_of_its_own() -> None:
     """Same cells, same formula, same window: only the cause tells the two fits apart, so
     without it in the description one would be served from the other's cache.
     """
-    from creditsurv.cli import _fit_description
     from creditsurv.data.store import fit_fingerprint
+    from creditsurv.models.fits import fit_description
 
-    default = _fit_description((10, 100), "credit_score", as_of="2024-12", moratorium="exclude")
-    prepayment = _fit_description(
+    default = fit_description((10, 100), "credit_score", as_of="2024-12", moratorium="exclude")
+    prepayment = fit_description(
         (10, 100), "credit_score", as_of="2024-12", moratorium="exclude", cause="prepayment"
     )
 

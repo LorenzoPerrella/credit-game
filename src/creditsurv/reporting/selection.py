@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
+from creditsurv.config import SELECTION_RECORD
 from creditsurv.data.panel import DEFAULT_CAUSE
 from creditsurv.models.rules import MATERIALITY_THRESHOLD
 from creditsurv.reporting.builder import Report, provenance
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 
 #: The summary the configuration is tested against, written beside the report. It belongs to
 #: the **published** model: see :func:`record_name`.
-SUMMARY_FILE: Final = "selection.json"
+SUMMARY_FILE: Final = SELECTION_RECORD
 
 #: Every table behind the report, one file each. A notebook shows these rather than
 #: recomputing them: the correlation and the variance inflation read ~60 million rows of

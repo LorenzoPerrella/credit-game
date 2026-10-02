@@ -656,11 +656,12 @@ def test_the_views_command_scores_from_the_cell_file(
     """
     from typer.testing import CliRunner
 
-    from creditsurv.cli import _fit_description, app, default_covariates
-    from creditsurv.config import default_formula
+    from creditsurv.cli import app
+    from creditsurv.config import default_covariates, default_formula
     from creditsurv.data.panel import CellBlocks
     from creditsurv.data.store import cells_path, fit_fingerprint, save_cells, save_fit
     from creditsurv.models.aft import fit_streamed
+    from creditsurv.models.fits import fit_description
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CREDITSURV_TABLES_DIR", str(tmp_path / "tables"))
@@ -683,7 +684,7 @@ def test_the_views_command_scores_from_the_cell_file(
     fitted = fit_streamed(source, covariates, formula, weights_col=WEIGHT)
     record = fitted.blocks
     assert record is not None
-    described = _fit_description(
+    described = fit_description(
         (fitted.n_episodes, int(record.loan_months)),
         formula,
         as_of=as_of,

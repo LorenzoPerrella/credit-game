@@ -147,9 +147,9 @@ def test_report_starts_from_the_selection_only_on_the_table_it_selected_on(
     """The glue ``creditsurv report`` uses: the record's formula, date and policy, and the
     cell table as it stands now. A table rebuilt since the selection offers nothing to
     start from, and neither does a record written for another reporting date."""
-    from creditsurv.cli import _selection_start
     from creditsurv.config import reports_dir
     from creditsurv.data.store import cells_identity, cells_path
+    from creditsurv.models.fits import selection_start
     from creditsurv.reporting import selection
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
@@ -162,13 +162,13 @@ def test_report_starts_from_the_selection_only_on_the_table_it_selected_on(
     selection.generate(record, reports_dir=reports_dir())
     ended = fits.fit(record.selected)
 
-    start = _selection_start("2008-12", "exclude")
+    start = selection_start("2008-12", "exclude")
     assert start is not None
     assert start.equals(ended.fitter.params_)
-    assert _selection_start("2009-12", "exclude") is None
+    assert selection_start("2009-12", "exclude") is None
 
     table.write_bytes(b"cells, rebuilt since")
-    assert _selection_start("2008-12", "exclude") is None
+    assert selection_start("2008-12", "exclude") is None
 
 
 def test_the_formula_states_every_reference_level() -> None:
@@ -388,9 +388,9 @@ def test_an_extra_fit_is_estimated_once_and_read_back_after(
 ) -> None:
     """The report's extra fits ran 78 and 25 minutes on the training half and were thrown
     away, so regenerating a report's prose cost them again."""
-    from creditsurv.cli import _cached_fit
     from creditsurv.data.panel import WEIGHT
     from creditsurv.models import aft
+    from creditsurv.models.fits import cached_fit
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     calls: list[str] = []
@@ -401,7 +401,7 @@ def test_an_extra_fit_is_estimated_once_and_read_back_after(
         return real(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(aft, "fit_aft", counted)
-    fit = _cached_fit(as_of="2008-12", moratorium="exclude")
+    fit = cached_fit(as_of="2008-12", moratorium="exclude")
     formula = "credit_score + ltv_change"
 
     first = fit(

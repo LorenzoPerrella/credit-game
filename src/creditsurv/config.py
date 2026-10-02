@@ -518,6 +518,24 @@ BANDED_REFERENCE: Final[dict[str, float]] = {
 }
 
 
+#: Where the selection writes what it chose, under :func:`reports_dir`.
+#:
+#: Here rather than beside the report that writes it, because the *reader* is lower than the
+#: writer: a fit starts from the specification the selection ended on, and `models` may not
+#: import `reporting`. The name is the record's address, which is configuration.
+SELECTION_RECORD: Final = "selection.json"
+
+
+def default_covariates() -> list[str]:
+    """Every column the default formula is allowed to read.
+
+    Beside the formula that reads the same lists, because the two have to agree and because
+    the package needs it: it lived in `cli.py` until the fits moved out of there, which made a
+    model module reach up into the command line for the definition of its own design.
+    """
+    return [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL, *CATEGORICAL_REFERENCE]
+
+
 def default_formula() -> str:
     """Formulaic specification for the full model.
 
