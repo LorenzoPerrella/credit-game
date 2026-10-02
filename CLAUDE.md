@@ -404,6 +404,11 @@ per quarter; the decisive one is that parquet row counts still match the manifes
 ## Conventions
 
 - `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not network"`
+- **And `mypy` on the other leg of the matrix before pushing.** `tool.mypy` sets
+  `python_version = "3.12"`, so a local run checks one of the two the CI runs, and numpy's
+  stubs infer differently under 3.11: **twice now** a branch has gone green locally and failed
+  CI on `no-any-return` alone, in a file whose logic was fine. `UV_PYTHON=3.11 uv sync -q &&
+  UV_PYTHON=3.11 uv run mypy`, then sync back.
 - **Notebooks carry evidence, not logic.** Every statistic is a tested function in the
   package; a notebook calls it and shows the result. If a cell contains an algorithm,
   the algorithm is in the wrong place.

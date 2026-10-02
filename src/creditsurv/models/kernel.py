@@ -438,7 +438,7 @@ def _counts(weight: np.ndarray) -> np.ndarray:
             "largest cell of the production table holds far fewer than four billion."
         )
         raise ValueError(message)
-    return rounded.astype(np.uint32)
+    return np.asarray(rounded.astype(np.uint32))
 
 
 def _first_seen(codes: np.ndarray, held: int) -> dict[int, int]:
