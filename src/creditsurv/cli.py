@@ -858,13 +858,13 @@ def family(
     )
     from creditsurv.data.store import cells_identity, outcomes_by_age
     from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS
+    from creditsurv.models.fits import selected_fit
     from creditsurv.models.nonparametric import (
         cumulative_incidence,
         hazard_by_age,
         incidence_from_hazards,
         incidence_gap,
     )
-    from creditsurv.models.procedure import selected_fit
     from creditsurv.models.selection import PREPAYMENT_SIGNS, signs_against_prior
     from creditsurv.reporting import family as family_report
     from creditsurv.reporting.selection import record_name
@@ -1358,12 +1358,12 @@ def select(
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import WEIGHT, month_ordinal
     from creditsurv.data.store import cells_identity
+    from creditsurv.models.fits import Fits
     from creditsurv.models.procedure import (
         BASE_CATEGORICAL,
         CANDIDATE_CATEGORICAL,
         LOAN_CONTINUOUS,
         LOAN_ORDINAL,
-        Fits,
         run_selection,
     )
     from creditsurv.models.selection import EXPECTED_SIGNS, PREPAYMENT_SIGNS, weighted_moments
@@ -1783,7 +1783,7 @@ def _selection_start(as_of: str, moratorium: str) -> pd.Series | None:
     import json
 
     from creditsurv.data.store import cells_identity
-    from creditsurv.models.procedure import selected_fit
+    from creditsurv.models.fits import selected_fit
     from creditsurv.reporting.selection import SUMMARY_FILE
 
     path = reports_dir() / SUMMARY_FILE

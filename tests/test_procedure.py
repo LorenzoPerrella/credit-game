@@ -20,14 +20,14 @@ import pytest
 
 from creditsurv.data.panel import to_interval_censored
 from creditsurv.models.engine import Pinned
+from creditsurv.models.fits import Fits
 from creditsurv.models.procedure import (
-    Fits,
     SelectionRecord,
-    Specification,
     _not_identified,
     _worst,
     run_selection,
 )
+from creditsurv.models.specification import Specification
 from fixtures import DEFAULT_PARAMS, build_panel
 
 if TYPE_CHECKING:
@@ -118,7 +118,7 @@ def test_report_finds_the_fit_the_selection_ended_on_and_starts_from_it(
     """
     from creditsurv.data.panel import WEIGHT
     from creditsurv.models.aft import fit_aft
-    from creditsurv.models.procedure import selected_fit
+    from creditsurv.models.fits import selected_fit
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     record, fits = _run(train)
@@ -439,7 +439,7 @@ def test_the_family_is_an_input_and_reaches_the_fit_and_its_name(
     runs must not share a cache, since they fit the same formulas on the same rows.
     """
     from creditsurv.data.store import fit_fingerprint
-    from creditsurv.models.procedure import selection_description
+    from creditsurv.models.fits import selection_description
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     fits = Fits(
@@ -565,7 +565,7 @@ def test_a_backwards_sign_is_read_against_the_map_the_run_was_given() -> None:
 
 def test_a_prepayment_selection_is_cached_under_a_name_of_its_own() -> None:
     from creditsurv.data.store import fit_fingerprint
-    from creditsurv.models.procedure import selection_description
+    from creditsurv.models.fits import selection_description
 
     common = {
         "identity": "cells",
@@ -957,7 +957,7 @@ def test_a_nested_model_that_fits_better_than_its_parent_is_refused() -> None:
     """
     from lifelines import exceptions
 
-    from creditsurv.models.procedure import _check_nested
+    from creditsurv.models.fits import _check_nested
 
     parent = Specification(continuous=("credit_score", "ltv_change"))
     child = Specification(continuous=("credit_score",))
@@ -982,7 +982,7 @@ def test_the_floor_handed_to_a_nested_fit_is_its_parents_optimum() -> None:
     """A mean, so the parent's total log-likelihood is divided by the exposure it was measured
     over, with one log-likelihood unit allowed back.
     """
-    from creditsurv.models.procedure import _NESTED_TOLERANCE, _floor
+    from creditsurv.models.fits import _NESTED_TOLERANCE, _floor
 
     parent = Specification(continuous=("credit_score", "ltv_change"))
     child = Specification(continuous=("credit_score",))
@@ -1011,7 +1011,7 @@ def test_the_allowance_stays_inside_the_edge_of_the_clipped_region() -> None:
     gains -0.000 units. Those probes are the shallow edge of the clipped region, and an allowance
     wide enough to admit them lets a fit converge onto clipped ground and be cached as an optimum.
     """
-    from creditsurv.models.procedure import _NESTED_TOLERANCE, _floor
+    from creditsurv.models.fits import _NESTED_TOLERANCE, _floor
 
     parent = Specification(continuous=("credit_score", "ltv_change"))
     child = Specification(continuous=("credit_score",))
