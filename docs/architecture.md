@@ -43,7 +43,7 @@ mistake, and the test says so by name.
 
 Two places are deliberately narrow, because something is expected to be swapped behind them.
 
-**The objective, as the optimiser sees it.** `models/blocks.py` defines what an evaluation means —
+**The objective, as the optimiser sees it.** `models/engine/contract.py` defines what an evaluation means —
 a value and a gradient, a curvature on request, the penalty, the wall below which the objective
 is not a likelihood, the floor a nested model may not cross, and the guards that end a hopeless
 fit. Three implementations satisfy it: autograd over a stored design, the written-out

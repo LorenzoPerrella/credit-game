@@ -172,7 +172,7 @@ def model_blocks(
 ) -> Iterator[pd.DataFrame]:
     """:func:`model_frame` a block of ``rows`` at a time, with the weight alongside.
 
-    For :func:`creditsurv.models.blocks.fit_interval_censoring_in_blocks`. The whole
+    For :func:`creditsurv.models.engine.fit_interval_censoring_in_blocks`. The whole
     narrowed frame is never built: on the production panel it would be a second copy of
     the largest object the pipeline holds. ``where`` reads only the rows it selects -- one
     half of the panel for a stability check, say -- without copying that half either.

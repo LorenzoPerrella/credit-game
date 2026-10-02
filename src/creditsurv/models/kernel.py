@@ -1,7 +1,7 @@
 """The interval-censored likelihood and its derivatives, written out rather than traced.
 
 This module is the second implementation of lifelines' likelihood that
-:mod:`creditsurv.models.blocks` was built to avoid, and it is here because the measurement
+:mod:`creditsurv.models.engine` was built to avoid, and it is here because the measurement
 said so. At the 26 parameters rule 12 produced, a value-and-gradient on a 250,000-cell block
 of the production table is 166.8 ms and a Hessian 1,373 -- so a cold fit is an hour and a
 selection run is a day, and the finer bands the calibration needs cost a full re-selection for

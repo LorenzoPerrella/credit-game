@@ -7,7 +7,7 @@ the product limits and the bands taken once at the end.
 
 That is the whole of this module, and the reason for it is a number: scoring the training half
 as a frame took the footprint to 15 GB on 59.7 million cells, and the table is now 72.7
-million. The fits were moved off the panel first (see `creditsurv.models.blocks`); this moves
+million. The fits were moved off the panel first (see `creditsurv.models.engine`); this moves
 the views, which were the last thing holding it.
 
 One quantity is not a sum: a decile of predicted risk needs the whole distribution before any

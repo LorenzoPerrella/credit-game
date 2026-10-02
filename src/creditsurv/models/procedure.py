@@ -62,7 +62,7 @@ from creditsurv.data.panel import (
 from creditsurv.data.store import find_fits, fit_fingerprint, load_fit, save_fit
 from creditsurv.explore import collinear_pairs
 from creditsurv.models.aft import FitResult, fit_aft, fit_encoding, fit_streamed
-from creditsurv.models.blocks import DEFAULT_BLOCK_ROWS, Encoding, Pinned, encode_blocks
+from creditsurv.models.engine import DEFAULT_BLOCK_ROWS, Encoding, Pinned, encode_blocks
 from creditsurv.models.selection import (
     EXPECTED_SIGNS,
     PVALUE_THRESHOLD,
@@ -344,7 +344,7 @@ class Fits:
         with damping at 1e+12, and then SLSQP diverged -- so the answer is to start where
         lifelines would have started and pay for it, not to give up on the model.
 
-        :class:`~creditsurv.models.blocks.Pinned` is the exception, and it is not about the
+        :class:`~creditsurv.models.engine.Pinned` is the exception, and it is not about the
         start. An optimiser held against the parent's optimum has found where lifelines' clipped
         region begins; a cold fit walks back to the same maximum and meets the same edge, for
         another hour. It is raised through.

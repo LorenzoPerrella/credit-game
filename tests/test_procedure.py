@@ -19,7 +19,7 @@ import pandas as pd
 import pytest
 
 from creditsurv.data.panel import to_interval_censored
-from creditsurv.models.blocks import Pinned
+from creditsurv.models.engine import Pinned
 from creditsurv.models.procedure import (
     Fits,
     SelectionRecord,
@@ -1046,7 +1046,7 @@ def test_a_pinned_optimiser_is_not_refitted_cold() -> None:
     """
     from lifelines import exceptions
 
-    from creditsurv.models.blocks import Pinned
+    from creditsurv.models.engine import Pinned
 
     spec = Specification(continuous=("credit_score",))
     parent = cast("FitResult", SimpleNamespace(fitter=SimpleNamespace(params_=None)))
@@ -1215,7 +1215,7 @@ def test_a_rebuilt_table_starts_from_the_same_model_fitted_on_the_old_one(
     must land where the cold fit landed, inside the thousandth of a standard error the polish
     promises.
     """
-    from creditsurv.models.blocks import POLISH_TOLERANCE_SE
+    from creditsurv.models.engine import POLISH_TOLERANCE_SE
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     spec = Specification(continuous=("credit_score", "unemployment_change"))
