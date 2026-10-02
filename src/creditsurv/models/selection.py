@@ -43,7 +43,7 @@ from lifelines import (
 )
 from scipy import stats
 
-from creditsurv.data.panel import EVENT, duration_view
+from creditsurv.data.panel import EVENT, WEIGHT, duration_view
 from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS, FitResult, Likelihood, fit_aft
 
 if TYPE_CHECKING:
@@ -527,12 +527,23 @@ class Moments:
 
     @property
     def correlation(self) -> pd.DataFrame:
-        scale = self.deviations.to_numpy()
-        return pd.DataFrame(
-            self.covariance.to_numpy() / np.outer(scale, scale),
-            index=self.covariance.index,
-            columns=self.covariance.columns,
-        )
+        return _correlation(self.covariance)
+
+
+def _correlation(covariance: pd.DataFrame) -> pd.DataFrame:
+    """A covariance matrix read as correlations.
+
+    Divided by the outer product of its own standard deviations, which are the square roots of
+    its diagonal. Written once because it was written twice: `Moments.correlation` and what was
+    `explore.weighted_correlation` were the same three lines in two modules, and the second of
+    them reached up from the exploratory layer into this one to get its covariance.
+    """
+    scale = np.sqrt(np.diag(covariance.to_numpy()))
+    return pd.DataFrame(
+        covariance.to_numpy() / np.outer(scale, scale),
+        index=covariance.index,
+        columns=covariance.columns,
+    )
 
 
 def weighted_moments(
@@ -587,6 +598,27 @@ def _blocks(source: pd.DataFrame | Iterable[pd.DataFrame], rows: int) -> Iterato
             yield source.iloc[start : start + rows]
         return
     yield from source
+
+
+def weighted_correlation(
+    frame: pd.DataFrame, columns: Sequence[str], *, weight: str = WEIGHT
+) -> pd.DataFrame:
+    """Exposure-weighted Pearson correlation between continuous covariates.
+
+    Weighted because the rows are cells: an unweighted matrix would describe the distribution of
+    *cells*, which is an artefact of the binning, rather than the distribution of loan-months,
+    which is the data.
+
+    From the covariance added up a block at a time. The first version held the covariates and a
+    centred copy of them at once -- two copies of every candidate on the training half of the
+    exact key -- for a matrix a dozen entries wide.
+
+    It lived in `explore` until the dependency direction was made a test. The exploratory layer
+    sits below the models and may not read them, and this function could not do its job without
+    `weighted_covariance`: it is a statement about a covariance, so it belongs beside the
+    covariance.
+    """
+    return _correlation(weighted_covariance(frame, columns, weight=weight))
 
 
 def weighted_covariance(

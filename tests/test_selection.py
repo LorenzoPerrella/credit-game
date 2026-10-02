@@ -323,8 +323,7 @@ def test_every_candidate_has_an_economic_dimension_fixed_in_advance() -> None:
 def test_factors_read_back_from_a_saved_correlation_are_the_ones_the_rows_give() -> None:
     """The notebook shows the variance inflation from the correlation the selection saved,
     so the two routes have to agree."""
-    from creditsurv.explore import weighted_correlation
-    from creditsurv.models.selection import inflation_from_covariance
+    from creditsurv.models.selection import inflation_from_covariance, weighted_correlation
 
     rng = np.random.default_rng(8)
     base = rng.normal(size=4000)
