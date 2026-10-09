@@ -85,6 +85,13 @@ are unchanged is never paid for twice.
     never appended to the ingest, and verifies per quarter that the manifest records the
     ingest finished, both parquet files exist, and their row counts still match.
 
+    `creditsurv prune-encodings` is the smaller sibling: a cached reading of the cell file is
+    **1.0 GB** and is named by the table's identity, so rebuilding the table leaves every
+    reading of the old one as dead weight nothing will ever look for again -- six per campaign
+    of rule 2. It sweeps only those, shows what would go, and asks; a reading of the table on
+    disk is kept unless `--no-stale-only` says otherwise, because that one costs 11.6 minutes
+    to take again.
+
 - **Nothing holds the panel any more.** The training half is 72.7 million cells, and every
   command that used to expand it now reads the cell file a batch at a time: the fits, the
   selection, the views and the backtest windows.
