@@ -32,6 +32,7 @@ import hashlib
 import itertools
 import json
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
@@ -249,3 +250,80 @@ def _mapped(folder: Path) -> Encoding:
             meta["names"][4],
         ),
     )
+
+
+@dataclass(frozen=True)
+class StoredReading:
+    """One reading on disk, with the cell table it was taken from and what it occupies."""
+
+    name: str
+    identity: str
+    current: bool
+    bytes_on_disk: int
+    cells: int | None
+    cause: str | None
+    parity: int | None
+
+    def describe(self) -> dict[str, object]:
+        """One row of what `creditsurv prune-encodings` shows before it deletes anything."""
+        return {
+            "reading": self.name,
+            "table": self.identity.split(":")[0],
+            "current": self.current,
+            "cause": self.cause,
+            "parity": "whole" if self.parity is None else self.parity,
+            "cells": self.cells,
+            "gigabytes": round(self.bytes_on_disk / 1024**3, 2),
+        }
+
+
+def _count(value: object) -> int | None:
+    """A cell count out of a description, or ``None`` where it is not a number."""
+    return int(value) if isinstance(value, int | float) else None
+
+
+def audit_readings() -> list[StoredReading]:
+    """Every reading on disk, and whether its cell table is still the one on disk.
+
+    A reading is named by the table's identity -- its file, size and time of writing -- so a
+    rebuild makes every reading of the old table dead weight that nothing will ever hit again.
+    At **1.0 GB each** and six per campaign of rule 2 that is worth being able to find, and
+    worth never deleting by accident: a current one costs 11.6 minutes to take again.
+
+    The identity is read from the description beside the arrays, so a reading whose description
+    is unreadable is reported as **not** current rather than guessed at -- the conservative
+    direction, since it cannot then be deleted by the default sweep.
+    """
+    from creditsurv.data.book import MoratoriumPolicy
+    from creditsurv.data.store import cells_identity, cells_path
+
+    live = {
+        cells_identity(policy.value)
+        for policy in MoratoriumPolicy
+        if cells_path(policy.value).exists()
+    }
+    readings = []
+    for name, described in ENCODINGS.find():
+        folder = ENCODINGS.path(name)
+        identity = str(described.get("identity", ""))
+        readings.append(
+            StoredReading(
+                name=name,
+                identity=identity,
+                current=identity in live,
+                bytes_on_disk=sum(
+                    child.stat().st_size for child in folder.rglob("*") if child.is_file()
+                )
+                if folder.is_dir()
+                else 0,
+                cells=_count(described.get("cells")),
+                cause=cause if isinstance(cause := described.get("cause"), str) else None,
+                parity=parity if isinstance(parity := described.get("parity"), int) else None,
+            )
+        )
+    return readings
+
+
+def remove_reading(name: str) -> None:
+    """Delete one reading and the description beside it. Irreversible, and 11.6 minutes."""
+    ENCODINGS.remove(name)

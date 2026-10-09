@@ -1086,3 +1086,71 @@ def test_the_rows_cross_the_boundary_as_one_buffer_of_the_right_dtype() -> None:
     )
     with pytest.raises(TypeError, match="column is int64"):
         joined([wrong, wrong])
+
+
+def test_a_reading_of_a_rebuilt_table_is_the_only_one_the_sweep_takes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reading is 1.0 GB, and a rebuild makes every reading of the old table dead weight.
+
+    Rule 2 needs six readings a campaign -- two causes by three samples -- so a rebuild can
+    leave six gigabytes nothing will ever look for again, and there was no way to find them.
+    What the sweep must **not** take is a reading of the table on disk: that costs 11.6 minutes
+    to take again, and a run that stops picks up at the fit it was on rather than at the
+    reading.
+
+    The identity is the table's file, size and time of writing, so this writes a cell file,
+    describes one reading under its identity and one under a table that is gone.
+    """
+    import pandas as pd
+
+    from creditsurv.data.artefacts import ENCODINGS
+    from creditsurv.data.store import cells_identity, save_cells
+    from creditsurv.models.engine.cache import audit_readings, remove_reading
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    save_cells(pd.DataFrame({"age": [0, 1], "loan_months": [3, 4]}), "exclude")
+    current = cells_identity("exclude")
+
+    for name, identity in (("still-here", current), ("rebuilt-since", "cells_exclude.parquet:1:2")):
+        folder = ENCODINGS.path(name)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "i.npy").write_bytes(b"0" * 64)
+        ENCODINGS.describe(name, {"identity": identity, "cells": 9, "cause": "default"})
+
+    audited = {reading.name: reading for reading in audit_readings()}
+    assert set(audited) == {"still-here", "rebuilt-since"}
+    assert audited["still-here"].current
+    assert not audited["rebuilt-since"].current
+    assert audited["still-here"].bytes_on_disk == 64
+    assert audited["still-here"].describe()["table"] == "cells_exclude.parquet"
+
+    # And removing one takes the description with it, because a description beside no arrays
+    # would be found by every search and read back as a reading.
+    remove_reading("rebuilt-since")
+    assert not ENCODINGS.path("rebuilt-since").exists()
+    assert not ENCODINGS.described("rebuilt-since").exists()
+    assert [reading.name for reading in audit_readings()] == ["still-here"]
+
+
+def test_a_reading_whose_description_cannot_be_read_is_not_called_current() -> None:
+    """The conservative direction, and the one that cannot delete anything by accident.
+
+    `audit_readings` reads the identity from the description beside the arrays. A description
+    that is missing or unreadable leaves the identity empty, which matches no live table -- so
+    the reading reports as **not** current, which keeps it out of the default sweep rather than
+    putting it in.
+    """
+    from creditsurv.models.engine.cache import StoredReading
+
+    unknown = StoredReading(
+        name="whatever",
+        identity="",
+        current=False,
+        bytes_on_disk=0,
+        cells=None,
+        cause=None,
+        parity=None,
+    )
+    assert not unknown.current
+    assert unknown.describe()["parity"] == "whole"

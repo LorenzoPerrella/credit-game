@@ -140,6 +140,31 @@ The finer bands are individually affordable, at 144.9 million, and go first rega
 because the order was fixed by what each extension is *for* rather than by what it turned
 out to cost.
 
+### How the two given-up extensions are re-priced, declared before the measurement
+
+Added 9 October 2026, before running it, because the first pricing's projections are no longer
+arithmetic that can be read.
+
+**The anchoring moves, and it has to.** A projection is `published_cells x ratio`, where the
+ratio is the sampled count of a specification over the sampled count of the key the published
+table was built with. In September that key was the base and the table on disk was its 63.6
+million cells, so the two agreed. The rebuild made the table **base + HARP + the payment
+state**, 91,575,827 cells, while the ratios stayed measured against the base -- so a
+base-anchored ratio applied to a table that is 1.264x the base over-counts by that factor.
+The ratio is therefore measured against **the key the published table was built with**, and
+applied to that table's own count.
+
+**And the projection is read with a safety factor of 1.14**, because that is what the one
+rebuild this project has done measured: a ratio estimated on nine quarters projected 80.4
+million and produced 91.6, running **14% light**. An extension is affordable only if its
+projection **times 1.14** is under the ceiling. The factor is on the projection and not on the
+ceiling: **the ceiling stays 150 million**, as declared, and nothing here moves it.
+
+**The give-up order does not move either.** If both extensions fit, the finer bands are still
+taken first, for the reason the order was fixed on: a band grid is a refinement where the HARP
+level and the payment state were corrections. If neither fits, rule 7 is confirmed on better
+arithmetic and the key stops where it is.
+
 This takes the loan's own note rate out of the key, and with it the origination spread and
 the refinancing incentive. Rule 9 therefore has nothing left to divide: the default model
 carries the fall in the market rate since origination, and so does the prepayment model, in
