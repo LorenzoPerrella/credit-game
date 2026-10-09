@@ -1,0 +1,21 @@
+[package]
+name = "creditsurv-kernel"
+version = "0.1.0"
+edition = "2021"
+description = "The interval-censored AFT likelihood, one row at a time, as a fused loop"
+license = "MIT"
+publish = false
+
+[lib]
+name = "creditsurv_kernel"
+crate-type = ["cdylib"]
+
+[dependencies]
+numpy = "0.23"
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py311"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

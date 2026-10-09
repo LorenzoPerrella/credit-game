@@ -50,6 +50,23 @@ jobs:
       - name: Test
         run: uv run pytest -m "not network" --cov=creditsurv --cov-report=term-missing
 
+      # Rule 13: the suite runs **twice** on both Python legs, with and without the compiled
+      # kernel, so neither path can rot. `models/kernel/terms.py` is normative and the
+      # extension is optional at import, which is only true while something checks it.
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies, with the compiled kernel
+        run: uv sync --frozen --extra kernel
+
+      - name: Lint the crate
+        run: |
+          cargo fmt --manifest-path crates/creditsurv-kernel/Cargo.toml -- --check
+          cargo clippy --manifest-path crates/creditsurv-kernel/Cargo.toml --release -- -D warnings
+
+      - name: Test again, with the compiled kernel
+        run: uv run pytest -m "not network"
+
       - name: Build distribution
         run: uv build
 

@@ -257,11 +257,16 @@ Measured on the production training half, the same covering set a selection need
 |---|---|
 | the reading | **693.9 s** and **717.9** on a second run, 72,671,500 cells, 1,440,771 defaults, 443 blocks |
 | its footprint | **2.37 GB** -- one batch expanded, beside the rows it keeps |
+| the same reading in the table above | 10.88 min and 2.88 GB, measured separately |
 | mapped back, in a new process | **0.4 s**, a **1,735x** saving, and 7.98 s for the whole process |
 | its footprint | **0.63 GB**: the 1.09 GB of rows is mapped, not resident |
 | what it occupies | **1.0 GB** on disk, against 448 MB of parquet it was read from |
 | two independent readings | the five row arrays **byte-identical**, `shasum` on 1.09 GB |
 | the fit from it | the same log-likelihood, coefficients and standard errors, **bit for bit** |
+
+The third row is the same reading measured earlier in this report, and the spread -- 10.88 to
+11.97 minutes, 2.37 to 2.88 GB -- is the repeatability to expect of a figure dominated by
+parquet and a laptop's page cache. It is not a disagreement and nothing here turns on it.
 
 The last two rows are the claim worth making, and the second is the one that matters. A reading that came back *almost* the
 same would be a different model published under the same name, and it can be exact because
@@ -372,3 +377,54 @@ published here.
 selection is now three readings and thirty fits, and a fit is a handful of Hessians: compiling
 the evaluation takes a warm candidate's 5.67 minutes to perhaps two and a selection's 3.5 hours
 to about 1.6. Worth having, after the two changes that cost nothing and cannot fail.
+
+## The compiled kernel, measured against that gate
+
+`crates/creditsurv-kernel` is the same arithmetic as a fused loop: one `#[pyfunction]`, numpy
+arrays of fixed dtype across the boundary, and the six jet components in registers instead of
+six arrays over a chunk. It is built by `uv sync --extra kernel`, optional at import, and
+`models/kernel/terms.py` stays normative -- the suite runs the equivalence tests against each
+backend that is present and passes with neither.
+
+Three readings on the whole training half, 72,671,500 rows at 26 parameters, one thread:
+
+| | NumPy | compiled | ratio |
+|---|---|---|---|
+| value+gradient | 12.17, 12.18, 12.25 s | **7.79, 7.72, 7.72 s** | **1.57x** |
+| with the Hessian | 26.86, 27.55, 27.44 s | **9.73, 9.76, 9.74 s** | **2.80x** |
+| resident | 0.47 GB | **0.47 GB** | ceiling 1.31 |
+
+The compiled figure is stable to **0.15%** across runs; the NumPy baseline is not, and that
+matters below.
+
+**The verdict is that it does not pass, and the reason the verdict needs a paragraph is a defect
+in how the gate was written.** It was declared two ways in the same sentence -- "in at most
+**9.90 s** against the **29.69** the NumPy kernel is measured at" and "**three times**, on the
+same rows and this machine" -- and the two disagree: 9.74 s is inside 9.90, and 2.80x is not
+three. What settles it is that the **absolute** number is not reproducible. The same NumPy code,
+unchanged, measures 26.86 to 29.69 s across this session's runs, an 8% spread with machine state;
+the ratio measured inside one run does not move. So the meaningful quantity is the ratio, the
+ratio is 2.80x with a spread of 0.05, and three is outside it. Reading the 9.74 as a pass would
+be choosing the thermometer that suits: the final run's baseline was the fastest of six.
+
+**Where the remaining 20% is, measured rather than assumed.** The obvious guess is libm -- a row
+needs three cumulative hazards, two survivals and one logarithm, six transcendentals, and no loop
+engineering removes them. It is wrong. Rebuilt with every `exp` and `ln` replaced by an affine
+expression, which keeps the control flow and destroys the answer, the compiled Hessian reads
+**92 ns a row against 137**: the transcendentals are **33%** and the jet chain is the other two
+thirds. There is room, and it is not in libm.
+
+Two things that were tried and are recorded because they look like they should work:
+
+* **`-C target-cpu=native` is a regression**, 11.71 s against 10.18 on the same source. The row
+  loop is scalar and dependent, so there is nothing to vectorise, and the instruction selection
+  it chooses instead is worse. Removed.
+* **Unchecked indexing bought 2% and cost a segmentation fault.** Replacing the tables' bounds
+  checks with `get_unchecked` took a Hessian from 10.18 s to 9.96, and the first thing it did was
+  turn a wrong accumulator length into a crash **inside an ordinary fit**: a model with no
+  calendar covariate hands over a table of *n* rows and **zero** columns, and the length had been
+  derived by dividing the flat slice by the column count, which gives zero rows. The
+  accumulators were allocated empty and the loop wrote past them. A bounds check would have named
+  the array and the index; two per cent is not what this project pays for that. The checks are
+  back, the length comes from the shape, and `tests/test_kernel.py` fits a loan-only model through
+  both backends.

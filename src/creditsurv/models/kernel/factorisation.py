@@ -20,7 +20,7 @@ all.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import numpy as np
 import pandas as pd
@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 from creditsurv.models.kernel.likelihood import (
     _MAX_AGE,
 )
+
+#: A row's five columns, in the order they are written, read and handed over.
+_ROW_COLUMNS: Final = ("i", "j", "age", "event", "weight")
 
 
 @dataclass(frozen=True)
@@ -606,3 +609,42 @@ def _completed(base: pd.DataFrame, other: pd.DataFrame) -> pd.DataFrame:
     """
     filler = other.iloc[[0] * len(base)].reset_index(drop=True)
     return pd.concat([base.reset_index(drop=True), filler], axis=1)
+
+
+def joined(blocks: Sequence[Rows]) -> Rows:
+    """The blocks as one buffer, which is what the compiled backend takes in a single call.
+
+    **Without a copy where there is already one buffer.** A reading that came off the disk cache
+    is five memory maps with the blocks cut out of them as views, so concatenating would copy
+    1.09 GB that is already contiguous -- and the gate for the compiled kernel is a memory gate
+    as much as a time one. Where the blocks are adjacent views of a single array in order, that
+    array is handed over as it stands; anywhere else the columns are concatenated, which is a
+    one-off per fit and not per evaluation.
+
+    The order is the blocks' own, which is the order the sums are taken in.
+    """
+    if len(blocks) == 1:
+        return blocks[0]
+    return Rows(**{column: _one_buffer(blocks, column) for column in _ROW_COLUMNS})
+
+
+def _one_buffer(blocks: Sequence[Rows], column: str) -> np.ndarray:
+    """One column of every block, as a single array, shared if it already is one."""
+    parts = [getattr(block, column) for block in blocks]
+    whole = parts[0].base
+    rows = sum(len(part) for part in parts)
+    if isinstance(whole, np.ndarray) and len(whole) == rows and _laid_out(parts, whole):
+        return np.asarray(whole)
+    return np.concatenate(parts)
+
+
+def _laid_out(parts: Sequence[np.ndarray], whole: np.ndarray) -> bool:
+    """Whether these parts are exactly ``whole``, in order, as C-contiguous views of it."""
+    at = whole.__array_interface__["data"][0]
+    for part in parts:
+        if part.base is not whole or not part.flags.c_contiguous:
+            return False
+        if part.__array_interface__["data"][0] != at:
+            return False
+        at += part.nbytes
+    return True

@@ -63,6 +63,7 @@ lines now and the sequences have homes.
 | rule 2 applied: each family against the observed incidence | `models/families.py` |
 | the backtest over the declared cuts, the anchoring and the grades | `backtest/campaign.py` |
 | the two passes that build every view of the fitted model | `views/build.py` |
+| a reading of the cell file, written once and mapped back | `models/engine/cache.py` |
 
 One command keeps its sequence, and the dependency rule is the reason: `portfolio` reads
 aggregates from `portfolio.py` (layer 5) and draws them with `reporting.charts` (layer 6), so

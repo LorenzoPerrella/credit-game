@@ -14,12 +14,20 @@ The work per row is two table lookups, three cumulative hazards and two survival
 gradient and the curvature cost two scatter-adds and a handful of small matrix products on top
 -- so a Hessian is about twice a value-and-gradient rather than the forty-nine times a value
 autograd charges, and neither grows with the number of parameters.
+
+**And there is a second implementation behind it.** `crates/creditsurv-kernel` is the same
+arithmetic as a fused loop, built by `uv sync --extra kernel` and **optional at import**: this
+module is normative, a missing extension is the normal case and not an error, and
+`tests/test_kernel.py` compares whatever backends are present. Rule 13 of `docs/rules.md`
+declared the gate it had to pass and the segregation it has to keep before any of it was
+written.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 
@@ -28,11 +36,32 @@ if TYPE_CHECKING:
         Rows,
     )
 
+from creditsurv.models.kernel.factorisation import joined
 from creditsurv.models.kernel.likelihood import (
     _MAX_AGE,
     log_times,
     row_likelihood,
 )
+
+#: The compiled backend, where the optional extra is installed. `None` is the ordinary case:
+#: this module computes the same numbers and nothing needs a Rust toolchain.
+#: An assignment rather than an import alias, so it is a name this module owns: mypy's
+#: `no_implicit_reexport` treats an aliased import as private to the file that made it, and the
+#: tests have to be able to switch the backend off.
+_compiled: Any
+try:  # pragma: no cover - which branch runs is which extras are installed
+    import creditsurv_kernel
+
+    _compiled = creditsurv_kernel
+except ImportError:  # pragma: no cover
+    _compiled = None
+
+#: How the compiled backend names the two families: a number rather than a string, because only
+#: fixed-dtype numbers cross that boundary. Written out rather than derived from `FAMILIES`,
+#: which is **sorted** and would have handed the log-logistic the Weibull's code -- a different
+#: family fitted under the right name, which is the one mistake this boundary can make silently.
+#: `tests/test_kernel.py` holds it to the crate's own constants.
+_FAMILY_CODE: Final = {"weibull": 0, "loglogistic": 1}
 
 
 @dataclass(frozen=True)
@@ -83,6 +112,56 @@ class Kernel:
 
     def __call__(self, x: np.ndarray, *, curvature: bool = False) -> _Totals:
         """The value, the gradient, and the curvature when it is asked for."""
+        if _compiled is not None and self.distribution in _FAMILY_CODE:
+            return self._compiled(x, curvature=curvature)
+        return self._written(x, curvature=curvature)
+
+    @cached_property
+    def _order(self) -> np.ndarray:
+        """Where the compiled backend's parameters sit in lifelines' own vector.
+
+        It returns `[loan..., calendar..., shape]`, in the order the two design tables give
+        their columns, because which index a coefficient sits at is a fact about lifelines and
+        not about the arithmetic. One permutation puts it back.
+        """
+        return np.concatenate([self.loan_index, self.calendar_index, [self.shape_index]]).astype(
+            np.intp
+        )
+
+    @cached_property
+    def _rows(self) -> Rows:
+        """Every block as one buffer, for the single call the compiled backend takes."""
+        return joined(self.blocks)
+
+    def _compiled(self, x: np.ndarray, *, curvature: bool) -> _Totals:
+        """The same objective, evaluated by the crate: arrays in, three results out."""
+        rows = self._rows
+        value, gradient, hessian = _compiled.evaluate(
+            _FAMILY_CODE[self.distribution],
+            np.ascontiguousarray(self.loan, dtype=np.float64),
+            np.ascontiguousarray(self.calendar, dtype=np.float64),
+            np.ascontiguousarray(x[self.loan_index], dtype=np.float64),
+            np.ascontiguousarray(x[self.calendar_index], dtype=np.float64),
+            float(x[self.shape_index]),
+            *log_times(self.distribution, np.arange(_MAX_AGE + 1)),
+            rows.i,
+            rows.j,
+            rows.age,
+            rows.event,
+            rows.weight,
+            self.total_weight,
+            curvature,
+        )
+        whole = np.zeros(len(x))
+        whole[self._order] = gradient
+        if hessian is None:
+            return _Totals(value, whole, None)
+        curved = np.zeros((len(x), len(x)))
+        curved[np.ix_(self._order, self._order)] = hessian
+        return _Totals(value, whole, curved)
+
+    def _written(self, x: np.ndarray, *, curvature: bool = False) -> _Totals:
+        """The objective written out in NumPy, which is the normative implementation."""
         entry, following, far = log_times(self.distribution, np.arange(_MAX_AGE + 1))
         loans, calendars = len(self.loan), len(self.calendar)
         total = 0.0

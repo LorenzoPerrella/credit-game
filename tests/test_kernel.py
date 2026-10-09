@@ -25,6 +25,7 @@ from autograd import grad, hessian
 from lifelines.utils.safe_exp import safe_exp
 
 from creditsurv.models.kernel import (
+    FAMILIES,
     INTERVAL_CEILING,
     INTERVAL_FLOOR,
     MAX_EXPONENT,
@@ -503,10 +504,46 @@ def test_plain_text_is_refused_because_its_codes_would_be_this_blocks_own() -> N
         )
 
 
+@pytest.fixture(params=["numpy", "compiled"])
+def backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run the test against each backend the port has, and skip the one that is not built.
+
+    Rule 13 of `docs/rules.md` says the NumPy kernel is **normative** and the compiled one is
+    optional at import, so the suite has to hold both to the same reference and has to pass
+    with neither installed. Forcing the NumPy path is a one-line patch because the port decides
+    which arithmetic to use in one place.
+    """
+    from creditsurv.models.kernel import terms
+
+    if request.param == "numpy":
+        monkeypatch.setattr(terms, "_compiled", None)
+    elif terms._compiled is None:
+        pytest.skip("the compiled kernel is not installed (`uv sync --extra kernel`)")
+    return str(request.param)
+
+
+def test_the_compiled_backend_agrees_with_the_port_about_which_family_is_which() -> None:
+    """A number crosses the boundary where a name would be safer, so the two are compared.
+
+    `FAMILIES` is sorted, so a code derived from it would hand the log-logistic the Weibull's
+    number: the other family, fitted under the right name, with no error anywhere. The crate
+    exports its own constants for exactly this test.
+    """
+    from creditsurv.models.kernel import terms
+
+    if terms._compiled is None:
+        pytest.skip("the compiled kernel is not installed (`uv sync --extra kernel`)")
+    assert terms._FAMILY_CODE["weibull"] == terms._compiled.WEIBULL
+    assert terms._FAMILY_CODE["loglogistic"] == terms._compiled.LOGLOGISTIC
+    assert terms._compiled.MAX_EXPONENT == MAX_EXPONENT
+    assert set(terms._FAMILY_CODE) == set(FAMILIES), "every family the port writes out has a code"
+
+
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
 @pytest.mark.parametrize("distribution", ["weibull", "loglogistic"])
 def test_the_kernel_is_the_objective_autograd_gives_over_the_whole_design(
     distribution: str,
+    backend: str,
 ) -> None:
     """The accumulation, end to end, against the design it exists not to build.
 
@@ -834,3 +871,45 @@ def test_a_macro_month_the_window_cannot_reach_does_not_rename_a_reading() -> No
     # And with no cut -- `creditsurv fit` without an `--as-of` -- the whole table is read, so the
     # month that could not reach the window above is a month the reading does see.
     assert named(extended, None) != named(macro, None)
+
+
+def test_a_model_with_no_calendar_covariate_is_evaluated_and_not_a_segmentation_fault(
+    backend: str,
+) -> None:
+    """A table of `n` rows and **zero** columns, which is what a loan-only model hands over.
+
+    The compiled kernel sized its accumulators by dividing the table's flat length by its column
+    count, and zero columns gave zero rows: the accumulators were allocated empty and the row
+    loop wrote past them. With the bounds checks removed -- which bought 2% -- that was a
+    **segmentation fault inside an ordinary fit**, found by the suite and not by a test of this
+    case, because there was none. There is now, and the checks are back.
+    """
+    frame = _book(range(0, 4), range(0, 5))
+    weight = frame["loan_months"].to_numpy(dtype=float)
+    event = frame["outcome"].to_numpy(dtype=bool)
+    factorisation = Factorisation(
+        loan=LOAN, calendar=(), age_column="age", columns=["Intercept", "credit_score"]
+    )
+    design = np.column_stack(
+        [np.ones(len(frame)), (frame["credit_score"].to_numpy() == 680.0).astype(float)]
+    )
+    rows = factorisation.add(frame, design, event=event, weight=weight)
+    loan, calendar, loan_positions, calendar_positions = factorisation.tables()
+    assert calendar.shape[1] == 0, "nothing in this model is a function of the calendar"
+
+    kernel = Kernel(
+        distribution="weibull",
+        loan=loan,
+        calendar=calendar,
+        loan_index=loan_positions,
+        calendar_index=calendar_positions,
+        shape_index=design.shape[1],
+        blocks=(rows,),
+        total_weight=float(weight.sum()),
+    )
+    totals = kernel(np.array([5.0, 0.1, 0.3]), curvature=True)
+
+    assert np.isfinite(totals.value) and totals.value > 0, backend
+    assert np.isfinite(totals.gradient).all()
+    assert totals.curvature is not None
+    assert np.isfinite(totals.curvature).all()

@@ -8,6 +8,12 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
+[manifest]
+members = [
+    "creditsurv",
+    "creditsurv-kernel",
+]
+
 [[package]]
 name = "annotated-doc"
 version = "0.0.5"
@@ -685,6 +691,11 @@ dependencies = [
     { name = "typer" },
 ]
 
+[package.optional-dependencies]
+kernel = [
+    { name = "creditsurv-kernel" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "ipykernel" },
@@ -706,6 +717,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "creditsurv-kernel", marker = "extra == 'kernel'", editable = "crates/creditsurv-kernel" },
     { name = "duckdb", specifier = ">=1.5.5" },
     { name = "lifelines", specifier = ">=0.30,<0.31" },
     { name = "matplotlib", specifier = ">=3.8" },
@@ -716,6 +728,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.11" },
     { name = "typer", specifier = ">=0.12" },
 ]
+provides-extras = ["kernel"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -735,6 +748,11 @@ docs = [
     { name = "mkdocs-material", specifier = ">=9.7.7" },
     { name = "plotly", specifier = ">=7.1.0" },
 ]
+
+[[package]]
+name = "creditsurv-kernel"
+version = "0.1.0"
+source = { editable = "crates/creditsurv-kernel" }
 
 [[package]]
 name = "cycler"

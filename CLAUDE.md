@@ -161,6 +161,30 @@ numpy's dispatch: 178 traversals of a 512 KB array should be 5 ms a chunk and th
 That is the part a fused loop removes and Python cannot, and it is what the gate in
 `docs/reports/engine.md` is declared against: **9.90 s against 29.69, or abandoned.**
 
+**The compiled kernel exists, and it does not pass that gate: 2.80x on a Hessian against a
+declared 3x.** `crates/creditsurv-kernel` is the same arithmetic as a fused loop -- one
+`#[pyfunction]`, fixed-dtype numpy arrays across the boundary, the jet in registers -- built by
+`uv sync --extra kernel`, optional at import, with `models/kernel/terms.py` normative and the
+equivalence tests parametrised over whichever backends are installed. On the whole half it reads
+**9.74 s against 27.4** with the curvature and **7.7 against 12.2** without, in 0.47 GB. The
+verdict needs a paragraph because the gate was written two ways in one sentence -- an absolute
+9.90 s and a 3x ratio -- and the absolute number is **not reproducible**: the same NumPy code
+measures 26.86 to 29.69 s across a session, an 8% spread, while the ratio inside a run moves
+0.05. So the ratio decides, the ratio is 2.80, and reading the 9.74 as a pass would be choosing
+the thermometer that suits.
+
+Three things measured along the way, each of which contradicted the obvious guess:
+
+- **libm is a third of it, not the rest.** Rebuilt with every `exp` and `ln` replaced by an
+  affine expression -- same control flow, destroyed answer -- a Hessian reads 92 ns a row against
+  137. Two thirds is still the chain, so there is room and it is not in the transcendentals.
+- **`-C target-cpu=native` is a regression**, 11.71 s against 10.18: the row loop is scalar and
+  dependent, so there is nothing to vectorise.
+- **Unchecked indexing bought 2% and segfaulted inside a fit.** A model with no calendar
+  covariate hands over a table of *n* rows and **zero** columns, and the accumulator length had
+  been derived by dividing the flat slice by the column count. The checks are back and the length
+  comes from the shape.
+
 ## lifelines' optimiser stops short of the optimum
 
 SLSQP stops on a change of 1e-10 in the *mean* log-likelihood, a tolerance that takes no
@@ -320,6 +344,20 @@ before is what a servicer knows in time to act, and it carries most of what ther
 of 1,671,207 defaults, 1,518,761 are loans that opened the month two payments behind. The
 lag is taken on the raw code, not on a number, because `RA` -- an REO acquisition -- would
 otherwise cast to the same NULL as "this is the loan's first month" and read as up to date.
+
+**What ended a loan-month has one spelling, and the three-state column is it.** The book's SQL
+used to emit the same fact three ways in one `SELECT` -- a boolean `event`, a boolean `prepaid`
+and the three-state `outcome` -- and the two booleans were not the same fact. `prepaid` is a
+prepayment code in the terminal month and takes no view of a default in it, where `outcome`
+gives default precedence; over the whole book **52,357 loan-months are both**, 3.07% of the
+1,704,432 defaults and 0.15% of the 34,316,184 prepayments. They were counted once as a default
+by every model and once again as a prepayment by the site's conditional prepayment rate. The
+precedence is rule 1's: at three missed payments the loan has defaulted by definition, so a
+payoff after that is a recovery and not a voluntary prepayment. The cells carry `outcome`, both
+hazards are fitted on it, and a caller that wants a boolean writes `outcome = 'default'` --
+through `ended_in`, which is the one place that knows both spellings. `panel.EVENT` stays,
+because the episode representation a likelihood reads *is* one boolean per cause; it is derived,
+never carried from the book.
 
 **A moratorium is not a default.** CARES Act and disaster forbearance had to be reported
 as delinquency, and made up 17% of the default events. The event definition is a

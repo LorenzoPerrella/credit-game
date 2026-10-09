@@ -1,0 +1,14 @@
+[project]
+name = "creditsurv-kernel"
+version = "0.1.0"
+description = "The interval-censored AFT likelihood as a fused loop, behind creditsurv's own port"
+requires-python = ">=3.11"
+classifiers = ["Programming Language :: Rust"]
+
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+module-name = "creditsurv_kernel"
+features = ["pyo3/extension-module"]
