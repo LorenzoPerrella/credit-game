@@ -61,6 +61,13 @@ DOMINANCE_THRESHOLD: Final = 0.99
 #: engine reads the file a batch at a time and does not care how long it is.
 CELL_CEILING: Final = 150_000_000
 
+#: What a projection is read with, and the one rebuild this project has done is where it comes
+#: from: a ratio estimated on nine quarters projected 80.4 million cells and produced 91.6,
+#: running **14% light**. `docs/rules.md` declares that an extension is affordable only if its
+#: projection times this is under the ceiling. It is a margin on the projection and never on
+#: the ceiling, which does not move.
+PROJECTION_MARGIN: Final = 1.14
+
 #: Quantiles used to propose cut points for a continuous covariate.
 _QUANTILES: Final = (0.05, 0.20, 0.40, 0.60, 0.80, 0.95)
 
@@ -274,15 +281,27 @@ def _quarter_sources(quarter: str) -> tuple[str, str]:
     )
 
 
+#: The name the published key is priced under: the one the cell table on disk was built with,
+#: and the one a projection has to be anchored on. See `DEFAULT_SPEC` in `data.aggregate`.
+PUBLISHED_KEY: Final = "published"
+
+
 def _priced_specifications() -> dict[str, CellSpec]:
     """Every specification the measurement prices, in the order it reports them.
 
-    The base, each extension on its own -- which is the only way a cost can be attributed
-    to one of them -- then all four together, and then the give-up ladder of
-    ``docs/rules.md`` walked one rung at a time, so the first specification under the
-    ceiling can be read straight off the table.
+    Three groups. The **base** and each extension on its own, which is the only way a cost can
+    be attributed to one of them; then all four together and the give-up ladder of
+    ``docs/rules.md`` walked one rung at a time, so the first specification under the ceiling
+    can be read off the table; and then the **published key** with each extension it gave up
+    added back.
+
+    That third group is the one a decision is now made on, and it is here because the first
+    pricing's anchoring stopped being arithmetic. A projection is the published table's own
+    count times a ratio, and in September both were the base key; the rebuild made the table
+    base plus HARP plus the payment state while the ratios stayed measured against the base, so
+    a base-anchored ratio applied to it over-counts by the 1.264x the key already carries.
     """
-    from creditsurv.data.aggregate import BASE_SPEC, Extension, extended
+    from creditsurv.data.aggregate import BASE_SPEC, DEFAULT_SPEC, Extension, extended
 
     specifications = {"base": BASE_SPEC}
     for extension in Extension:
@@ -294,6 +313,13 @@ def _priced_specifications() -> dict[str, CellSpec]:
         kept.remove(given_up)
         dropped.append(given_up.value)
         specifications["all less " + ", ".join(dropped)] = extended(BASE_SPEC, *kept)
+
+    # `DEFAULT_SPEC` is the key the published table was built with -- what every command
+    # aggregates on -- so it is the anchor a projection onto that table has to use.
+    specifications[PUBLISHED_KEY] = DEFAULT_SPEC
+    for given_up in GIVE_UP_ORDER:
+        if given_up.value not in DEFAULT_SPEC.categorical:
+            specifications[f"{PUBLISHED_KEY} + {given_up.value}"] = extended(DEFAULT_SPEC, given_up)
     return specifications
 
 
@@ -305,14 +331,23 @@ def extension_cost(
     """What each extension of the cell key costs, in cells, measured rather than bounded.
 
     The number that matters is not a quarter's own cell count but the **ratio** to the same
-    quarters aggregated on the key as it was, applied to the table that key produced. A
-    ceiling from the product of the level counts is not a cost: most combinations never
-    occur, which is how *mortgage insurance* and *buyer type* came out at 1.19x where an
+    quarters aggregated on the key the published table was built with, applied to that table's
+    own count. A ceiling from the product of the level counts is not a cost: most combinations
+    never occur, which is how *mortgage insurance* and *buyer type* came out at 1.19x where an
     unmeasured sixteenfold had kept them out of every screen.
 
-    ``published_cells`` is the row count of the cell table built on the base key, and the
-    projection is that count times the ratio. Left out, it is read from the cell file on
-    disk, and the projection is omitted if there is none.
+    **Two anchorings are reported, and only one of them is a decision.** `multiple_of_base`
+    is kept because the September pricing is recorded in it and a comparison has to stay
+    possible; `multiple_of_published` is the one a projection may be taken from, because the
+    table on disk is the published key and not the base. Projecting a base-anchored ratio onto
+    it over-counts by the 1.264x the published key already carries.
+
+    And the projection is reported **twice**: as it comes out, and times the `PROJECTION_MARGIN`
+    that the one rebuild this project has done measured. `within_ceiling` is the margined
+    figure, which is the test `docs/rules.md` declares.
+
+    ``published_cells`` is the row count of the cell table on disk. Left out, it is read from
+    the cell file, and the projections are omitted if there is none.
     """
     from creditsurv.data.aggregate import build_cells
 
@@ -325,18 +360,22 @@ def extension_cost(
             _LOGGER.info("%s, %s: %d cells", quarter, name, len(cells))
 
     base = sum(counts["base"].values())
+    anchor = sum(counts[PUBLISHED_KEY].values())
     published = _published_cells() if published_cells is None else published_cells
     rows = []
     for name, per_quarter in counts.items():
         sampled = sum(per_quarter.values())
-        ratio = sampled / base
+        projected = None if published is None else published * sampled / anchor
+        margined = None if projected is None else projected * PROJECTION_MARGIN
         rows.append(
             {
                 "specification": name,
                 "cells_sampled": sampled,
-                "multiple_of_base": ratio,
-                "projected_cells": None if published is None else round(published * ratio),
-                "within_ceiling": None if published is None else published * ratio <= CELL_CEILING,
+                "multiple_of_base": sampled / base,
+                "multiple_of_published": sampled / anchor,
+                "projected_cells": None if projected is None else round(projected),
+                "projected_with_margin": None if margined is None else round(margined),
+                "within_ceiling": None if margined is None else margined <= CELL_CEILING,
             }
         )
     return pd.DataFrame(rows)

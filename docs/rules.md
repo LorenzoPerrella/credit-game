@@ -140,6 +140,56 @@ The finer bands are individually affordable, at 144.9 million, and go first rega
 because the order was fixed by what each extension is *for* rather than by what it turned
 out to cost.
 
+### How the two given-up extensions are re-priced, declared before the measurement
+
+Added 9 October 2026, before running it, because the first pricing's projections are no longer
+arithmetic that can be read.
+
+**The anchoring moves, and it has to.** A projection is `published_cells x ratio`, where the
+ratio is the sampled count of a specification over the sampled count of the key the published
+table was built with. In September that key was the base and the table on disk was its 63.6
+million cells, so the two agreed. The rebuild made the table **base + HARP + the payment
+state**, 91,575,827 cells, while the ratios stayed measured against the base -- so a
+base-anchored ratio applied to a table that is 1.264x the base over-counts by that factor.
+The ratio is therefore measured against **the key the published table was built with**, and
+applied to that table's own count.
+
+**And the projection is read with a safety factor of 1.14**, because that is what the one
+rebuild this project has done measured: a ratio estimated on nine quarters projected 80.4
+million and produced 91.6, running **14% light**. An extension is affordable only if its
+projection **times 1.14** is under the ceiling. The factor is on the projection and not on the
+ceiling: **the ceiling stays 150 million**, as declared, and nothing here moves it.
+
+**The give-up order does not move either.** If both extensions fit, the finer bands are still
+taken first, for the reason the order was fixed on: a band grid is a refinement where the HARP
+level and the payment state were corrections. If neither fits, rule 7 is confirmed on better
+arithmetic and the key stops where it is.
+
+### What the re-pricing found: neither fits, and the key stops where it is
+
+Measured 9 October 2026, nine quarters, 31.4 minutes (`docs/reports/key_extensions.csv`):
+
+| specification | x the published key | projected | times 1.14 | under 150 M |
+|---|---|---|---|---|
+| the published key | 1.000 | 91,575,827 | 104,396,443 | **yes** |
+| **+ the finer bands** | 2.137 | 195,701,015 | 223,099,158 | **no** |
+| **+ the origination spread** | 2.013 | 184,357,255 | 210,167,271 | **no** |
+
+Neither is close. Both are over the ceiling **before** the margin is applied -- by 30% and 23%
+-- so the decision does not rest on the 1.14 at all, and would not change if the margin were
+dropped. **Rule 7 is confirmed and the key stops where it is**, with no rebuild of the cell
+table warranted by this rule.
+
+Two checks worth recording beside it. The September pricing **reproduces exactly** -- base
+6,303,637 cells, HARP 6,701,001, the spread 13,415,718, the payment state 7,468,938, the finer
+bands 14,348,301, all four 30,906,034 -- so the sampling is deterministic and nothing in the
+aggregation has moved under it. And the published key prices at exactly 1.000 of itself,
+projecting 91,575,827, which is the self-consistency the old anchoring had lost.
+
+One thing the finer bands cost **less** than the first pricing suggested: 2.137x the published
+key where they were 2.276x the base, because the published key is already finer and the two
+overlap. Not nearly enough, and the direction is worth knowing for any later re-pricing.
+
 This takes the loan's own note rate out of the key, and with it the origination spread and
 the refinancing incentive. Rule 9 therefore has nothing left to divide: the default model
 carries the fall in the market rate since origination, and so does the prepayment model, in

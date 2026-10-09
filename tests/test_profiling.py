@@ -182,11 +182,25 @@ def test_every_extension_of_the_key_is_priced_against_the_same_base() -> None:
         }
         assert len(changed) + len(widened) >= 1
         assert len(changed) <= 1, f"{extension} changes more than its own level"
-    assert list(priced)[-3:] == [
+    ladder = [name for name in priced if name.startswith("all less")]
+    assert ladder == [
         "all less fine_bands",
         "all less fine_bands, origination_spread",
         "all less fine_bands, origination_spread, delinquency_state",
     ]
+
+    # And the group a decision is now made on: the **published** key, and it with each
+    # extension it gave up added back. The published key is the anchor a projection onto the
+    # published table has to use, so it has to be priced on the same quarters as the rest.
+    from creditsurv.data.aggregate import DEFAULT_SPEC
+    from creditsurv.profiling import PUBLISHED_KEY
+
+    assert priced[PUBLISHED_KEY] == DEFAULT_SPEC
+    added_back = [name for name in priced if name.startswith(f"{PUBLISHED_KEY} + ")]
+    assert added_back == [
+        f"{PUBLISHED_KEY} + fine_bands",
+        f"{PUBLISHED_KEY} + origination_spread",
+    ], "the two given up, in the give-up order, and nothing the key already carries"
 
 
 def test_the_cost_of_the_extensions_is_measured_quarter_by_quarter(tmp_path: Path) -> None:
@@ -209,10 +223,31 @@ def test_the_cost_of_the_extensions_is_measured_quarter_by_quarter(tmp_path: Pat
     ]
     _ingested(tmp_path, origination, performance)
 
-    table = extension_cost(["2015Q1"], published_cells=63_639_116)
+    table = extension_cost(["2015Q1"], published_cells=91_575_827)
+    names = list(table["specification"])
+    of_base = dict(zip(names, table["multiple_of_base"].astype(float), strict=True))
+    of_published = dict(zip(names, table["multiple_of_published"].astype(float), strict=True))
+    projected = dict(zip(names, table["projected_cells"].astype(int), strict=True))
+    margined = dict(zip(names, table["projected_with_margin"].astype(int), strict=True))
+    affordable = dict(zip(names, table["within_ceiling"].astype(bool), strict=True))
 
-    assert list(table["specification"])[:2] == ["base", "harp"]
-    assert float(table.loc[table["specification"] == "base", "multiple_of_base"].iloc[0]) == 1.0
-    priced = table.set_index("specification")["multiple_of_base"]
-    assert priced["all"] >= priced["all less fine_bands"] >= 1.0
-    assert (table["projected_cells"] >= 63_639_116).all()
+    assert names[:2] == ["base", "harp"]
+    assert of_base["base"] == 1.0
+    assert of_base["all"] >= of_base["all less fine_bands"] >= 1.0
+
+    # **The anchoring is the point.** A projection is the published table's own count times a
+    # ratio measured against the key that table was built with, so the published key projects
+    # to exactly that count -- and a smaller key projects to less, where a base-anchored ratio
+    # applied to the same table could only ever project more.
+    assert of_published["published"] == 1.0
+    assert projected["published"] == 91_575_827
+    assert projected["base"] < 91_575_827
+    for name in ("published + fine_bands", "published + origination_spread"):
+        assert projected[name] >= 91_575_827, name
+
+    # And the test the rule declares is the margined one: a nine-quarter ratio ran 14% light on
+    # the one rebuild this project has done, so the margin is on the projection.
+    assert all(
+        round(margined[name] / projected[name], 4) == 1.14 for name in names if projected[name]
+    )
+    assert affordable["published"], "the key we have is affordable"

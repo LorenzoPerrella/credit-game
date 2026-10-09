@@ -416,6 +416,37 @@ estimated LTV and the mortgage insurance percentage. Left in place they produce 
 portfolio whose average credit score is several thousand. The median ELTV of the 2006
 vintage is literally 999.
 
+**Rule 7 was re-priced and neither given-up extension fits: the key stops where it is.**
+Measured 9 October 2026 against the **published** key rather than the base -- the old anchoring
+had stopped being arithmetic, because the table on disk has been base + HARP + the payment state
+since September while the ratios stayed measured against the base, so every projection
+over-counted by the 1.264x the key already carries. On the corrected anchoring the finer bands
+project **195.7 million** cells and the origination spread **184.4**, against a ceiling of 150;
+both are over **before** the declared 1.14 margin for a nine-quarter ratio, by 30% and 23%, so
+the answer does not rest on the margin. The September pricing reproduces exactly, so the
+sampling is deterministic. `creditsurv prune-encodings` sweeps the 1.0 GB readings a rebuild
+would have orphaned.
+
+**The exact row merge is 1.11x a block at a time, not the 1.36x of the whole table.** Distinct
+`(i, j, age, event)` over the table is 53,273,105 of 72,671,500; within the 443 blocks the
+encoding actually reads it is **65,463,707**, so four fifths of the saving is split across
+batches. The rows that merge differ only in `delinquency_state` and the three-state outcome --
+the model never reads the payment state, and for one cause the outcome collapses to a boolean --
+and both are key columns, so a sort by the key with those two last would put every duplicate
+beside its own. The aggregation does `GROUP BY ALL` a quarter at a time and concatenates with no
+`ORDER BY`, so the order is DuckDB's hash. **The merge therefore belongs to a rebuild**, not
+because a rebuild kills the fit cache but because a rebuild is what can sort the table: sorted it
+is worth 1.36x, unsorted 1.11x, and 11% is a thin prize for invalidating every cached fit and
+changing every published row count.
+
+**And a sort by quarter recovers the whole of it**, measured on 2007Q1's 1,040,722 cells: within
+blocks 1.1373x as written and **1.3398x sorted**, which is the quarter's own figure exactly. Each
+quarter is already a frame in memory, so the sort is free where it happens. **Not taken**: rule 7
+was re-priced on the same day and the key stops where it is, so there is no rebuild to put it in,
+and a sort of its own would cost a re-aggregation, the fit cache, the one cached reading and the
+published row count of every report -- to save about **1.6 hours across a campaign of four
+selections**. That arithmetic is recorded so the decision takes a minute rather than a day.
+
 **Macro covariates are free; loan covariates cost cells -- so measure the cost.** A macro
 series is a function of the origination month and the loan age, both in the key, so it
 costs **zero cells**. A loan covariate multiplies the table by what it actually costs:

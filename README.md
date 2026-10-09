@@ -79,7 +79,9 @@ The dataset is **not downloadable programmatically** -- free but manual registra
 touches the network for it, and only aggregates are published.
 
 `uv run creditsurv prune-archives` reclaims the 40 GB of downloads after verifying the
-parquet. It is the only irreversible step, and deliberately a separate command.
+parquet. It is the only irreversible step on the raw data, and deliberately a separate command;
+`uv run creditsurv prune-encodings` does the same for the cached readings of the cell file, 1.0
+GB each, and by default only the ones whose table has been rebuilt since.
 
 ## Development
 

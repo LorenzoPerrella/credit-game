@@ -125,6 +125,16 @@ class Store:
             found.append((path.stat().st_mtime, path.stem, described))
         return [(name, described) for _, name, described in sorted(found, reverse=True)]
 
+    def remove(self, name: str) -> None:
+        """Delete one artefact and the description beside it.
+
+        Irreversible, and both of the things this store holds are expensive to make again --
+        minutes to an hour for a fit, 11.6 for a reading of the production table. So it is
+        here for a command that asks first, and there is nothing in this module that calls it.
+        """
+        _remove(self.path(name))
+        _remove(self.described(name))
+
 
 def _remove(path: Path) -> None:
     """Whatever is at this path, file or directory, gone."""
