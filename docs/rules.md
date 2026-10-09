@@ -112,9 +112,10 @@ them, as it does for default.
 
 ## 7. How far the key may grow
 
-The cell table may reach **150 million cells**, about 2.4 times the current 63.6 million. The
-engine reads it a batch at a time, so what the ceiling protects is the aggregation itself and
-the time every later fit costs, not a fit's memory.
+The cell table may reach **150 million cells**. That was about 2.4 times the 63.6 million the
+key produced when the ceiling was declared; the extensions this rule admitted took it to
+**91,575,827**, so 1.6 times remains. The engine reads it a batch at a time, so what the ceiling
+protects is the aggregation itself and the time every later fit costs, not a fit's memory.
 
 If the measured cost of the extensions exceeds it, they are given up in this order:
 

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import pytest
 
+from creditsurv.config import CENSORED, DEFAULT_CAUSE, PREPAYMENT_CAUSE
 from creditsurv.data.aggregate import CellSpec, build_cells, cardinality_report
 from creditsurv.data.ingest import Quarter, ingest_quarter
 from fixtures import origination_row, performance_row, write_archives
@@ -423,7 +424,7 @@ def test_a_modified_loan_is_cut_at_the_modification(tmp_path: Path) -> None:
     book = book.sort_values("period_key")
 
     assert book["age"].tolist() == [0, 1, 2], "history should stop before the modification"
-    assert not book["event"].any(), "a modification is censoring, never a default"
+    assert (book["outcome"] != DEFAULT_CAUSE).all(), "a modification is censoring, not a default"
 
 
 def test_truncation_follows_calendar_time_not_age(tmp_path: Path) -> None:
@@ -454,7 +455,7 @@ def test_truncation_follows_calendar_time_not_age(tmp_path: Path) -> None:
     book = book.sort_values("period_key")
 
     assert book["age"].tolist() == [0, 1, 2, 3, 4]
-    assert book["event"].tolist() == [False, False, False, False, True]
+    assert book["outcome"].tolist() == [CENSORED, CENSORED, CENSORED, CENSORED, DEFAULT_CAUSE]
 
 
 def test_the_eliminated_covariates_are_out_of_the_model() -> None:
@@ -1092,3 +1093,61 @@ def test_writing_the_cells_a_quarter_at_a_time_gives_the_table_that_was_concaten
             assert list(streamed[column].cat.categories) == list(held[column].cat.categories), (
                 column
             )
+
+
+def test_a_degenerate_field_is_in_no_key_and_no_model() -> None:
+    """A field holding one value cannot discriminate, and must not reach a key or a formula.
+
+    `DEGENERATE_FIELDS` records the two that do -- `amortization_type` is FRM for 100% of the
+    book and `interest_only_indicator` is N -- and it was a comment with nothing checking it,
+    named once in `data/book.py` as the register a field ought to appear in. The gap it names
+    is real: three performance fields reached the parquet without appearing in any screening
+    table or in this tuple, and nothing noticed.
+
+    What can be checked without the 40 GB is the consequence rather than the gap: a degenerate
+    field in the cell key would multiply the table by one and cost a column, and in a formula
+    it would be a covariate whose coefficient is not identified at all.
+    """
+    from creditsurv.config import MACRO_CANDIDATES, default_covariates
+    from creditsurv.data.aggregate import DEFAULT_SPEC, DEGENERATE_FIELDS
+    from creditsurv.features import BIN_EDGES
+
+    key = {*DEFAULT_SPEC.continuous, *DEFAULT_SPEC.categorical}
+    covariates = {*default_covariates(), *MACRO_CANDIDATES, *BIN_EDGES}
+    for field in DEGENERATE_FIELDS:
+        assert field not in key, f"{field} takes one value and is in the cell key"
+        assert field not in covariates, f"{field} takes one value and is a model covariate"
+
+
+def test_a_month_that_is_both_delinquent_and_paid_off_is_a_default(tmp_path: Path) -> None:
+    """One spelling of what ended the month, and this is the precedence it carries.
+
+    The book's SQL used to emit three: a boolean `event`, a boolean `prepaid` and the
+    three-state `outcome`. The two booleans were not the same fact -- `prepaid` is a
+    prepayment code in the terminal month and takes no view of a default in it -- and over the
+    whole book **52,357 loan-months are both**: 3.07% of the 1,704,432 defaults and 0.15% of
+    the 34,316,184 prepayments, counted once as a default by every model and once again as a
+    prepayment by the site's conditional prepayment rate.
+
+    The precedence is the one rule 1 states: at three missed payments the loan has defaulted by
+    definition, so a payoff after that is a recovery, not a voluntary prepayment. The cells
+    carry this column and both hazards are fitted on it.
+    """
+    import duckdb
+
+    from creditsurv.data.book import state_of_the_book_sql
+
+    performance = [
+        performance_row("F15Q1000001", "201503", "0"),
+        performance_row("F15Q1000001", "201504", "1", delinquency="2"),
+        # Three payments behind **and** paid off in the same month.
+        performance_row("F15Q1000001", "201505", "2", delinquency="3", zero_balance="01"),
+    ]
+    _ingested(tmp_path, [origination_row("F15Q1000001")], performance)
+
+    perf, orig = _sources(tmp_path)
+    book = duckdb.connect().execute(state_of_the_book_sql(), [perf, orig]).df()
+    book = book.sort_values("period_key")
+
+    assert book["outcome"].tolist() == [CENSORED, CENSORED, DEFAULT_CAUSE]
+    assert PREPAYMENT_CAUSE not in set(book["outcome"]), "a default is not also a prepayment"

@@ -30,7 +30,7 @@ flowchart TD
     Z -->|"creditsurv ingest<br/>streamed in batches, ~30 min"| P["parquet, 17 GB<br/>orig: one row per loan<br/>perf: one row per loan-month"]
     P -->|"creditsurv profile"| S["screening<br/>fill rate, concentration,<br/>distinct values, default rate by band"]
     S -->|"decisions: sentinels,<br/>mappings, cut points"| A
-    P -->|"creditsurv aggregate<br/>one quarter at a time, ~40 min"| A["cells, 63.6 million<br/>covariate bands x origination month<br/>x loan age x event, with a count"]
+    P -->|"creditsurv aggregate<br/>one quarter at a time, ~40 min"| A["cells, 91.6 million<br/>covariate bands x origination month<br/>x loan age x outcome, with a count"]
     F["FRED, 14 series"] -->|"lagged three months"| M["macro covariates<br/>a function of origination month and age"]
     A --> E["episodes"]
     M --> E

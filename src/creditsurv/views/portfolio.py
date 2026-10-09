@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
+from creditsurv.config import DEFAULT_CAUSE, PREPAYMENT_CAUSE
 from creditsurv.data.aggregate import PRODUCTION_EDGES
 from creditsurv.data.book import (
     CATEGORICAL,
@@ -140,14 +141,14 @@ def book_by_segment(
     query = f"""
     WITH book AS ({state_of_the_book_sql(policy, complete_only=False)}),
     labelled AS (
-        SELECT period_key, event, prepaid, {", ".join(_labelled_columns())},
+        SELECT period_key, outcome, {", ".join(_labelled_columns())},
                {_ORIGINATION_YEAR} AS vintage_year
         FROM book
     )
     SELECT period_key, {gaps}, {", ".join(fields)},
            COUNT(*) AS loan_months,
-           SUM(CAST(event AS INTEGER)) AS defaults,
-           SUM(CAST(prepaid AS INTEGER)) AS prepayments
+           SUM(CAST(outcome = '{DEFAULT_CAUSE}' AS INTEGER)) AS defaults,
+           SUM(CAST(outcome = '{PREPAYMENT_CAUSE}' AS INTEGER)) AS prepayments
     FROM labelled
     GROUP BY GROUPING SETS ({sets}, (period_key))
     """

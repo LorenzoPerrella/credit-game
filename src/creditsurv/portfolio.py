@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 import pandas as pd
 
+from creditsurv.config import DEFAULT_CAUSE
 from creditsurv.data.book import PathSpec, connect, sources
-from creditsurv.data.panel import EVENT, WEIGHT
+from creditsurv.data.panel import WEIGHT, ended_in
 
 if TYPE_CHECKING:
     import duckdb
@@ -243,7 +244,7 @@ def default_rate_by_period(
     WITH book AS ({state_of_the_book_sql()})
     SELECT period_key,
            COUNT(*)                                             AS loan_months,
-           SUM(CASE WHEN event THEN 1 ELSE 0 END)               AS events
+           SUM(CASE WHEN outcome = '{DEFAULT_CAUSE}' THEN 1 ELSE 0 END) AS events
     FROM book GROUP BY 1
     """
     frame = _run(query, perf_source, orig_source, connection=connection)
@@ -278,13 +279,16 @@ def book_summary(
     version counted the cleaned book before the categorical mappings drop a loan, and its
     1,537,129 defaults were 443 more than the 1,536,686 every report works from. ``cells``
     is ``None`` before the book has been aggregated, and so are those two figures.
+
+    **Which rows are defaults is asked of `ended_in`, here.** The cells record the three-state
+    `outcome` and this used to read a boolean `event` column, which the command synthesised for
+    it on the way in -- a column the cell table does not have, written by a caller so that a
+    callee could read it back.
     """
     years = pd.PeriodIndex(lending["period"]).year
     modelled_months = None if cells is None else int(cells[WEIGHT].sum())
     modelled_defaults = (
-        None
-        if cells is None
-        else int(cells[WEIGHT].to_numpy()[cells[EVENT].to_numpy(dtype=bool)].sum())
+        None if cells is None else int(cells[WEIGHT].to_numpy()[ended_in(cells)].sum())
     )
     return {
         "vintages": f"{int(years.min())} - {int(years.max())}",

@@ -11,7 +11,7 @@ Commands that need a model fit one.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, cast
+from typing import TYPE_CHECKING, Annotated, Final, cast
 
 import typer
 
@@ -43,11 +43,11 @@ if TYPE_CHECKING:
 #: being judged. Three years now sit between them: estimation to 2021-12, anchoring on
 #: 2022-01 to 2024-12, and the test window from 2025-01, each seeing only what the ones
 #: before it did.
-DEFAULT_AS_OF = "2021-12"
+DEFAULT_AS_OF: Final = "2021-12"
 
 #: Where `fit --save` and `report` leave the coefficient table, and where the notebooks
 #: read it.
-COEFFICIENTS_FILE = "coefficients.csv"
+COEFFICIENTS_FILE: Final = "coefficients.csv"
 
 app = typer.Typer(
     add_completion=False,
@@ -184,11 +184,9 @@ def portfolio() -> None:
     from creditsurv.data.ingest import load_manifest
     from creditsurv.data.panel import (
         AGE,
-        EVENT,
         OUTCOME,
         WEIGHT,
         default_rate_by_observation_month,
-        ended_in,
     )
     from creditsurv.data.store import DEFAULT_POLICY, cells_path, load_cells
     from creditsurv.portfolio import (
@@ -234,15 +232,11 @@ def portfolio() -> None:
 
     # Every number docs/portfolio.md quotes (S7). The modelled figures are the cells' own,
     # once the book has been aggregated, so they are the ones every report works from.
-    # The cell table records the three-state `outcome`, not the boolean these views read:
-    # `ended_in` is the one place that knows both spellings, and the views want defaults.
     cells = (
         load_cells(DEFAULT_POLICY, columns=["origination_month", AGE, WEIGHT, OUTCOME])
         if cells_path(DEFAULT_POLICY).exists()
         else None
     )
-    if cells is not None:
-        cells[EVENT] = ended_in(cells)
     performance_rows = sum(int(entry["perf"]) for entry in load_manifest().values())
     summary = book_summary(lending, outstanding, performance_rows=performance_rows, cells=cells)
     if cells is not None:
@@ -850,7 +844,7 @@ def views(
     from creditsurv.config import tables_dir
     from creditsurv.data.book import MoratoriumPolicy
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import AGE, EVENT, OUTCOME, WEIGHT, ended_in
+    from creditsurv.data.panel import AGE, OUTCOME, WEIGHT
     from creditsurv.data.store import load_cells
     from creditsurv.views.build import NoCachedFit, model_views
     from creditsurv.views.portfolio import portfolio_views
@@ -883,7 +877,6 @@ def views(
     if portfolio:
         typer.echo("The book by segment, the lending, the vintage curves and the macro series...")
         cells = load_cells(moratorium, columns=["origination_month", AGE, WEIGHT, OUTCOME])
-        cells[EVENT] = ended_in(cells)
         write_views(
             portfolio_views(cells, load_macro_panel(), policy=MoratoriumPolicy(moratorium)),
             destination,
