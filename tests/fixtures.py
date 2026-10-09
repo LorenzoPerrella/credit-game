@@ -28,12 +28,9 @@ import numpy as np
 import pandas as pd
 
 from creditsurv.config import MACRO_LAG_MONTHS
-from creditsurv.data.freddiemac import (
-    ORIGINATION_COLUMNS,
-    PERFORMANCE_COLUMNS,
-    load_sample,
-)
+from creditsurv.data.freddiemac import ORIGINATION_COLUMNS, PERFORMANCE_COLUMNS
 from creditsurv.features import add_macro_covariates
+from freddiemac_sample import load_sample
 
 if TYPE_CHECKING:
     from pathlib import Path

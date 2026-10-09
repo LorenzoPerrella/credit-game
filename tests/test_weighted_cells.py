@@ -1,5 +1,9 @@
 """Grouped estimation must be lossless.
 
+Named for what it tests rather than for the module it used to sit beside: `test_aggregate.py`
+is the DuckDB aggregation -- the event definition, the truncation, the collapse -- and this is
+the claim that the collapse leaves the *likelihood* alone.
+
 The point of these tests is not the speed-up -- which is modest, and absent
 entirely at realistic covariate counts -- but the demonstration that collapsing
 identical episodes into weighted cells leaves the fit unchanged. An aggregation

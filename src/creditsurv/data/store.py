@@ -259,7 +259,7 @@ def cells_identity(policy: str = DEFAULT_POLICY) -> str:
 
 #: Where fitted models are cached, under the processed directory. The store owns the path now;
 #: this name is kept because the reports and the CLI print it.
-FITS_DIRNAME = FITS.kind
+FITS_DIRNAME: Final = FITS.kind
 
 
 def fit_fingerprint(**parts: object) -> str:

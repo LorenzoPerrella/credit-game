@@ -32,12 +32,21 @@ function-level imports heavily and deliberately — importing `data.panel` at mo
 **0.85 s** on every `creditsurv --help` — so a graph built from the top of each file would miss
 most of `cli.py`.
 
-## The one cycle, and why it is allowed
+## No cycles, and the one there used to be
 
-`data.ingest` reads the record layout from `data.freddiemac`, which needs the event definition
-from `data.book`, which needs the manifest from `data.ingest`. The last edge is taken inside the
-function that needs it, with the reason written where it is taken. Every other cycle is a
-mistake, and the test says so by name.
+There is no import cycle in the package, at either scope, and the test asserts exactly that.
+
+There was one, in `data/`: `data.ingest` reads the record layout from `data.freddiemac`, which
+read the event definition from `data.book`, which reads the manifest from `data.ingest`. The
+last edge was taken inside the function that needed it, by hand, with the reason written where
+it was taken.
+
+What closed it was a **pandas loader that nothing in the package called**. It parses a
+downloaded Freddie Mac sample into the canonical panel, and only the fixtures use it -- so it
+is now `tests/freddiemac_sample.py`, beside the fixtures that write the files it reads.
+`data.freddiemac` is the published record layout and imports nothing at all; `data.book`
+imports the manifest at the top of the file like anything else. The rule got stronger by
+moving test-only code out of the package, which is the usual way.
 
 ## Where the orchestration is
 

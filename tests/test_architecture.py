@@ -51,12 +51,6 @@ LAYERS: tuple[tuple[str, ...], ...] = (
     ("cli",),
 )
 
-#: The one cycle, and the only one allowed. `data.ingest` reads the record layout from
-#: `data.freddiemac`, which needs the event definition from `data.book`, which needs the
-#: manifest from `data.ingest` -- and that last edge is taken inside the function that needs
-#: it, with the reason written beside it.
-ALLOWED_CYCLE = frozenset({"data.book", "data.ingest", "data.freddiemac"})
-
 
 def _modules() -> list[str]:
     """Every module of the package, as a dotted name relative to it."""
@@ -146,13 +140,18 @@ def test_nothing_imports_from_a_shallower_layer() -> None:
     assert not upward, "a module reaches up into a layer above it: " + ", ".join(sorted(upward))
 
 
-def test_the_only_cycle_is_the_one_the_data_layer_documents() -> None:
-    """`data.ingest` reads the record layout from `data.freddiemac`, which needs the event
-    definition from `data.book`, which needs the manifest from `data.ingest`. That last edge is
-    taken inside the function that needs it, and `data/book.py` says so where it is taken.
+def test_no_module_imports_in_a_circle() -> None:
+    """There is no import cycle anywhere in the package, at either scope.
 
-    Every other cycle is a mistake, and this test exists so that a second one cannot be
-    introduced quietly by a convenient function-level import.
+    There used to be exactly one, in `data/`: `data.ingest` reads the record layout from
+    `data.freddiemac`, which read the event definition from `data.book`, which reads the
+    manifest from `data.ingest` -- and that last edge was taken inside the function that needed
+    it, by hand. What closed it was a pandas loader nothing in the package called, now
+    `tests/freddiemac_sample.py`; `data.freddiemac` imports nothing at all and `data.book`
+    imports the manifest at the top of the file like anything else.
+
+    So the rule is the strong one now, and this test exists so that a cycle cannot be
+    reintroduced quietly by a convenient function-level import.
     """
     graph = _edges()
     found: set[frozenset[str]] = set()
@@ -175,13 +174,8 @@ def test_the_only_cycle_is_the_one_the_data_layer_documents() -> None:
         seen.clear()
         walk(module)
 
-    unexpected = {cycle for cycle in found if cycle != ALLOWED_CYCLE}
-    assert not unexpected, "cycle(s) besides the documented one in `data`: " + "; ".join(
-        " <-> ".join(sorted(cycle)) for cycle in sorted(unexpected, key=sorted)
-    )
-    assert ALLOWED_CYCLE in found or not found, (
-        "the documented cycle in `data` is gone, which is good news: delete ALLOWED_CYCLE "
-        "and the comment that explains it."
+    assert not found, "import cycle(s): " + "; ".join(
+        " <-> ".join(sorted(cycle)) for cycle in sorted(found, key=sorted)
     )
 
 

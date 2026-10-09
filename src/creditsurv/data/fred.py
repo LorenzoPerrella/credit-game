@@ -109,7 +109,7 @@ def _download(spec: SeriesSpec, start: str, end: str | None) -> pd.Series:
 
 
 #: Parquet metadata key holding the ``start`` a cached series was fetched with.
-_START_KEY = b"creditsurv_requested_start"
+_START_KEY: Final = b"creditsurv_requested_start"
 
 
 def _write_cache(path: Path, frame: pd.DataFrame, start: str) -> None:

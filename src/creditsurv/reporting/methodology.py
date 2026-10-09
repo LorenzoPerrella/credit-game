@@ -8,7 +8,7 @@ its failures are visible too.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import pandas as pd
@@ -122,7 +122,7 @@ def _direction(rho: float) -> str:
 
 #: What a skipped section says instead of quietly disappearing. A report missing a
 #: section reads as a report whose author had nothing to say about it.
-_SKIPPED = (
+_SKIPPED: Final = (
     "> **Not run.** {what} costs a fit of its own, which on the whole population is "
     "hours rather than seconds. Re-run with `{flag}` to compute it."
 )
