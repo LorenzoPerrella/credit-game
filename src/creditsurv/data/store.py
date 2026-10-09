@@ -317,6 +317,12 @@ def load_fit(name: str) -> object | None:
     An unreadable cache is a miss, not an error. A pickle is tied to the versions of
     lifelines and numpy that wrote it, so an upgrade should cost a refit rather than a
     traceback.
+
+    **The reason is logged with it**, because the reasons are not interchangeable. A version
+    skew wants a refit and there is nothing to do about it; a `ModuleNotFoundError` wants a
+    module that moved to stay importable under its old name, which is what
+    `creditsurv/models/blocks.py` is for and what a run that silently refits everything would
+    never have told anyone.
     """
     path = FITS.path(name)
     if not path.exists():
@@ -325,6 +331,11 @@ def load_fit(name: str) -> object | None:
         with path.open("rb") as handle:
             loaded: object = pickle.load(handle)
         return loaded
-    except Exception:
-        _LOGGER.warning("Cached fit at %s could not be read; refitting.", path)
+    except Exception as unreadable:
+        _LOGGER.warning(
+            "Cached fit at %s could not be read (%s: %s); refitting.",
+            path,
+            type(unreadable).__name__,
+            unreadable,
+        )
         return None

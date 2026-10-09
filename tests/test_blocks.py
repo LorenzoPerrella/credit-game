@@ -1324,3 +1324,29 @@ def test_newton_goes_first_from_a_cold_start_and_not_only_from_a_warm_one(
     assert apart.max() < 0.1, f"{apart.max()} standard errors apart"
     assert fitter.log_likelihood_ >= stock.log_likelihood_, "the polish finished the job"
     assert without.residual_error_se > record.residual_error_se
+
+
+def test_the_engines_old_module_name_still_resolves_for_the_cached_fits() -> None:
+    """`creditsurv/models/blocks.py` is not dead code, and deleting it empties the fit cache.
+
+    The engine was one module of 2,325 lines and is now the `models/engine/` package. A pickle
+    written before that split names `creditsurv.models.blocks.BlockFit`, and pickle resolves a
+    class by **importing the module it was written from** -- so without that file every fit on
+    disk raises `ModuleNotFoundError`, `load_fit` turns it into a miss, and a run starts cold.
+    All 176 on this machine were unreadable for exactly as long as it took to find this, and
+    the only thing that said so was a warning nobody was reading.
+
+    This test exists so that the shim cannot be tidied away as the decoy it looks like.
+    """
+    import io
+    import pickle
+
+    from creditsurv.models.blocks import BlockFit as under_the_old_name
+    from creditsurv.models.engine.fit import BlockFit
+
+    assert under_the_old_name is BlockFit
+
+    # And resolved the way pickle resolves it, which is the step that was failing: an
+    # unpickler meeting the old module path calls `find_class` on it.
+    resolver = pickle.Unpickler(io.BytesIO(b""))
+    assert resolver.find_class("creditsurv.models.blocks", "BlockFit") is BlockFit

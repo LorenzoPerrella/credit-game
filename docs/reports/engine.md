@@ -424,6 +424,16 @@ The curvature's worst *elementwise* relative figure is 4.9e-10, and it is on an 
 against a largest entry of 8.09e+07 -- seven orders below the matrix's scale, where a relative
 measure means nothing. The absolute spread over the whole Hessian is 1.35e-05.
 
+**And every fit on disk was unreadable until this was found.** The engine was one module before
+this branch, and a pickle resolves a class by importing the module it was written from: all 176
+cached fits name `creditsurv.models.blocks.BlockFit`, which the split into `models/engine/` had
+removed. `load_fit` turns an unreadable pickle into a **miss** -- deliberately, because a pickle
+is tied to the versions that wrote it -- so the cache went silently empty and a run would have
+started cold. `creditsurv/models/blocks.py` keeps the old name importable, a test holds it to the
+class so nobody tidies it away as the decoy it looks like, and `load_fit`'s warning now names the
+exception, because a `ModuleNotFoundError` wants a shim where a version skew wants a refit. It
+was found by trying to load a real fit, not by a test.
+
 **Those figures are two orders better than the first ones, and the reason is a summation order.**
 Three of the accumulators are scalars over every row, and 72.7 million sequential additions into
 one `f64` is the worst order there is: the error grows with the count, where NumPy's `bincount`
@@ -434,6 +444,24 @@ compensation on those three sums closes it for a handful of flops a row, inside 
 evaluation, and it is deterministic: fixed order, no reassociation, the same bits every run. The
 gradient and the curvature need none of it -- they accumulate into 3,001 and 286,387 bins, so
 each sums about 24,000 terms rather than 72.7 million.
+
+**And the proof that settles it is a fit.** The published model's optimum in the cache was found
+by the NumPy kernel; re-fitted warm from its own coefficients through the **compiled** one, on
+the whole training half:
+
+| | |
+|---|---|
+| time | **0.30 minutes**, 1 evaluation, 0 Newton steps |
+| where it began, and ended | **7.73e-05 standard errors** from the optimum |
+| log-likelihood | **-10,688,088.42593586**, against the cached -10,688,088.42593586 |
+| the difference | **0.0** |
+| coefficients | moved at most **7.1e-15 standard errors** |
+| standard errors | differ by at most **3.5e-13** relative |
+| resident | 0.47 GB |
+
+So the compiled kernel certifies the NumPy kernel's optimum as the optimum, on the production
+table, with the polish's own measure. That is the equivalence that matters: not that two arrays
+of numbers are close, but that a fit lands in the same place.
 
 **One difference is declared rather than fixed.** Outside the data the log-logistic's Hessian
 overflows and the two reach a different flavour of non-finite in the same entries: `-inf` from

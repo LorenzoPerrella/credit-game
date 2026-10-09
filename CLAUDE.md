@@ -172,7 +172,21 @@ rather than abort (10.19 s against 10.27, inside the noise) so a bug raises inst
 hour-old fit; the bounds checks are on; the crate has unit tests and `cargo test` runs in CI.
 **One difference is declared rather than fixed**: outside the data the log-logistic's Hessian
 overflows and the two reach `-inf` against `nan` in the same entries, where the objective agrees
-to the last bit and the polish refuses the step either way. `crates/creditsurv-kernel` is the same arithmetic as a fused loop -- one
+to the last bit and the polish refuses the step either way.
+
+And the proof that settles it is a fit, not an array: the published model's cached optimum was
+found by the NumPy kernel, and re-fitted **warm through the compiled one** on the whole half it
+takes 0.30 minutes and one evaluation to certify that optimum **7.73e-05 standard errors** out,
+at an identical log-likelihood of -10,688,088.42593586 -- a difference of exactly 0.0, with the
+coefficients moved at most 7.1e-15 standard errors.
+
+**A pickle names the module it was written from, so splitting one empties the fit cache.** All
+176 cached fits named `creditsurv.models.blocks.BlockFit`, which this branch's split into
+`models/engine/` removed, and `load_fit` turns an unreadable pickle into a **miss** -- so the
+cache went silently empty and every run would have started cold. `models/blocks.py` keeps the
+old name importable and `tests/test_blocks.py` holds it to the class; `load_fit` now logs the
+exception with the path, because a `ModuleNotFoundError` wants a shim where a version skew wants
+a refit. **Anything that moves a class a pickle holds has to leave its name importable.** `crates/creditsurv-kernel` is the same arithmetic as a fused loop -- one
 `#[pyfunction]`, fixed-dtype numpy arrays across the boundary, the jet in registers -- built by
 `uv sync --extra kernel`, optional at import, with `models/kernel/terms.py` normative and the
 equivalence tests parametrised over whichever backends are installed. On the whole half it reads
