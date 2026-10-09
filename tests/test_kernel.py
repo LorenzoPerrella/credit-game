@@ -1116,7 +1116,9 @@ def test_a_reading_of_a_rebuilt_table_is_the_only_one_the_sweep_takes(
         folder = ENCODINGS.path(name)
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "i.npy").write_bytes(b"0" * 64)
-        ENCODINGS.describe(name, {"identity": identity, "cells": 9, "cause": "default"})
+        ENCODINGS.describe(
+            name, {"identity": identity, "cells": 9, "cause": "default", "as_of": "2021-12"}
+        )
 
     audited = {reading.name: reading for reading in audit_readings()}
     assert set(audited) == {"still-here", "rebuilt-since"}
@@ -1124,6 +1126,9 @@ def test_a_reading_of_a_rebuilt_table_is_the_only_one_the_sweep_takes(
     assert not audited["rebuilt-since"].current
     assert audited["still-here"].bytes_on_disk == 64
     assert audited["still-here"].describe()["table"] == "cells_exclude.parquet"
+    # The reporting date is shown, because a reading of the table on disk at a date nobody will
+    # ask about again is current and useless at once, and only a person can tell which.
+    assert audited["still-here"].describe()["as_of"] == "2021-12"
 
     # And removing one takes the description with it, because a description beside no arrays
     # would be found by every search and read back as a reading.
@@ -1151,6 +1156,7 @@ def test_a_reading_whose_description_cannot_be_read_is_not_called_current() -> N
         cells=None,
         cause=None,
         parity=None,
+        as_of=None,
     )
     assert not unknown.current
     assert unknown.describe()["parity"] == "whole"

@@ -174,6 +174,9 @@ def prune_encodings(
     stale_only: Annotated[
         bool, typer.Option(help="Keep the readings of the cell table that is on disk.")
     ] = True,
+    name: Annotated[
+        list[str] | None, typer.Option(help="Delete these readings by name, whatever their table.")
+    ] = None,
     yes: Annotated[bool, typer.Option(help="Skip the confirmation prompt.")] = False,
 ) -> None:
     """Delete cached readings of the cell file, by default only the ones nothing can hit.
@@ -186,6 +189,11 @@ def prune_encodings(
     Deleting a **current** one is different: it costs 11.6 minutes to take again, and a run that
     stops picks up at the fit it was on rather than at the reading. So the sweep is the stale
     ones unless `--no-stale-only` says otherwise, and nothing goes without being shown first.
+
+    `--name` takes one by name, which is the case the sweep cannot reason about: a reading of the
+    table on disk at a reporting date nobody will ask about again is current and useless at the
+    same time, and only the person who made it knows which. The table printed first carries the
+    date for exactly that.
 
     A separate command, like `prune-archives`, and for the same reason: never a tail appended to
     something else, where one mistake takes the only copy with it.
@@ -203,7 +211,16 @@ def prune_encodings(
         return
 
     _echo_table(pd.DataFrame([reading.describe() for reading in readings]))
-    going = [reading for reading in readings if not (stale_only and reading.current)]
+    wanted = set(name or ())
+    unknown = wanted - {reading.name for reading in readings}
+    if unknown:
+        typer.echo(f"No such reading(s): {', '.join(sorted(unknown))}")
+        raise typer.Exit(1)
+    going = [
+        reading
+        for reading in readings
+        if reading.name in wanted or not (wanted or (stale_only and reading.current))
+    ]
     kept = [reading for reading in readings if reading not in going]
     for reading in kept:
         typer.echo(f"{reading.name}: keeping -- it is a reading of the table on disk")

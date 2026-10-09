@@ -263,13 +263,22 @@ class StoredReading:
     cells: int | None
     cause: str | None
     parity: int | None
+    as_of: str | None
 
     def describe(self) -> dict[str, object]:
-        """One row of what `creditsurv prune-encodings` shows before it deletes anything."""
+        """One row of what `creditsurv prune-encodings` shows before it deletes anything.
+
+        **The reporting date is in it, and it is the column that does the work.** A reading is
+        stale by construction when its cell table has been rebuilt, and the sweep finds those;
+        a reading of the table on disk at a date nobody will ask about again -- a short-window
+        rehearsal, say -- is indistinguishable from the one every run wants unless the date is
+        shown. That is why `--name` exists beside the sweep.
+        """
         return {
             "reading": self.name,
             "table": self.identity.split(":")[0],
             "current": self.current,
+            "as_of": self.as_of,
             "cause": self.cause,
             "parity": "whole" if self.parity is None else self.parity,
             "cells": self.cells,
@@ -319,6 +328,7 @@ def audit_readings() -> list[StoredReading]:
                 cells=_count(described.get("cells")),
                 cause=cause if isinstance(cause := described.get("cause"), str) else None,
                 parity=parity if isinstance(parity := described.get("parity"), int) else None,
+                as_of=when if isinstance(when := described.get("as_of"), str) else None,
             )
         )
     return readings

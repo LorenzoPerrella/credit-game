@@ -413,6 +413,31 @@ selection is now three readings and thirty fits, and a fit is a handful of Hessi
 the evaluation takes a warm candidate's 5.67 minutes to perhaps two and a selection's 3.5 hours
 to about 1.6. Worth having, after the two changes that cost nothing and cannot fail.
 
+### A whole selection, end to end, on a short window
+
+Every piece above was measured on its own. This is the rehearsal that runs them together: a
+full `creditsurv select` on the window up to **2002-12** -- 3,246,878 cells over 103,080,649
+loan-months -- with the reports redirected so nothing published was touched.
+
+| | |
+|---|---|
+| all ten steps | correlation, inflation, screening, backward elimination, stability, materiality |
+| time | **18.1 minutes**, peak **1.28 GB** |
+| fits | **33**: 24 fitted, **9 served from the cache** |
+| readings written | **three** -- the window, and step 9's two origination-parity halves |
+| outcome | 13 covariates eliminated, a formula selected, ten report tables written |
+
+The window is a tenth of the production one, so the minutes do not translate; what the rehearsal
+is for is the **three**. That is the number the whole design rests on -- a reading per *sample*
+rather than per candidate -- and it is what a run actually produces, not what a docstring claims.
+The nine cached fits are the other half of it: the cache is hit inside a run, not only between
+runs.
+
+It also found a gap in `prune-encodings`, which is what rehearsals are for. The sweep reasons by
+the cell table's identity, so a reading of the table **on disk** at a reporting date nobody will
+ask about again -- these three -- is current and useless at the same time, and no rule can tell
+which. The audit now prints the reporting date and `--name` takes one by name.
+
 ## The compiled kernel, measured against that gate
 
 `crates/creditsurv-kernel` is the same arithmetic as a fused loop: one `#[pyfunction]`, numpy
