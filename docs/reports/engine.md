@@ -407,6 +407,44 @@ the ratio measured inside one run does not move. So the meaningful quantity is t
 ratio is 2.80x with a spread of 0.05, and three is outside it. Reading the 9.74 as a pass would
 be choosing the thermometer that suits: the final run's baseline was the fastest of six.
 
+**It is kept, and the exception is declared in rule 13.** The condition the owner attached was
+that the logic be airtight rather than that the number be three, so what follows is what that
+cost and what it bought.
+
+**The two backends on the production table, element by element.** 72.7 million rows at the
+published specification, both families, at the seed and at a point in the data:
+
+| | agreement |
+|---|---|
+| the objective | **1.2e-15** relative, and 1.97e-16 on one point |
+| the gradient, 26 entries | **1.1e-13** at worst |
+| the curvature, 676 entries | **1.7e-13** of the largest entry |
+
+The curvature's worst *elementwise* relative figure is 4.9e-10, and it is on an entry of 6.19
+against a largest entry of 8.09e+07 -- seven orders below the matrix's scale, where a relative
+measure means nothing. The absolute spread over the whole Hessian is 1.35e-05.
+
+**Those figures are two orders better than the first ones, and the reason is a summation order.**
+Three of the accumulators are scalars over every row, and 72.7 million sequential additions into
+one `f64` is the worst order there is: the error grows with the count, where NumPy's `bincount`
+and `dot` sum pairwise and it grows with its square root. The two backends read 4.0e-11 apart on
+the objective, 7.9e-11 on the gradient -- against the **1.97e-16** that 443 blocks and 800
+reproduce, which is this project's own standard for two orderings of one sum. Neumaier's
+compensation on those three sums closes it for a handful of flops a row, inside the noise of the
+evaluation, and it is deterministic: fixed order, no reassociation, the same bits every run. The
+gradient and the curvature need none of it -- they accumulate into 3,001 and 286,387 bins, so
+each sums about 24,000 terms rather than 72.7 million.
+
+**One difference is declared rather than fixed.** Outside the data the log-logistic's Hessian
+overflows and the two reach a different flavour of non-finite in the same entries: `-inf` from
+the compiled loop where the NumPy reads `nan`. It is structural. The Python chain carries a
+structural zero as the literal `0.0` and drops the term, so `0 * inf` never arises there, while
+an array element that is merely numerically zero gets no such treatment and poisons the sum; the
+compiled loop takes the shortcut on the value instead. What the engine reads is the objective,
+which agrees there to the last bit, and a step to a non-finite curvature is refused by the polish
+either way -- so the test holds the claim that decides a fit: identical wherever the curvature is
+a number, and not a number wherever the other is not.
+
 **Where the remaining 20% is, measured rather than assumed.** The obvious guess is libm -- a row
 needs three cumulative hazards, two survivals and one logarithm, six transcendentals, and no loop
 engineering removes them. It is wrong. Rebuilt with every `exp` and `ln` replaced by an affine
@@ -419,6 +457,11 @@ Two things that were tried and are recorded because they look like they should w
 * **`-C target-cpu=native` is a regression**, 11.71 s against 10.18 on the same source. The row
   loop is scalar and dependent, so there is nothing to vectorise, and the instruction selection
   it chooses instead is worse. Removed.
+* **Panics unwind rather than abort**, which was not the first setting. `panic = "abort"` is
+  the faster one in principle and what it does here is kill the interpreter with no traceback in
+  the middle of a fit that may be an hour old; unwinding lets pyo3 raise a Python exception the
+  engine can see. Measured both ways in the same conditions: **10.19 s against 10.27**, 0.8%,
+  inside the noise. An earlier reading of 6.5% was machine state and is retracted.
 * **Unchecked indexing bought 2% and cost a segmentation fault.** Replacing the tables' bounds
   checks with `get_unchecked` took a Hessian from 10.18 s to 9.96, and the first thing it did was
   turn a wrong accumulator length into a crash **inside an ordinary fit**: a model with no

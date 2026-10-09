@@ -12,10 +12,22 @@ crate-type = ["cdylib"]
 
 [dependencies]
 numpy = "0.23"
-pyo3 = { version = "0.23", features = ["extension-module", "abi3-py311"] }
+# `extension-module` is **not** a default feature, and that is what makes the arithmetic
+# testable: with it on, the crate deliberately leaves the Python symbols unresolved for the
+# interpreter to supply, so a test binary cannot link. maturin turns it on when it builds the
+# wheel (see pyproject.toml); `cargo test` leaves it off and links against libpython.
+pyo3 = { version = "0.23", features = ["abi3-py311"] }
+
+[features]
+extension-module = ["pyo3/extension-module"]
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "abort"
+# **Panics unwind, deliberately.** `panic = "abort"` is the faster setting and it was the first
+# one here; what it does to this project is kill the interpreter with no traceback in the middle
+# of a fit that may be an hour old. Unwinding lets pyo3 turn a panic into a Python exception the
+# engine can see, report and cache around. Measured, the difference is inside the run-to-run
+# spread of the whole evaluation.
+panic = "unwind"

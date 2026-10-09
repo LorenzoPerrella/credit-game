@@ -59,10 +59,14 @@ jobs:
       - name: Install dependencies, with the compiled kernel
         run: uv sync --frozen --extra kernel
 
-      - name: Lint the crate
+      # `extension-module` is off by default so a test binary can link, which is what lets the
+      # arithmetic have unit tests of its own: the compensated sum, the capped exponential and
+      # the chain's shortcut on a zero factor.
+      - name: Lint and test the crate
         run: |
           cargo fmt --manifest-path crates/creditsurv-kernel/Cargo.toml -- --check
           cargo clippy --manifest-path crates/creditsurv-kernel/Cargo.toml --release -- -D warnings
+          cargo test --manifest-path crates/creditsurv-kernel/Cargo.toml --release
 
       - name: Test again, with the compiled kernel
         run: uv run pytest -m "not network"

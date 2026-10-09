@@ -15,7 +15,7 @@ the optimiser backtracks from, and a wall that moves by an epsilon moves
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import autograd.numpy as anp
 import numpy as np
@@ -33,6 +33,7 @@ from creditsurv.models.kernel import (
     SURVIVAL_FLOOR,
     Factorisation,
     Kernel,
+    Rows,
     log_times,
     row_likelihood,
 )
@@ -913,3 +914,175 @@ def test_a_model_with_no_calendar_covariate_is_evaluated_and_not_a_segmentation_
     assert np.isfinite(totals.gradient).all()
     assert totals.curvature is not None
     assert np.isfinite(totals.curvature).all()
+
+
+def _kernel(distribution: str) -> tuple[Kernel, np.ndarray]:
+    """A kernel on the fixture book, and the parameter vector its design expects."""
+    frame = _book(range(0, 5), range(0, 7))
+    design = _design(frame)
+    weight = frame["loan_months"].to_numpy(dtype=float)
+    event = frame["outcome"].to_numpy(dtype=bool)
+    factorisation = _factorisation()
+    rows = factorisation.add(frame, design, event=event, weight=weight)
+    loan, calendar, loan_positions, calendar_positions = factorisation.tables()
+    deviations = np.array([1.0, 0.4, 17.5, 0.5, 0.06, 2.3, 1.0])
+    kernel = Kernel(
+        distribution=distribution,
+        loan=loan / deviations[loan_positions],
+        calendar=calendar / deviations[calendar_positions],
+        loan_index=loan_positions,
+        calendar_index=calendar_positions,
+        shape_index=design.shape[1],
+        blocks=(rows,),
+        total_weight=float(weight.sum()),
+    )
+    return kernel, deviations
+
+
+#: Where the two backends are compared: the seed, a point in the middle of the data, and one
+#: far outside it where every clip binds and the second-order association decides the answer.
+_POINTS: Final = {
+    "the seed": [5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "inside the data": [4.6, -0.3, 0.21, 0.14, -0.9, 0.35, 0.28],
+    "over the cliff": [-500.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0],
+    "the shape on its other bound": [6.0, 0.1, -0.2, 0.0, 0.3, 0.0, -3.0],
+}
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+@pytest.mark.parametrize("distribution", ["weibull", "loglogistic"])
+@pytest.mark.parametrize("point", list(_POINTS))
+def test_the_two_backends_are_the_same_objective_everywhere_it_is_evaluated(
+    distribution: str, point: str
+) -> None:
+    """The compiled kernel against the NumPy one, element by element, at four points.
+
+    Both are held to autograd elsewhere; this is the comparison that matters once there are
+    two, because the engine's guards read the *objective* and not a reference. **A wall that
+    moves by an epsilon moves which fits are refused**, so the points include two outside the
+    data: `eta = -500` with the shape on its bound, where the cumulative hazard overflows and
+    `(f'' * d) * d` is the only grouping that does not produce a `nan`, and the shape on the
+    other bound.
+
+    The tolerance is 1e-12 relative and not zero, because the two accumulate in different
+    orders -- the NumPy in chunks through `bincount` and pairwise sums, the compiled loop row
+    by row with Neumaier compensation on the three sums that are over every row -- and rule 13
+    asks each to be deterministic rather than identical to the other. On the production table,
+    72.7 million rows at the published specification, they agree to **1.2e-15** on the
+    objective, 1.1e-13 on the gradient and 1.7e-13 of the Hessian's largest entry; see
+    `docs/reports/engine.md`.
+
+    **And where a curvature is not a number, the two are compared on that rather than on its
+    digits.** Outside the data the log-logistic's Hessian overflows, and the two arrive at a
+    different flavour of non-finite in the same entries: `-inf` from the compiled loop where
+    the NumPy reads `nan`. That is the one declared difference between the backends and it is
+    structural, not a bug -- the Python chain carries a structural zero as the literal `0.0`
+    and drops the term, so `0 * inf` never arises there, while an array element that is merely
+    numerically zero gets no such treatment and poisons the sum; the compiled loop takes the
+    shortcut on the value instead. What the engine reads is the **objective**, which agrees
+    here to the last bit, and a step to a non-finite curvature is refused by the polish either
+    way. So the claim held is the one that decides a fit: identical wherever the curvature is a
+    number, and not a number wherever the other is not.
+    """
+    from creditsurv.models.kernel import terms
+
+    if terms._compiled is None:
+        pytest.skip("the compiled kernel is not installed (`uv sync --extra kernel`)")
+    kernel, _ = _kernel(distribution)
+    x = np.array(_POINTS[point])
+
+    written = kernel._written(x, curvature=True)
+    compiled = kernel._compiled(x, curvature=True)
+
+    assert np.isnan(compiled.value) == np.isnan(written.value), f"{point}: one is nan"
+    if not np.isnan(written.value):
+        assert compiled.value == pytest.approx(written.value, rel=1e-12, nan_ok=True)
+    np.testing.assert_allclose(
+        compiled.gradient, written.gradient, rtol=1e-12, atol=1e-300, err_msg=point
+    )
+    assert compiled.curvature is not None
+    assert written.curvature is not None
+    defined = np.isfinite(written.curvature)
+    np.testing.assert_array_equal(
+        np.isfinite(compiled.curvature),
+        defined,
+        err_msg=f"{point}: one backend has a number where the other has none",
+    )
+    np.testing.assert_allclose(
+        compiled.curvature[defined],
+        written.curvature[defined],
+        rtol=1e-12,
+        atol=1e-300,
+        err_msg=point,
+    )
+
+
+@pytest.mark.parametrize("distribution", ["weibull", "loglogistic"])
+def test_the_compiled_kernel_gives_the_same_bits_on_every_call(distribution: str) -> None:
+    """Rule 13 asks for a deterministic summation, and this is what that means.
+
+    A fixed chunk order, no unordered reduction and no FMA reassociation -- so the same point
+    evaluated again is the same number to the last bit, not to a tolerance. It matters because
+    an optimiser turns a difference in the last digit into a different search: two runs of the
+    identical prepayment fit once agreed to every printed digit for eighty evaluations, split
+    at 0.065288491918 against 0.065288491919, and were five significant figures apart forty
+    evaluations later.
+    """
+    from creditsurv.models.kernel import terms
+
+    if terms._compiled is None:
+        pytest.skip("the compiled kernel is not installed (`uv sync --extra kernel`)")
+    kernel, _ = _kernel(distribution)
+    x = np.array(_POINTS["inside the data"])
+
+    first = kernel._compiled(x, curvature=True)
+    for _ in range(3):
+        again = kernel._compiled(x, curvature=True)
+        assert again.value.hex() == first.value.hex()
+        np.testing.assert_array_equal(again.gradient, first.gradient)
+        assert again.curvature is not None
+        assert first.curvature is not None
+        np.testing.assert_array_equal(again.curvature, first.curvature)
+
+
+def test_the_rows_cross_the_boundary_as_one_buffer_of_the_right_dtype() -> None:
+    """What `joined` promises the compiled backend: one C-contiguous array a column.
+
+    Shared where the blocks are already adjacent views of one array, which is what a reading
+    off the disk cache is -- copying there would put 1.09 GB inside a 1.31 GB ceiling -- and
+    concatenated anywhere else. Either way the dtype is the declared one, checked here rather
+    than refused at the boundary in the middle of an hour-old fit.
+    """
+    from creditsurv.models.kernel.factorisation import _ROW_DTYPES, joined
+
+    whole = np.arange(12, dtype=np.uint32)
+    views = [
+        Rows(
+            i=whole[start:stop],
+            j=whole[start:stop],
+            age=np.arange(stop - start, dtype=np.uint16),
+            event=np.zeros(stop - start, dtype=bool),
+            weight=np.ones(stop - start, dtype=np.uint32),
+        )
+        for start, stop in ((0, 5), (5, 12))
+    ]
+    one = joined(views)
+
+    assert one.rows == 12
+    assert np.shares_memory(one.i, whole), "adjacent views of one array are shared, not copied"
+    assert one.i is whole, "and shared means the array itself, with nothing between"
+    np.testing.assert_array_equal(one.age, [0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 5, 6])
+    for column, dtype in _ROW_DTYPES.items():
+        assert getattr(one, column).dtype == dtype
+        assert getattr(one, column).flags.c_contiguous
+
+    # And a column that is not what the kernel reads is refused by name, not misread.
+    wrong = Rows(
+        i=np.arange(3, dtype=np.int64),
+        j=np.arange(3, dtype=np.uint32),
+        age=np.arange(3, dtype=np.uint16),
+        event=np.zeros(3, dtype=bool),
+        weight=np.ones(3, dtype=np.uint32),
+    )
+    with pytest.raises(TypeError, match="column is int64"):
+        joined([wrong, wrong])

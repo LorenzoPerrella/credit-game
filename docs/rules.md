@@ -324,6 +324,41 @@ selection's 3.5 hours about 1.6. What it cannot buy is a different answer -- the
 lifelines' own likelihood on the same rows, and the damped Newton polish certifies every fit to
 under a thousandth of a standard error whichever backend evaluated it.
 
+### The gate was not passed, and the exception is declared here
+
+**Measured, 9 October 2026: 2.80x on a Hessian, against the 3x this rule asked for.** Three
+readings on the whole training half, stable to 0.15%: a value, a gradient and a Hessian in
+**9.73, 9.76, 9.74 s** against a NumPy baseline of 26.86 to 27.55, in 0.47 GB against the 1.31
+ceiling. `docs/reports/engine.md` carries the table and why the ratio decides rather than the
+absolute 9.90 s this rule also named -- the same NumPy code measures 26.86 to 29.69 s across a
+session, so the absolute number is not reproducible and reading 9.74 as a pass would be choosing
+the thermometer that suits.
+
+**It is kept anyway, by the project owner's decision, and the condition attached to that decision
+was that the logic be airtight rather than that the number be three.** What was done to meet it,
+all measured:
+
+* the two backends are compared **element by element** at four points, including two outside the
+  data where every clip binds, for both families, at 1e-12 relative -- and on the production
+  table, 72.7 million rows at the published specification, they agree to **1.2e-15** on the
+  objective, 1.1e-13 on the gradient and 1.7e-13 of the Hessian's largest entry;
+* the three sums that run over every row carry **Neumaier compensation**, because 72.7 million
+  sequential additions into one `f64` had put the backends 4e-11 apart where this project's
+  standard for two orderings of the same sum is 1.97e-16. It costs nothing measurable and the
+  objective now reproduces to 1.2e-15;
+* panics **unwind** rather than abort, so a bug raises a Python exception instead of killing an
+  hour-old fit. Measured both ways: 10.19 s against 10.27, inside the noise;
+* the bounds checks are **on**. Removing them bought 2% and segfaulted inside an ordinary fit;
+* the arithmetic has unit tests in the crate -- the compensated sum, the capped exponential,
+  the chain's shortcut on a zero factor -- and `cargo test` runs in CI beside `clippy -D
+  warnings`;
+* and **one difference is declared rather than fixed**: outside the data the log-logistic's
+  Hessian overflows and the two backends reach a different flavour of non-finite in the same
+  entries, `-inf` against `nan`. The objective agrees there to the last bit and a step to a
+  non-finite curvature is refused by the polish either way, so the test holds the claim that
+  decides a fit -- identical wherever the curvature is a number, and not a number wherever the
+  other is not.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.

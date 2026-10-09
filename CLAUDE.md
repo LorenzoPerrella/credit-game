@@ -161,8 +161,18 @@ numpy's dispatch: 178 traversals of a 512 KB array should be 5 ms a chunk and th
 That is the part a fused loop removes and Python cannot, and it is what the gate in
 `docs/reports/engine.md` is declared against: **9.90 s against 29.69, or abandoned.**
 
-**The compiled kernel exists, and it does not pass that gate: 2.80x on a Hessian against a
-declared 3x.** `crates/creditsurv-kernel` is the same arithmetic as a fused loop -- one
+**The compiled kernel exists, it does not pass that gate -- 2.80x on a Hessian against a
+declared 3x -- and it is kept under the exception declared in rule 13**, on the condition that
+the logic be airtight rather than the number be three. What that means, measured: the two
+backends agree on the production table to **1.2e-15** on the objective, 1.1e-13 on the gradient
+and 1.7e-13 of the Hessian's largest entry; they are compared element by element at four points
+including two outside the data; the three sums over every row carry **Neumaier compensation**,
+without which they sat 4e-11 apart against this project's own 1.97e-16 standard; panics unwind
+rather than abort (10.19 s against 10.27, inside the noise) so a bug raises instead of killing an
+hour-old fit; the bounds checks are on; the crate has unit tests and `cargo test` runs in CI.
+**One difference is declared rather than fixed**: outside the data the log-logistic's Hessian
+overflows and the two reach `-inf` against `nan` in the same entries, where the objective agrees
+to the last bit and the polish refuses the step either way. `crates/creditsurv-kernel` is the same arithmetic as a fused loop -- one
 `#[pyfunction]`, fixed-dtype numpy arrays across the boundary, the jet in registers -- built by
 `uv sync --extra kernel`, optional at import, with `models/kernel/terms.py` normative and the
 equivalence tests parametrised over whichever backends are installed. On the whole half it reads

@@ -35,6 +35,17 @@ from creditsurv.models.kernel.likelihood import (
 #: A row's five columns, in the order they are written, read and handed over.
 _ROW_COLUMNS: Final = ("i", "j", "age", "event", "weight")
 
+#: And what each one is. Fifteen bytes between them, and a compiled backend reads the bytes:
+#: a column that arrived as `int64` would be refused at the boundary rather than misread, but
+#: it is refused *here*, by name, before a fit has spent an hour getting there.
+_ROW_DTYPES: Final = {
+    "i": np.uint32,
+    "j": np.uint32,
+    "age": np.uint16,
+    "event": np.bool_,
+    "weight": np.uint32,
+}
+
 
 @dataclass(frozen=True)
 class Rows:
@@ -623,19 +634,32 @@ def joined(blocks: Sequence[Rows]) -> Rows:
 
     The order is the blocks' own, which is the order the sums are taken in.
     """
-    if len(blocks) == 1:
-        return blocks[0]
     return Rows(**{column: _one_buffer(blocks, column) for column in _ROW_COLUMNS})
 
 
 def _one_buffer(blocks: Sequence[Rows], column: str) -> np.ndarray:
-    """One column of every block, as a single array, shared if it already is one."""
+    """One column of every block, as a single array, shared if it already is one.
+
+    What comes back is **C-contiguous and of the column's declared dtype**, whichever branch
+    runs: a compiled backend takes a slice of it and refuses anything else, and a refusal in
+    the middle of an hour-old fit is a worse way to learn this than a cast here.
+    """
     parts = [getattr(block, column) for block in blocks]
-    whole = parts[0].base
     rows = sum(len(part) for part in parts)
+    whole = parts[0].base if parts else None
     if isinstance(whole, np.ndarray) and len(whole) == rows and _laid_out(parts, whole):
-        return np.asarray(whole)
-    return np.concatenate(parts)
+        shared = np.asarray(whole)
+    elif len(parts) == 1:
+        shared = np.ascontiguousarray(parts[0])
+    else:
+        shared = np.concatenate(parts)
+    if shared.dtype != _ROW_DTYPES[column]:
+        message = (
+            f"The rows' {column!r} column is {shared.dtype}, where this kernel reads "
+            f"{np.dtype(_ROW_DTYPES[column])}. `Factorisation.add` is what casts it."
+        )
+        raise TypeError(message)
+    return shared
 
 
 def _laid_out(parts: Sequence[np.ndarray], whole: np.ndarray) -> bool:

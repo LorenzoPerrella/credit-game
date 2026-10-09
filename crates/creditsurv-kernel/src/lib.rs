@@ -48,6 +48,42 @@ const SURVIVAL_CEILING: f64 = 1.0 - 1e-12;
 const WEIBULL: u8 = 0;
 const LOGLOGISTIC: u8 = 1;
 
+/// A sum that keeps what the addition lost, and adds it back at the end.
+///
+/// **Three of the accumulators are scalars over every row**, and 72.7 million sequential
+/// additions into one `f64` is the worst summation order there is: the error grows with the
+/// count, where NumPy's `bincount` and `dot` sum pairwise and it grows with its square root.
+/// Measured, that put the two backends 4e-11 apart on the objective, where this project's own
+/// standard for two orderings of the same sum is the **1.97e-16** that 443 blocks and 800
+/// reproduce. Neumaier's compensation closes it for a handful of flops a row, and it is
+/// deterministic: a fixed order, no reassociation, the same bits on every run.
+///
+/// The gradient and the curvature need none of it. They accumulate into 3,001 and 286,387
+/// bins, so each one sums about 24,000 terms rather than 72.7 million.
+#[derive(Clone, Copy, Default)]
+struct Compensated {
+    total: f64,
+    lost: f64,
+}
+
+impl Compensated {
+    #[inline(always)]
+    fn add(&mut self, value: f64) {
+        let sum = self.total + value;
+        self.lost += if self.total.abs() >= value.abs() {
+            (self.total - sum) + value
+        } else {
+            (value - sum) + self.total
+        };
+        self.total = sum;
+    }
+
+    #[inline(always)]
+    fn value(self) -> f64 {
+        self.total + self.lost
+    }
+}
+
 /// A product that takes the Python chain's shortcut: a zero factor gives zero, never a `nan`.
 #[inline(always)]
 fn times(left: f64, right: f64) -> f64 {
@@ -366,16 +402,16 @@ fn contract_square(table: &[f64], columns: usize, weights: &[f64]) -> Vec<f64> {
 
 /// The accumulators one pass over the rows fills.
 struct Totals {
-    value: f64,
+    value: Compensated,
     by_loan: Vec<f64>,
     by_calendar: Vec<f64>,
-    shape_first: f64,
+    shape_first: Compensated,
     curved_loan: Vec<f64>,
     curved_calendar: Vec<f64>,
     crossed: Vec<f64>,
     mixed_loan: Vec<f64>,
     mixed_calendar: Vec<f64>,
-    shape_second: f64,
+    shape_second: Compensated,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -401,10 +437,10 @@ fn accumulate(
     // The shape's jet is the same for every row: one exponential and one chain, not 72.7 million.
     let rate = rate_of(family, shape);
     let mut totals = Totals {
-        value: 0.0,
+        value: Compensated::default(),
         by_loan: vec![0.0; loans],
         by_calendar: vec![0.0; calendars],
-        shape_first: 0.0,
+        shape_first: Compensated::default(),
         curved_loan: vec![0.0; if curvature { loans } else { 0 }],
         curved_calendar: vec![0.0; if curvature { calendars } else { 0 }],
         crossed: vec![
@@ -417,7 +453,7 @@ fn accumulate(
         ],
         mixed_loan: vec![0.0; if curvature { loans } else { 0 }],
         mixed_calendar: vec![0.0; if curvature { calendars } else { 0 }],
-        shape_second: 0.0,
+        shape_second: Compensated::default(),
     };
 
     // The five row arrays are walked by iterator, which costs nothing and reads better. The
@@ -444,11 +480,11 @@ fn accumulate(
             eta,
             rate,
         );
-        totals.value += count * jet.v;
+        totals.value.add(count * jet.v);
         let first = count * jet.de;
         totals.by_loan[loan] += first;
         totals.by_calendar[key] += first;
-        totals.shape_first += count * jet.dr;
+        totals.shape_first.add(count * jet.dr);
         if !curvature {
             continue;
         }
@@ -463,7 +499,7 @@ fn accumulate(
         }
         totals.mixed_loan[loan] += mixing;
         totals.mixed_calendar[key] += mixing;
-        totals.shape_second += count * jet.drr;
+        totals.shape_second.add(count * jet.drr);
     }
     totals
 }
@@ -605,8 +641,8 @@ fn evaluate<'py>(
     for (column, value) in gradient_calendar.iter().enumerate() {
         gradient[loan_columns + column] = -value / total_weight;
     }
-    gradient[parameters - 1] = -totals.shape_first / total_weight;
-    let value = -totals.value / total_weight;
+    gradient[parameters - 1] = -totals.shape_first.value() / total_weight;
+    let value = -totals.value.value() / total_weight;
     let gradient_out = PyArray1::from_vec(py, gradient);
     if !curvature {
         return Ok((value, gradient_out, None));
@@ -649,7 +685,7 @@ fn evaluate<'py>(
         hessian[(loan_columns + column) * parameters + parameters - 1] = *value;
         hessian[(parameters - 1) * parameters + loan_columns + column] = *value;
     }
-    hessian[(parameters - 1) * parameters + parameters - 1] = totals.shape_second;
+    hessian[(parameters - 1) * parameters + parameters - 1] = totals.shape_second.value();
     for entry in hessian.iter_mut() {
         *entry = -*entry / total_weight;
     }
@@ -666,4 +702,98 @@ fn creditsurv_kernel(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("WEIBULL", WEIBULL)?;
     module.add("LOGLOGISTIC", LOGLOGISTIC)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What the compensation is for, on a sum that defeats the plain one.
+    ///
+    /// Ten million ones added to 1e16: every addition falls below the accumulator's last bit
+    /// and the plain sum keeps none of them. The real answer is 1.001e16.
+    #[test]
+    fn a_compensated_sum_keeps_what_the_addition_loses() {
+        let mut plain = 1e16_f64;
+        let mut kept = Compensated::default();
+        kept.add(1e16);
+        for _ in 0..10_000_000 {
+            plain += 1.0;
+            kept.add(1.0);
+        }
+        assert_eq!(plain, 1e16, "the plain sum keeps none of them");
+        assert_eq!(kept.value(), 1.0e16 + 1.0e7);
+    }
+
+    /// The same sequence twice is the same bits: rule 13's determinism, at the one place it
+    /// could have been lost.
+    #[test]
+    fn a_compensated_sum_is_the_same_bits_every_time() {
+        let run = || {
+            let mut kept = Compensated::default();
+            for step in 0..100_000 {
+                kept.add(f64::from(step) * 1e-7 - 3.0);
+            }
+            kept.value()
+        };
+        assert_eq!(run().to_bits(), run().to_bits());
+    }
+
+    /// A zero factor gives zero and never a `nan`, which is the Python chain's own shortcut.
+    #[test]
+    fn a_zero_factor_gives_zero_even_against_an_infinity() {
+        assert_eq!(times(0.0, f64::INFINITY), 0.0);
+        assert_eq!(times(f64::INFINITY, 0.0), 0.0);
+        assert_eq!(times(2.0, 3.0), 6.0);
+        assert!(times(f64::NAN, 2.0).is_nan());
+    }
+
+    /// `safe_exp` caps its argument and reports the derivative of the capped value, which is
+    /// what lifelines' own custom gradient does -- not the zero the mathematics would give.
+    #[test]
+    fn the_capped_exponential_reports_the_capped_derivative() {
+        let far = safe_exp(Jet::seed_scale(1e6));
+        assert_eq!(far.v, MAX_EXPONENT.exp());
+        assert_eq!(far.de, MAX_EXPONENT.exp());
+        assert_eq!(far.dee, MAX_EXPONENT.exp());
+    }
+
+    /// `exp(-x)` through the chain is `safe_exp` of the negated jet, to the last bit.
+    #[test]
+    fn the_negated_exponential_is_the_exponential_of_the_negation() {
+        let jet = Jet {
+            v: 2.5,
+            de: -1.5,
+            dr: 0.75,
+            dee: 0.5,
+            der: -0.25,
+            drr: 0.125,
+        };
+        let folded = safe_exp_of_minus(jet);
+        let spelled = safe_exp(Jet {
+            v: -jet.v,
+            de: -jet.de,
+            dr: -jet.dr,
+            dee: -jet.dee,
+            der: -jet.der,
+            drr: -jet.drr,
+        });
+        assert_eq!(folded.v.to_bits(), spelled.v.to_bits());
+        assert_eq!(folded.de.to_bits(), spelled.de.to_bits());
+        assert_eq!(folded.dr.to_bits(), spelled.dr.to_bits());
+        assert_eq!(folded.dee.to_bits(), spelled.dee.to_bits());
+        assert_eq!(folded.der.to_bits(), spelled.der.to_bits());
+        assert_eq!(folded.drr.to_bits(), spelled.drr.to_bits());
+    }
+
+    /// `logaddexp(x, 0)` as numpy computes it, on both sides of zero and far out.
+    #[test]
+    fn logaddexp_matches_the_formula_numpy_uses() {
+        for x in [-800.0, -40.0, -1.0, 0.0, 1.0, 40.0, 800.0] {
+            let jet = logaddexp_zero(Jet::seed_scale(x));
+            let expected = x.max(0.0) + (-(x.abs())).exp().ln_1p();
+            assert_eq!(jet.v, expected, "at {x}");
+            assert!(jet.v.is_finite(), "at {x}");
+        }
+    }
 }
