@@ -330,12 +330,12 @@ that mode exists to reproduce lifelines exactly and is what the equivalence test
 
 Roughly:
 
-    3 readings                   35 min   (0 where they are already on disk)
+    3 readings                   11 min   (35 before the sort went, 0 where they are on disk)
     the candidates' moments        0 min   (4.6 before they came off the keys)
     1 cold fit                    2 min   (was 44, then 10, then 4 on one thread)
     ~29 warm candidates          32 min   (~1.1 min each: 5 Hessians at 4.2 s, 6 values at 2.5)
                                 ------
-                                1.2 hours, or 0.6 on a table already read
+                                0.8 hours, or 0.6 on a table already read
 
 against the **10.5 hours** the four recorded runs averaged, and 42.0 hours for all four. Rule 2
 needs four runs and a reading does not depend on the family, so the two families share one and
@@ -347,6 +347,49 @@ left is the **curvature**. A warm candidate's minutes are five Hessians and six 
 it is Hessian-bound, and a Hessian over the whole half was 29.69 s of which the jet was 67% --
 spent on allocation and dispatch rather than on arithmetic, which is what a fused loop takes and
 Python cannot. It is 9.74 s now.
+
+## Inside a reading, which nobody had profiled
+
+The reading was the largest item left in a campaign -- six of them, 70 minutes, once per table
+-- and it had never been measured from the inside. It was called "parquet, the macro family and
+the key coding" and "close to irreducible" on the strength of what it is made of. Profiled on
+twelve batches of the production table:
+
+| | before | share | after | share |
+|---|---|---|---|---|
+| parquet to pandas | 0.04 s | **0.2%** | 0.04 s | 0.5% |
+| the categorical cast | 4.41 s | **20.9%** | **0.03 s** | 0.5% |
+| the window | 0.10 s | 0.5% | 0.13 s | 1.8% |
+| `cells_to_episodes`, the macro family | 1.56 s | 7.4% | 1.63 s | 22.7% |
+| `model_frame` | 0.73 s | 3.4% | 0.72 s | 10.0% |
+| **`encode_blocks`** | 14.12 s | **67.0%** | **4.50 s** | 62.5% |
+| the whole reading, extrapolated | 13.0 min | | **4.4 min** | |
+
+**Parquet is 0.2% of it.** The two things that were 88% between them were a sort nobody needed
+and a conversion that undid what parquet had already done.
+
+**The sort.** `_Growing.of` found a block's distinct combinations with
+`np.unique(values, axis=0)`, which views each row as a composite scalar and lexicographically
+sorts **all** of them: 9.5 of the encoding's 12.1 seconds was one `argsort`. A block carries
+about 230,000 rows and **1,500 loan combinations and 4,600 to 24,000 calendar keys** -- 0.7% and
+3 to 10% -- so that sort did ten to fifty times the work it needed to. The distinct rows are
+found by hashing now and only those are sorted, which keeps the order exactly: the order is
+which index each combination gets, and the indices are in 72.7 million encoded rows.
+
+**The conversion.** Parquet stores text dictionary-encoded and hands it over as a pandas
+`category`, and the reader did `pd.Categorical(column.astype(str), categories=declared)` --
+materialising 250,000 Python strings per column per batch to rebuild what it already had. The
+levels do have to be the whole table's and not the batch's, or a level missing from one batch
+would shift every code after it; re-pointing the categories it arrives with does that in 0.03 s
+against 4.30.
+
+**Verified by re-reading the production table against a reading the old code wrote.** 214.8 s
+against 693.9 -- **3.2x**, 11.6 minutes to 3.58 -- and identical in every respect: the same
+72,671,500 cells and 1,440,771 defaults, the same 443 block lengths, **every row array equal**,
+both key frames equal at 3,001 and 286,387 rows, both count arrays, and the bounds. Not a
+tolerance: the same bytes. The footprint is 2.36 GB against 2.37.
+
+So a campaign's readings go from 70 minutes to 21, and a selection's three from 35 to 11.
 
 ## The last pass over the parquet, and what is left after it
 
