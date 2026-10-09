@@ -78,7 +78,17 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
   backtest windows. A whole selection was measured at **2.75 GB** across its parent and three
   workers, where one fit holding the half had been 15 GB. `split_cells` remains for a caller
   that genuinely needs both halves as frames; on this table that is nobody.
-- **The views are sums.** Every calibration table is loan-months at risk, the defaults among
+- **Steps 5 and 6 read nothing of their own any more.** They need a weighted covariance of the 19
+continuous candidates, and that was the last pass over the parquet the encoding had not replaced.
+It comes off the key frames by the same argument: a sum over rows is a sum over combinations times
+the weight they carry, with one gather and one scatter-add per calendar candidate for the terms
+that cross the two sides. Measured on the production half: **273.39 s to 19.68**, a 14x, with the
+covariance agreeing to **1.06e-11** and the deviations to 8.89e-14. **And the figure that
+justified it was wrong by a factor of four**: "twenty minutes of parquet" was carried in a comment
+and never measured -- it is 4.6 minutes, so the saving is 17 minutes a campaign and not 80.
+Nothing new is stored for it.
+
+**The views are sums.** Every calibration table is loan-months at risk, the defaults among
   them and the defaults expected, grouped by an age, a year, a segment or a decile -- and sums
   add over batches, so one pass fills every table for every segment and every family.
   `survival_by_age` and `actual_expected` are each split into the additive part and the

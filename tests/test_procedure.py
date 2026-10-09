@@ -614,6 +614,108 @@ def test_the_moments_are_the_same_read_whole_or_read_in_batches(
     )
 
 
+def test_the_moments_off_the_keys_are_the_moments_off_the_cells(
+    selection_cells: Path, macro_module: pd.DataFrame
+) -> None:
+    """The last pass over the parquet that the encoding had not replaced.
+
+    Steps 5 and 6 need a weighted covariance of the continuous candidates, and the pass that
+    produced it read 19 columns over 72.7 million rows -- twenty minutes on the production
+    window, once per selection and cached by nothing. Every candidate is a function of the loan
+    combination or of the calendar key, so the sums come off the key frames and the weighted
+    counts instead, with one gather and one scatter-add per calendar candidate for the terms
+    that cross the two sides.
+
+    **The two cannot be identical and must not be far.** They sum the same products in
+    different orders -- the one over expanded blocks, the other over 3,001 and 286,387 key
+    entries plus a scatter-add -- so this holds them to 1e-10 relative, and the covariance is
+    what steps 5 and 6 threshold rather than publish to the last digit.
+    """
+    from creditsurv.data.panel import (
+        AGE_START,
+        EXACT_OBSERVATION,
+        LOWER_BOUND,
+        UPPER_BOUND,
+        WEIGHT,
+        CellBlocks,
+    )
+    from creditsurv.models.engine import encode_blocks
+    from creditsurv.models.selection import moments_from_keys, weighted_moments
+
+    calendar = ["ltv_change", "unemployment_change"]
+    source = CellBlocks(
+        str(selection_cells), macro_module, tuple(STREAMED_CANDIDATES), rows=4_000
+    ).prepared()
+    encoding = encode_blocks(
+        source(),
+        loan=[name for name in STREAMED_CANDIDATES if name not in calendar],
+        calendar=calendar,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col=WEIGHT,
+    )
+
+    off_the_cells = weighted_moments(source(), STREAMED_CANDIDATES, weight=WEIGHT)
+    off_the_keys = moments_from_keys(encoding, STREAMED_CANDIDATES)
+
+    assert off_the_keys.rows == off_the_cells.rows
+    assert off_the_keys.loan_months == pytest.approx(off_the_cells.loan_months, rel=1e-12)
+    np.testing.assert_allclose(
+        off_the_keys.covariance.to_numpy(),
+        off_the_cells.covariance.to_numpy(),
+        rtol=1e-10,
+        atol=1e-300,
+    )
+    # And the derived readings the two steps actually use, which is what a threshold is read off.
+    np.testing.assert_allclose(
+        off_the_keys.correlation.to_numpy(), off_the_cells.correlation.to_numpy(), rtol=1e-10
+    )
+    np.testing.assert_allclose(
+        off_the_keys.deviations.to_numpy(), off_the_cells.deviations.to_numpy(), rtol=1e-10
+    )
+    assert list(off_the_keys.covariance.index) == STREAMED_CANDIDATES, "the caller's own order"
+
+
+def test_a_candidate_in_neither_key_has_no_combination_to_be_summed_over(
+    selection_cells: Path, macro_module: pd.DataFrame
+) -> None:
+    """Refused by name, because the alternative is a column of zeros that reads as no variance.
+
+    A covariate the reading does not carry cannot be summed over combinations at all, and a
+    correlation of zero against everything is exactly what step 5 would report of it.
+    """
+    from creditsurv.data.panel import (
+        AGE_START,
+        EXACT_OBSERVATION,
+        LOWER_BOUND,
+        UPPER_BOUND,
+        WEIGHT,
+        CellBlocks,
+    )
+    from creditsurv.models.engine import encode_blocks
+    from creditsurv.models.selection import moments_from_keys
+
+    calendar = ["ltv_change", "unemployment_change"]
+    source = CellBlocks(
+        str(selection_cells), macro_module, tuple(STREAMED_CANDIDATES), rows=4_000
+    ).prepared()
+    encoding = encode_blocks(
+        source(),
+        loan=[name for name in STREAMED_CANDIDATES if name not in calendar],
+        calendar=calendar,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col=WEIGHT,
+    )
+
+    with pytest.raises(ValueError, match="missing \\['house_price_growth'\\]"):
+        moments_from_keys(encoding, [*STREAMED_CANDIDATES, "house_price_growth"])
+
+
 def test_the_variance_inflation_step_can_be_given_the_covariance_it_needs() -> None:
     """The selection was taking the same pass over the training half twice, once for its
     correlation table and once inside this step.

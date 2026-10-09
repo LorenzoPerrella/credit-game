@@ -192,6 +192,15 @@ class Fits:
         )
         return result
 
+    def reading(self, parity: int | None = None) -> Encoding:
+        """This run's reading of one sample, made on the first call and kept after it.
+
+        Public because the procedure takes the candidates' moments off it: steps 5 and 6 used to
+        read the whole cell file for a covariance, which was the last pass the encoding had not
+        replaced.
+        """
+        return self._encoding(parity)
+
     def _encoding(self, parity: int | None) -> Encoding:
         """The rows of one sample, read once and kept for every fit that wants them.
 

@@ -51,6 +51,8 @@ if TYPE_CHECKING:
 
     from lifelines.fitters import ParametricUnivariateFitter
 
+    from creditsurv.models.engine import Encoding
+
 #: Univariate families used for the marginal shape check.
 #:
 #: The generalised gamma is excluded deliberately: see the module docstring.
@@ -543,6 +545,93 @@ def _correlation(covariance: pd.DataFrame) -> pd.DataFrame:
         covariance.to_numpy() / np.outer(scale, scale),
         index=covariance.index,
         columns=covariance.columns,
+    )
+
+
+def moments_from_keys(encoding: Encoding, columns: Sequence[str]) -> Moments:
+    """The same sums, from the key frames and the encoded rows, without reading the cells again.
+
+    **Steps 5 and 6 were the last pass over the parquet that the encoding had not replaced.**
+    They need a weighted covariance of the continuous candidates, and `weighted_moments` takes
+    it off the expanded episodes -- 19 columns over 72.7 million rows, **4.6 minutes** on the
+    production window, once per selection and cached by nothing.
+
+    It is the same argument the encoding rests on. Every candidate is a function of the loan
+    combination or of the calendar key, so a sum of it over every row is a sum over
+    combinations of its value times the **weight** those combinations carry:
+
+    * the weighted count per combination is one scatter-add each over the mapped rows;
+    * a pair on the same side is then a dot product over 3,001 or 286,387 entries;
+    * and a pair across the sides is `A.T @ (W B)`, where `(W B)` is one gather and one
+      scatter-add per calendar candidate -- the only part that touches 72.7 million numbers.
+
+    Nothing is stored that was not stored before: the rows are already on disk and the key
+    frames already carry the values. What changes is the arithmetic: **273.39 s to 19.68**,
+    measured on the production half, with the covariance agreeing to **1.06e-11** relative and
+    the deviations the design is scaled by to 8.89e-14 -- the digits a sum over 72.7 million
+    terms taken in two orders can agree to. `tests/test_procedure.py` holds the two paths
+    together and `docs/reports/engine.md` carries the full-scale numbers.
+    """
+    from creditsurv.models.kernel.factorisation import joined
+
+    names = list(columns)
+    loan_keys, calendar_keys = encoding.factorisation.keys()
+    on_the_loan = [name for name in names if name in set(encoding.factorisation.loan)]
+    on_the_calendar = [name for name in names if name not in set(on_the_loan)]
+    missing = [name for name in on_the_calendar if name not in calendar_keys.columns]
+    if missing:
+        message = (
+            f"The reading covers {sorted(set(loan_keys.columns) | set(calendar_keys.columns))}, "
+            f"missing {missing}: a covariate in neither key has no combination to be summed over."
+        )
+        raise ValueError(message)
+
+    rows = joined(encoding.rows)
+    weight = rows.weight.astype(np.float64)
+    carried = {
+        "loan": np.bincount(rows.i, weights=weight, minlength=len(loan_keys)),
+        "calendar": np.bincount(rows.j, weights=weight, minlength=len(calendar_keys)),
+    }
+    values = {
+        "loan": loan_keys.loc[:, on_the_loan].to_numpy(dtype=float),
+        "calendar": calendar_keys.loc[:, on_the_calendar].to_numpy(dtype=float),
+    }
+    index = {"loan": on_the_loan, "calendar": on_the_calendar}
+
+    total = float(weight.sum())
+    if total <= 0:
+        message = "No exposure to take moments over."
+        raise ValueError(message)
+
+    # The cross-block, and the one term that reads every row: the calendar's columns gathered
+    # by `j`, weighted, and scattered into the loan combinations.
+    crossed = np.zeros((len(loan_keys), len(on_the_calendar)))
+    for position in range(len(on_the_calendar)):
+        gathered = weight * values["calendar"][rows.j, position]
+        crossed[:, position] = np.bincount(rows.i, weights=gathered, minlength=len(loan_keys))
+
+    first = {side: carried[side] @ values[side] for side in values}
+    second = {
+        ("loan", "loan"): values["loan"].T @ (values["loan"] * carried["loan"][:, None]),
+        ("calendar", "calendar"): values["calendar"].T
+        @ (values["calendar"] * carried["calendar"][:, None]),
+        ("loan", "calendar"): values["loan"].T @ crossed,
+    }
+    second[("calendar", "loan")] = second[("loan", "calendar")].T
+
+    sums = pd.Series(0.0, index=names)
+    products = pd.DataFrame(0.0, index=names, columns=names)
+    for side, frame in index.items():
+        sums.loc[frame] = first[side]
+    for left, right in second:
+        products.loc[index[left], index[right]] = second[(left, right)]
+
+    mean = sums / total
+    covariance = products / total - np.outer(mean, mean)
+    return Moments(
+        covariance=pd.DataFrame(covariance.to_numpy(), index=names, columns=names),
+        rows=encoding.episodes,
+        loan_months=total,
     )
 
 

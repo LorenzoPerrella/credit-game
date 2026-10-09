@@ -65,6 +65,7 @@ from creditsurv.models.selection import (
     PVALUE_THRESHOLD,
     VIF_THRESHOLD,
     Moments,
+    moments_from_keys,
     stepwise_vif,
     weighted_moments,
 )
@@ -201,12 +202,28 @@ def run_selection(
     # 5. Pairs that say the same thing -- reported, not resolved.
     log.info("step 5: weighted correlation of %d candidates", len(continuous))
     if moments is None:
-        if train is None:
-            message = "run_selection needs either the rows or their moments."
+        if train is not None:
+            moments = weighted_moments(train, continuous, weight=WEIGHT)
+        elif fits.blocks is not None and fits.calendar is not None:
+            # **Off this run's own reading**, which it is about to make for the fits anyway.
+            # These sums used to be the last pass over the parquet the encoding had not
+            # replaced: 19 columns over 72.7 million rows, 4.6 minutes, once per selection and
+            # cached by nothing. Every candidate is a function of one side of the key, so they
+            # come off the key frames and the weighted counts instead, in 19.7 seconds.
+            log.info("the candidates' moments, from the reading rather than from the cells")
+            moments = moments_from_keys(fits.reading(), continuous)
+            log.info(
+                "selecting on %s cells, %s loan-months",
+                f"{moments.rows:,}",
+                f"{int(moments.loan_months):,}",
+            )
+        else:
+            message = "run_selection needs either the rows, their moments, or a cell source."
             raise ValueError(message)
-        moments = weighted_moments(train, continuous, weight=WEIGHT)
     # Checked before the first fit rather than found by an index error after it: on the
-    # production table the pass that produced these moments is twenty minutes of parquet.
+    # production table the pass this replaced is 4.6 minutes of parquet, against 19.7
+    # seconds off the keys -- and the 'twenty minutes' this comment used to claim was a
+    # figure carried forward rather than one anybody measured.
     absent = [name for name in continuous if name not in moments.covariance.index]
     if absent:
         message = f"The moments given cover {list(moments.covariance.index)}, missing {absent}."

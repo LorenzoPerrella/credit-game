@@ -1026,7 +1026,7 @@ def select(
 
     from creditsurv.config import MACRO_CANDIDATES
     from creditsurv.data.fred import load_macro_panel
-    from creditsurv.data.panel import WEIGHT, month_ordinal
+    from creditsurv.data.panel import month_ordinal
     from creditsurv.data.store import cells_identity
     from creditsurv.models.fits import Fits, cell_source
     from creditsurv.models.procedure import (
@@ -1036,7 +1036,7 @@ def select(
         LOAN_ORDINAL,
         run_selection,
     )
-    from creditsurv.models.selection import EXPECTED_SIGNS, PREPAYMENT_SIGNS, weighted_moments
+    from creditsurv.models.selection import EXPECTED_SIGNS, PREPAYMENT_SIGNS
     from creditsurv.reporting import selection
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -1061,17 +1061,15 @@ def select(
         moratorium, load_macro_panel(), candidates, block_rows=block_rows, until=cut, cause=cause
     )
 
-    # One pass for steps 5 and 6, which need a weighted covariance of the **continuous**
-    # candidates and nothing else -- a covariance of a treatment-coded level is not a thing
-    # this procedure has a use for. It also counts the rows and the exposure, so the record
-    # has them without a second pass; the selection used to take that pass twice.
-    continuous = [*LOAN_CONTINUOUS, *LOAN_ORDINAL, *MACRO_CANDIDATES]
-    typer.echo(f"Reading {source.source} for the correlation of {len(continuous)} candidates...")
-    moments = weighted_moments(source(), continuous, weight=WEIGHT)
+    # **Steps 5 and 6 no longer read anything of their own.** They need a weighted covariance
+    # of the continuous candidates, and that pass was 19 columns over 72.7 million rows -- the
+    # last one the encoding had not replaced: 4.6 minutes per selection against 19.7 seconds
+    # off the keys, and cached by nothing. `run_selection` takes the sums off the reading it
+    # makes for the fits anyway, so
+    # the counts come with them and this command has nothing to count before it starts.
     identity = cells_identity(moratorium)
     typer.echo(
-        f"Selecting {cause} on {moments.rows:,} cells, {int(moments.loan_months):,} "
-        f"loan-months, with the {dist} family"
+        f"Selecting {cause} from {source.source} with the {dist} family"
         + (f" in {workers} process(es), re-reading for every fit." if traced else ", read once.")
     )
 
@@ -1093,7 +1091,6 @@ def select(
         None,
         fits,
         stability=True,
-        moments=moments,
         signs=EXPECTED_SIGNS if cause == DEFAULT_CAUSE else PREPAYMENT_SIGNS,
     )
     written = selection.generate(record, reports_dir=reports_dir())
