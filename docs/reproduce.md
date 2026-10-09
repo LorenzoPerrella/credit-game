@@ -95,19 +95,25 @@ are unchanged is never paid for twice.
 - **Nothing holds the panel any more.** The training half is 72.7 million cells, and every
   command that used to expand it now reads the cell file a batch at a time: the fits, the
   selection, the views and the backtest windows.
-- **The reading is the expensive half, so a selection pays three of them.** A fit is 53
-  seconds of arithmetic behind 10.9 minutes of reading, and the run used to read once per
-  candidate -- about thirty times. It now reads once per *sample*: the training half and the
-  two origination-year halves of step 9. Each reading keeps **fifteen bytes a row**, 1.09 GB
-  for the whole half, and a candidate's design is two tables built from the keys -- 3,001 loan
-  combinations and 152,565 calendar. A run is about **3.5 hours** where the four recorded runs
-  averaged 10.5, in **one process** at a 2.9 GB footprint.
-- **A cold fit is 10.2 minutes, not 43.8.** Damped Newton goes first now; a Hessian costs
-  about twice a value-and-gradient where it used to cost 49 times a value, so 16 evaluations
-  replace 142. `--traced` on `select`, `fit` and `report` goes back to tracing lifelines'
-  likelihood with autograd in `--workers` processes, which is the path the equivalence tests
-  hold the other to and the only one that can fit a shape with covariates.
-  `docs/reports/engine.md` carries every number.
+- **The reading is paid once per table, not once per run.** It used to be once per candidate,
+  about thirty times a selection; then once per *sample*, three times; and now it is **written
+  to disk and mapped back in 0.4 seconds against 693.9**. Each reading keeps **fifteen bytes a
+  row**, 1.09 GB for the whole half and 1.0 GB on disk, and a candidate's design is two tables
+  built from the keys -- 3,001 loan combinations and 152,565 calendar for the published model,
+  286,387 for a reading that covers every candidate. A run that stops picks up at the fit it
+  was on rather than at the reading.
+- **A cold fit is 10.2 minutes, not 43.8**, and about 4 with the compiled kernel. Damped Newton
+  goes first now; a Hessian costs about twice a value-and-gradient where it used to cost 49
+  times a value, so 16 evaluations replace 142. A selection run is about **1.5 to 2 hours**
+  where the four recorded runs averaged 10.5. `--traced` on `select`, `fit` and `report` goes
+  back to tracing lifelines' likelihood with autograd in `--workers` processes, which is the
+  path the equivalence tests hold the other to and the only one that can fit a shape with
+  covariates. `docs/reports/engine.md` carries every number.
+- **The compiled kernel is optional, and this machine's runs use it.** `uv sync --extra kernel`
+  builds `crates/creditsurv-kernel`; without it everything works through the NumPy kernel, which
+  is normative. It is **2.80x** on a Hessian and 1.57x on a value-and-gradient, kept under an
+  exception declared beside rule 13, and it agrees with the NumPy to 1.2e-15 on the objective
+  on the production table. Nobody needs a Rust toolchain to run this project.
 - **A window is read, not filtered.** `load_cells_window` selects on the observation month --
   origination plus age, so not a column parquet can be asked about by name -- inside DuckDB.
   Two years of observation are about 3% of the table.
