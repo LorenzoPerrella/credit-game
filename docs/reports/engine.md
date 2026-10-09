@@ -347,8 +347,28 @@ evaluations, so it is Hessian-bound, and a Hessian over the whole half is 29.69 
 jet is 67% -- spent on allocation and dispatch rather than on arithmetic, which is what a fused
 loop takes and Python cannot.
 
-So the order is: the compiled kernel on the curvature, then the exact row merge (1.36x,
-measured) and step 7's screen.
+So the order is: the compiled kernel on the curvature, then the exact row merge and step 7's
+screen.
+
+### The exact row merge is 1.11x, not 1.36x, until the table is sorted
+
+The 1.36x is distinct `(i, j, age, event)` over the **whole table** -- 53,273,105 of 72,671,500
+-- and the encoding reads a batch at a time, so what a merge can reach is what lands in the same
+block. Measured on the production reading, 443 blocks: **65,463,707 distinct within their own
+block, a merge of 1.1101x**. Four fifths of the saving is split across batches.
+
+The reason is a sort order nobody chose. Rows that merge differ only in `delinquency_state` and
+in the three-state outcome -- the model never reads the payment state, and for one cause the
+outcome collapses to a boolean -- and both are key columns, so sorting by the key with those two
+last would put every duplicate next to its own. The aggregation does `GROUP BY ALL` a quarter at
+a time and concatenates, with no `ORDER BY` anywhere, so the order inside a quarter is whatever
+DuckDB's hash produced.
+
+**Which settles whose work it is.** The merge was deferred to the branch that rebuilds the cell
+table on the grounds that a rebuild kills the fit cache anyway; the better reason is that the
+rebuild is what can *sort* the table, and sorted it is worth 1.36x where unsorted it is worth
+1.11x. Taken without one, 11% is the whole prize for invalidating every cached fit and changing
+every published row count.
 
 ## The gate for compiling anything
 

@@ -416,6 +416,18 @@ estimated LTV and the mortgage insurance percentage. Left in place they produce 
 portfolio whose average credit score is several thousand. The median ELTV of the 2006
 vintage is literally 999.
 
+**The exact row merge is 1.11x a block at a time, not the 1.36x of the whole table.** Distinct
+`(i, j, age, event)` over the table is 53,273,105 of 72,671,500; within the 443 blocks the
+encoding actually reads it is **65,463,707**, so four fifths of the saving is split across
+batches. The rows that merge differ only in `delinquency_state` and the three-state outcome --
+the model never reads the payment state, and for one cause the outcome collapses to a boolean --
+and both are key columns, so a sort by the key with those two last would put every duplicate
+beside its own. The aggregation does `GROUP BY ALL` a quarter at a time and concatenates with no
+`ORDER BY`, so the order is DuckDB's hash. **The merge therefore belongs to a rebuild**, not
+because a rebuild kills the fit cache but because a rebuild is what can sort the table: sorted it
+is worth 1.36x, unsorted 1.11x, and 11% is a thin prize for invalidating every cached fit and
+changing every published row count.
+
 **Macro covariates are free; loan covariates cost cells -- so measure the cost.** A macro
 series is a function of the origination month and the loan age, both in the key, so it
 costs **zero cells**. A loan covariate multiplies the table by what it actually costs:
