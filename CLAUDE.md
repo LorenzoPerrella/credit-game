@@ -146,6 +146,21 @@ An earlier draft projected 18x and 41x from a prototype that computed the interv
 with one exponential, which matches lifelines only where no clip binds; see
 `docs/reports/engine.md`.
 
+**And the figure to quote is the whole half as it is actually fitted**: 72,671,500 rows at the
+26 parameters rule 12 produced, read from the cached encoding in 0.45 s and expanded from the
+keys in 0.48 -- a value-and-gradient in **12.95 s** and one with the Hessian in **29.69**, 178
+and 409 ns a row, in a process holding **467 MB** because the rows are a memory map.
+
+**The chain's cost is not its arithmetic, which is what bounds the Python path.** It performed
+178 array operations a chunk where the mathematics needs forty; four were waste -- the entry's
+survival computed and discarded, the log-logistic's log-scale recomputed for each of three
+times, `safe_exp(-H)` negating six arrays, and `a - b` written `a + (-b)` -- and removing all
+four, bit for bit identical at three points including one where every clip binds, bought **12%
+on a Hessian in both families** for a quarter fewer operations. The rest is allocation and
+numpy's dispatch: 178 traversals of a 512 KB array should be 5 ms a chunk and the jet takes 19.
+That is the part a fused loop removes and Python cannot, and it is what the gate in
+`docs/reports/engine.md` is declared against: **9.90 s against 29.69, or abandoned.**
+
 ## lifelines' optimiser stops short of the optimum
 
 SLSQP stops on a change of 1e-10 in the *mean* log-likelihood, a tolerance that takes no

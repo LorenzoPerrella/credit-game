@@ -112,6 +112,12 @@ accumulator and three small matrix products. On arrays of the real cardinalities
 |---|---|---|---|---|---|
 | 242,419 | 0.061 s | 0.171 s | 253 ns | 705 ns | 0.01 GB |
 | 53,273,105 | **10.2 s** | **29.9 s** | 192 ns | 562 ns | **0.81 GB** |
+| 72,671,500, the half as it is fitted | **12.95 s** | **29.69 s** | 178 ns | 409 ns | 1.10 GB |
+
+The third row is the one to quote and the one the gate below is declared against: the whole
+training half, unmerged, at the 26 parameters rule 12 produced, read from the cached encoding
+in 0.45 s and expanded from the keys in 0.48. The process holds **467 MB** -- the rows are a
+memory map, so the gigabyte of them is never resident.
 
 Against the table at the top -- 970 ns a row for a value-and-gradient and 6,634 with a Hessian
 -- that is **5.1x** and **11.8x**. A pass over the training half goes from 57.8 s to 11.4, and
@@ -132,6 +138,44 @@ product does, and carrying them through a gradient-only evaluation cost 420 ns a
 289, 347, 241, 212, 217 and 265 ns, so small chunks pay numpy's per-call overhead, large ones
 leave cache, and neither is worth more than about 30%. What the chunking is for is a working set
 that does not grow with the table.
+
+### The chain's own waste, removed -- and what that says about the rest
+
+The chain performed **178 array operations a chunk** where the mathematics needs about forty,
+and four of them were waste rather than generality:
+
+* a row reads the cumulative hazard at three times and the survival at **two**, and the
+  entry's survival was computed and thrown away -- 19 operations including two exponentials;
+* the log-logistic's `log(safe_exp(eta))` does not depend on the time and was recomputed for
+  each of the three -- 52 operations;
+* `safe_exp(-H)` negated six arrays to get its argument, where the chain gives `exp(-x)` from
+  `f' = -f` and `f'' = f` directly;
+* and `a - b` was `a + (-b)`, twelve arrays for six.
+
+Removed, with the answer identical to the last bit at three points including one far out where
+every clip binds, on the whole training half at 26 parameters:
+
+| | value+gradient | with the Hessian |
+|---|---|---|
+| Weibull, before | 186 ns/row | 471 ns/row |
+| Weibull | **166** | **415** |
+| log-logistic, before | 298 | 630 |
+| log-logistic | **271** | **557** |
+
+**12% on a Hessian in both families** -- and the interesting part is that it is only 12% for a
+quarter fewer operations. Timing the halves separately, on the real tables, says where a
+Hessian's 409 ns a row goes: the **jet 67%**, the **scatter-adds 18%**, the gathers and the
+masks 4%, and the rest the dots and the final matrix products. So the chain is the cost, but
+its cost is not its arithmetic: 178 traversals of a 512 KB array should be about 5 ms a chunk
+and the jet takes 19. What is left is **allocation and dispatch** -- a fresh array per
+operation, and numpy's per-call overhead -- which is also why the chunk sweep has a floor in
+the middle: small chunks pay the dispatch and large ones pay the memory. Neither is arithmetic,
+and neither is reachable from Python.
+
+The sweep was retaken after the change and its floor moved from 131,072 rows to 65,536, worth
+nothing on the Weibull and 2% on the log-logistic. **Not taken**: the chunk is where the sums
+are cut, so moving it re-partitions every sum and a re-run of a cached fit would differ in its
+last digits. Two percent does not buy that.
 
 The row itself is **fifteen bytes** -- four for each index, two for the age, one for the exit and
 four for the weight, which is a count of loan-months and therefore an integer -- against the 208
@@ -290,13 +334,13 @@ A selection run now comes to roughly:
 against the **10.5 hours** the four recorded runs averaged, and 42.0 hours for all four. Rule 2
 needs four runs and a reading does not depend on the family, so the two families share one and
 the two causes do not: **70 minutes of reading across the four** instead of 140, and none at all
-on a re-run. The
-reading is no longer the problem and the optimiser's path is no longer the problem; what is left
-is the **curvature**. A warm candidate's 5.67 minutes are five Hessians at 39 seconds and six
-evaluations at 17, so it is Hessian-bound, and a Hessian is where a fused loop has most to
-take: `_times` -- one array multiply -- is 46% of a call, because the chain rule performs about
-180 of them per chunk where the mathematics needs forty, and each allocates and traverses an
-array. The primitives themselves are 1.3 ns a row for an exponential and 0.3 for a multiply.
+on a re-run.
+
+The reading is no longer the problem and the optimiser's path is no longer the problem; what is
+left is the **curvature**. A warm candidate's 5.67 minutes are five Hessians and six
+evaluations, so it is Hessian-bound, and a Hessian over the whole half is 29.69 s of which the
+jet is 67% -- spent on allocation and dispatch rather than on arithmetic, which is what a fused
+loop takes and Python cannot.
 
 So the order is: the compiled kernel on the curvature, then the exact row merge (1.36x,
 measured) and step 7's screen.
@@ -307,19 +351,24 @@ The compiled kernel is measured **against the NumPy above**, not against autogra
 against autograd would credit a compiled language with removing a tape that NumPy already
 removed.
 
-The profile says where the remaining time goes, and it is not arithmetic: `_times` -- one array
-multiply -- was 46% of a call, because the chain rule performs about 180 of them per chunk where
-the mathematics needs perhaps 40, and each one allocates and traverses an array. The primitives
-themselves are 1.3 ns a row for an exponential, 0.3 for a multiply, 1.7 for a gather and 3.1 for
-a scatter-add into 153,309 bins. A fused loop holds the six jet components in registers, lets
-the compiler delete the structural zeros outright, and traverses the fifteen bytes of a row once.
+And what is left is not arithmetic. Of a Hessian's 409 ns a row the jet is 67%, the
+scatter-adds 18% and the gathers 4% -- and the jet's 178 array operations a chunk should cost
+about 5 ms by the memory they move where they cost 19, the difference being a fresh array per
+operation and numpy's per-call dispatch. That is also why removing a quarter of those operations
+bought 12% and not 25%, and why the chunk sweep has a floor in the middle rather than at an end:
+small chunks pay the dispatch, large ones pay the memory. The primitives themselves are 1.3 ns a
+row for an exponential, 0.3 for a multiply, 1.7 for a gather and 3.1 for a scatter-add. A fused
+loop holds the six jet components in registers, lets the compiler delete the structural zeros
+outright, and traverses the fifteen bytes of a row once -- so what it removes is exactly the
+part that is not arithmetic.
 
-So the gate, if it is still worth passing: **value+gradient+Hessian over the whole half at
-least three times faster than 29.9 s, with resident memory no higher than the 1.31 GB measured
-here.**
+So the gate, declared before anything is written: **value+gradient+Hessian over the whole
+training half -- 72,671,500 rows at 26 parameters -- in at most 9.90 s against the 29.69
+measured here, with resident memory no higher than 1.31 GB.** Three times, on the same rows,
+the same parameters and this machine. If it does not pass, it is abandoned and the number is
+published here.
 
-**But the measurement above has moved it down the queue.** A fit is now 53 seconds of
-arithmetic behind twelve minutes of reading, so compiling the evaluation would take the 53 to
-perhaps fifteen and leave the twelve minutes exactly where they are. Removing the re-scan is
-worth an order of magnitude on a selection where the compiled kernel is worth a few per cent,
-and it should be done first. The gate stands; the priority does not.
+**It is third in the queue, not first, and the reason is still the arithmetic above.** A
+selection is now three readings and thirty fits, and a fit is a handful of Hessians: compiling
+the evaluation takes a warm candidate's 5.67 minutes to perhaps two and a selection's 3.5 hours
+to about 1.6. Worth having, after the two changes that cost nothing and cannot fail.

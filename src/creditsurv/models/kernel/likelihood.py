@@ -85,6 +85,14 @@ def _times(left: np.ndarray | float, right: np.ndarray | float) -> np.ndarray | 
     return left * right
 
 
+def _minus(left: np.ndarray | float, right: np.ndarray | float) -> np.ndarray | float:
+    if _is_zero(right):
+        return left
+    if _is_zero(left):
+        return _negate(right)
+    return left - right
+
+
 def _negate(value: np.ndarray | float) -> np.ndarray | float:
     return _ZERO if _is_zero(value) else -value
 
@@ -130,7 +138,21 @@ class _Jet:
         )
 
     def __sub__(self, other: _Jet) -> _Jet:
-        return self + (-other)
+        """A difference taken directly, rather than as a negation and a sum.
+
+        Six arrays instead of twelve, and the same twelve digits: ``a + (-b)`` and ``a - b``
+        are the same number in binary floating point, negation being exact.
+        """
+        curved = self.curved and other.curved
+        return _Jet(
+            _minus(self.v, other.v),
+            _minus(self.de, other.de),
+            _minus(self.dr, other.dr),
+            _minus(self.dee, other.dee) if curved else _ZERO,
+            _minus(self.der, other.der) if curved else _ZERO,
+            _minus(self.drr, other.drr) if curved else _ZERO,
+            curved,
+        )
 
     def __neg__(self) -> _Jet:
         return _Jet(
@@ -183,12 +205,15 @@ class _Jet:
         dr = _times(first, self.dr)
         if not self.curved:
             return _Jet(value, de, dr, _ZERO, _ZERO, _ZERO, False)
+        # ``f'' * d`` appears in both the pure-eta and the mixed term, and it is an array over
+        # the chunk: computed once, the grouping above is preserved and one traversal goes.
+        curved_e = _times(second, self.de)
         return _Jet(
             value,
             de,
             dr,
-            _plus(_times(first, self.dee), _times(_times(second, self.de), self.de)),
-            _plus(_times(first, self.der), _times(_times(second, self.de), self.dr)),
+            _plus(_times(first, self.dee), _times(curved_e, self.de)),
+            _plus(_times(first, self.der), _times(curved_e, self.dr)),
             _plus(_times(first, self.drr), _times(_times(second, self.dr), self.dr)),
             True,
         )
@@ -221,6 +246,24 @@ def _safe_exp(jet: _Jet) -> _Jet:
     """
     value = np.exp(np.minimum(jet.v, MAX_EXPONENT))
     return jet.chain(value, value, value)
+
+
+def _safe_exp_of_minus(jet: _Jet) -> _Jet:
+    """``safe_exp(-jet)``, without negating six arrays to get there.
+
+    ``f(x) = exp(-x)`` has ``f' = -f`` and ``f'' = f``, so the chain gives it from the jet
+    itself; the cap still applies to the argument the exponential is handed, which is ``-x``.
+    One array is negated instead of six, and it is the same number either way: negation is
+    exact in binary floating point and the second-order grouping is unchanged.
+    """
+    value = np.exp(np.minimum(-jet.v, MAX_EXPONENT))
+    return jet.chain(value, -value, value)
+
+
+def _exp_of_minus(jet: _Jet) -> _Jet:
+    """``exp(-jet)``, the same way and with no cap -- which is how the log-logistic writes it."""
+    value = np.exp(-jet.v)
+    return jet.chain(value, -value, value)
 
 
 def _log(jet: _Jet) -> _Jet:
@@ -267,37 +310,70 @@ def log_times(distribution: str, ages: np.ndarray) -> tuple[np.ndarray, np.ndarr
     return entry, following, float(np.log(np.clip(INFINITY_STAND_IN, floor, np.inf)))
 
 
-def _weibull_terms(log_time: np.ndarray | float, eta: _Jet, shape: _Jet) -> tuple[_Jet, _Jet]:
-    """The Weibull's cumulative hazard at ``log_time``, and the survival beside it.
+@dataclass(frozen=True)
+class _Family:
+    """One family as the three things a row's likelihood asks of it.
 
-    ``H = safe_exp(rho * (log t - log lambda))`` with ``rho = safe_exp(r)``, and
-    ``S = safe_exp(-H)`` -- the fitter overrides the base class's survival function, so there
-    is no clip on ``S`` here. The shape arrives as its **coefficient** and is exponentiated
-    here, because the two families do it differently: this one through ``safe_exp`` and the
-    log-logistic through a plain one. It is a single number, so doing it per call is free.
+    A row reads the cumulative hazard at **three** times -- its entry, the month's start and
+    the month's end -- and the survival at two of them, so the parts are named rather than
+    returned as a pair with one element thrown away:
+
+    * ``prepared`` is whatever does not depend on the time. For the log-logistic that is
+      ``log(safe_exp(eta))``, 26 array operations that used to be repeated for each of the
+      three times;
+    * ``cumulative`` is the hazard at one time, from that;
+    * ``survival`` is a function of the cumulative hazard alone, and the entry's is never
+      asked for -- which is 19 array operations of the Weibull's 178 that were computed and
+      discarded.
     """
-    cumulative = _safe_exp(_safe_exp(shape) * (_Jet(log_time) - eta))
-    return cumulative, _safe_exp(-cumulative)
+
+    prepared: Callable[[_Jet, _Jet], tuple[_Jet, _Jet]]
+    cumulative: Callable[[np.ndarray | float, _Jet, _Jet], _Jet]
+    survival: Callable[[_Jet], _Jet]
 
 
-def _loglogistic_terms(log_time: np.ndarray | float, eta: _Jet, shape: _Jet) -> tuple[_Jet, _Jet]:
-    """The log-logistic's cumulative hazard at ``log_time``, and the survival beside it.
+def _weibull_prepared(eta: _Jet, shape: _Jet) -> tuple[_Jet, _Jet]:
+    """The scale as it stands, and the shape exponentiated.
 
-    ``H = logaddexp(beta * (log t - log(safe_exp(eta))), 0)`` with ``beta = exp(r)`` -- a plain
-    exponential, not the safe one -- and ``S = clip(exp(-H), 1e-12, 1-1e-12)``, because this
-    fitter does **not** override the base class's survival function. The log of the capped
-    exponential is written as lifelines writes it rather than simplified to ``eta``: the two
-    differ in the last digits, and above the cap they differ altogether.
+    The shape arrives as its **coefficient** and is exponentiated here, because the two
+    families do it differently: this one through ``safe_exp`` and the log-logistic through a
+    plain one. It is a single number, so this costs nothing.
     """
-    log_scale = _log(_safe_exp(eta))
-    cumulative = _logaddexp_zero(_exp(shape) * (_Jet(log_time) - log_scale))  # beta_, plain exp
-    survival = _clipped(_exp(-cumulative), SURVIVAL_FLOOR, SURVIVAL_CEILING)
-    return cumulative, survival
+    return eta, _safe_exp(shape)
 
 
-_FAMILIES: Final[dict[str, Callable[[np.ndarray | float, _Jet, _Jet], tuple[_Jet, _Jet]]]] = {
-    "weibull": _weibull_terms,
-    "loglogistic": _loglogistic_terms,
+def _weibull_cumulative(log_time: np.ndarray | float, scale: _Jet, rate: _Jet) -> _Jet:
+    """``H = safe_exp(rho * (log t - log lambda))`` with ``rho = safe_exp(r)``."""
+    return _safe_exp(rate * (_Jet(log_time) - scale))
+
+
+def _weibull_survival(cumulative: _Jet) -> _Jet:
+    """``S = safe_exp(-H)``: the fitter overrides the base class, so there is no clip here."""
+    return _safe_exp_of_minus(cumulative)
+
+
+def _loglogistic_prepared(eta: _Jet, shape: _Jet) -> tuple[_Jet, _Jet]:
+    """``log(safe_exp(eta))`` and ``beta = exp(r)`` -- a plain exponential, not the safe one.
+
+    The log of the capped exponential is written as lifelines writes it rather than simplified
+    to ``eta``: the two differ in the last digits, and above the cap they differ altogether.
+    """
+    return _log(_safe_exp(eta)), _exp(shape)
+
+
+def _loglogistic_cumulative(log_time: np.ndarray | float, scale: _Jet, rate: _Jet) -> _Jet:
+    """``H = logaddexp(beta * (log t - log lambda), 0)``."""
+    return _logaddexp_zero(rate * (_Jet(log_time) - scale))
+
+
+def _loglogistic_survival(cumulative: _Jet) -> _Jet:
+    """``S = clip(exp(-H), 1e-12, 1-1e-12)``: this fitter does **not** override the base."""
+    return _clipped(_exp_of_minus(cumulative), SURVIVAL_FLOOR, SURVIVAL_CEILING)
+
+
+_FAMILIES: Final[dict[str, _Family]] = {
+    "weibull": _Family(_weibull_prepared, _weibull_cumulative, _weibull_survival),
+    "loglogistic": _Family(_loglogistic_prepared, _loglogistic_cumulative, _loglogistic_survival),
 }
 
 #: The families this kernel can fit. The others keep the autograd evaluator.
@@ -336,12 +412,13 @@ def row_likelihood(
         )
         raise ValueError(message)
     family = _FAMILIES[distribution]
-    scale = _Jet(eta, de=1.0, curved=curvature)
-    coefficient = _Jet(shape, dr=1.0, curved=curvature)
+    scale, rate = family.prepared(
+        _Jet(eta, de=1.0, curved=curvature), _Jet(shape, dr=1.0, curved=curvature)
+    )
 
-    entry, _ = family(log_entry, scale, coefficient)
-    _, opened = family(log_start, scale, coefficient)
-    _, closed = family(log_stop, scale, coefficient)
+    entry = family.cumulative(log_entry, scale, rate)
+    opened = family.survival(family.cumulative(log_start, scale, rate))
+    closed = family.survival(family.cumulative(log_stop, scale, rate))
 
     interval = _clipped(opened - closed, INTERVAL_FLOOR, INTERVAL_CEILING)
     return _log(interval) + entry.scaled(truncated)

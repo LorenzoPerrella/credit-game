@@ -103,16 +103,20 @@ class Kernel:
         for block in self.blocks:
             for start in range(0, block.rows, self.chunk):
                 stop = start + self.chunk
-                i = block.i[start:stop].astype(np.intp)
-                j = block.j[start:stop].astype(np.intp)
-                age = block.age[start:stop].astype(np.intp)
+                i = block.i[start:stop]
+                j = block.j[start:stop]
+                age = block.age[start:stop]
                 weight = block.weight[start:stop].astype(np.float64)
                 event = block.event[start:stop]
+                # Each table read once. `entry[age]` was gathered twice -- once as the
+                # truncation time and once inside the interval's own `where` -- which is a
+                # megabyte of gather per chunk for a number already in hand.
+                opens, closes = entry[age], following[age]
                 jet = row_likelihood(
                     self.distribution,
-                    log_entry=entry[age],
-                    log_start=np.where(event, entry[age], following[age]),
-                    log_stop=np.where(event, following[age], far),
+                    log_entry=opens,
+                    log_start=np.where(event, opens, closes),
+                    log_stop=np.where(event, closes, far),
                     truncated=(age > 0).astype(np.float64),
                     eta=eta_loan[i] + eta_calendar[j],
                     shape=shape,
