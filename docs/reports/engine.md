@@ -370,6 +370,21 @@ rebuild is what can *sort* the table, and sorted it is worth 1.36x where unsorte
 1.11x. Taken without one, 11% is the whole prize for invalidating every cached fit and changing
 every published row count.
 
+**A sort by quarter recovers all of it.** On 2007Q1's 1,040,722 cells, within blocks of 250,000:
+**1.1373x as written and 1.3398x sorted by the merge key**, which is that quarter's own
+whole-frame figure to the digit. Each quarter is already a frame in memory when the aggregation
+collapses it, so the sort costs nothing where it would happen, and the quarter's 1.3398x is
+within a per cent of the whole table's 1.3641x -- so there is nothing a global sort would add.
+
+**And it is not taken, with the arithmetic that says why.** Rule 7 was re-priced on the same day
+and neither given-up extension fits the ceiling, so there is no rebuild to put the sort in. On
+its own it would cost a re-aggregation of the whole book, the fit cache, the one cached reading,
+and the published row count of every report -- to save a Hessian from 9.74 s to about 7.3, a warm
+candidate from 2.5 minutes to 1.9, and **about 1.6 hours across a campaign of four selections**.
+That is a presentational change to what every report calls its sample size for an hour and a
+half, and the decision belongs to whoever is publishing, not to whoever is optimising. The
+numbers are here so that it takes a minute.
+
 ## The gate for compiling anything
 
 The compiled kernel is measured **against the NumPy above**, not against autograd. Measuring it
