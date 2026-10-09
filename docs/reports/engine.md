@@ -326,29 +326,66 @@ The method chain stays behind it as the fallback, because this replaces the opti
 and no fit that used to succeed may fail. `polish=False` keeps the optimiser untouched, because
 that mode exists to reproduce lifelines exactly and is what the equivalence tests use.
 
-## What is left, and in what order
+## What a selection run costs now
 
-A selection run now comes to roughly:
+Roughly:
 
     3 readings                   35 min   (0 where they are already on disk)
-    1 cold fit                   10 min   (was 44)
-    ~29 warm candidates         164 min   (5.67 min each)
+    1 cold fit                    4 min   (was 44, then 10 before the compiled kernel)
+    ~29 warm candidates          72 min   (~2.5 min each)
                                 ------
-                                3.5 hours, or 2.9 on a table already read
+                                1.9 hours, or 1.3 on a table already read
 
 against the **10.5 hours** the four recorded runs averaged, and 42.0 hours for all four. Rule 2
 needs four runs and a reading does not depend on the family, so the two families share one and
-the two causes do not: **70 minutes of reading across the four** instead of 140, and none at all
-on a re-run.
+the two causes do not -- and with the readings now written to disk, a whole campaign pays two of
+them and nothing on a re-run.
 
 The reading is no longer the problem and the optimiser's path is no longer the problem; what is
-left is the **curvature**. A warm candidate's 5.67 minutes are five Hessians and six
-evaluations, so it is Hessian-bound, and a Hessian over the whole half is 29.69 s of which the
-jet is 67% -- spent on allocation and dispatch rather than on arithmetic, which is what a fused
-loop takes and Python cannot.
+left is the **curvature**. A warm candidate's minutes are five Hessians and six evaluations, so
+it is Hessian-bound, and a Hessian over the whole half was 29.69 s of which the jet was 67% --
+spent on allocation and dispatch rather than on arithmetic, which is what a fused loop takes and
+Python cannot. It is 9.74 s now.
 
-So the order is: the compiled kernel on the curvature, then the exact row merge and step 7's
-screen.
+## What is left, priced, and none of it taken
+
+Three options remain, each worth **80 to 100 minutes across a campaign of four selections**, and
+each costing a format change or a change to a published number. Together they would take a
+campaign from about seven hours to about four. They are set out here with their arithmetic so
+that the decision takes a minute, because the decision is not a technical one: every one of them
+trades something a report says for something a run spends.
+
+**1. Step 9 reads the book twice more than it needs to.** The rehearsal wrote **three** readings:
+the window, and the two origination-parity halves stability is measured on. The halves are
+*subsets of the first*, but a parity is not recoverable from an encoded row -- the row carries
+`(i, j, age, event, weight)` and the origination month is in neither key -- so each is read from
+the parquet again, 11.6 minutes apiece on the production window. Carrying the origination month
+on the calendar key **frame** (as a column, not as a design column) makes the parity a lookup by
+`j`, and each half becomes a boolean mask over the five row arrays: seconds instead of minutes.
+Cost: masking cuts the blocks differently, so step 9's two fits differ in their last digits from
+a freshly-read pair, and the published stability table moves with them. **23 minutes a
+selection.**
+
+**2. The moments pass reads the whole parquet for a dozen numbers.** Steps 5 and 6 need a
+weighted covariance of 19 candidates, and `weighted_moments` gets it from the expanded episodes
+-- the one pass the encoding exists to avoid, 20 minutes on the production window. Every column
+is a function of one side of the key, so the loan-by-loan and calendar-by-calendar blocks come
+off the key frames and the counts; the cross-terms are one gather and one scatter-add per
+calendar candidate over the rows, about ten seconds. Cost: the encoding has to store weighted
+sums per combination as well as row counts, which is a format change that retires the cached
+reading, and the correlation and inflation tables move in their last digits. **20 minutes a
+selection.**
+
+**3. The exact row merge, which needs the table sorted.** Measured above: 1.11x unsorted, 1.34x
+sorted, and a per-quarter sort recovers all of it. Cost: a re-aggregation of the whole book, the
+fit cache, the cached reading, and the row count every report prints as its sample size. **About
+24 minutes a selection**, and the largest presentational cost of the three.
+
+What is *not* on the list, and why. Rule 7 was re-priced on 9 October and neither given-up
+extension fits, so there is no rebuild of the cell table to carry the sort for free. Step 7's
+one-step screen was abandoned with the number that says why: 75 minutes before the compiled
+kernel, fifteen after, and it is the only item that would touch the declared procedure. And the
+compiled kernel itself is done, at 2.80x and an exception declared beside rule 13.
 
 ### The exact row merge is 1.11x, not 1.36x, until the table is sorted
 
