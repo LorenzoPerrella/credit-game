@@ -20,7 +20,7 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
   the payment state stayed. The projection said 80.4 million and the rebuild produced 91.6:
   **a ratio estimated on nine quarters ran 14% light**, which is the accuracy to expect of it.
 
-- **Every interval-censored fit goes through `creditsurv.models.blocks`.** A stock
+- **Every interval-censored fit goes through `creditsurv.models.engine`.** A stock
   lifelines fit holds ~680 bytes a row of autograd tape and design copies, which would be
   45-50 GB here. The engine evaluates lifelines' own likelihood a block at a time: on 9.5
   million rows, 2.55 GB and 14.9 minutes where lifelines took 13.45 GB and 24.7. It mirrors
@@ -53,15 +53,28 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
   kernel on the production table is **53 seconds of arithmetic behind 12.1 minutes of reading**,
   and every one of a selection's thirty fits used to pay that reading again -- the fifteen
   step-7 fits of one logged run each began by recomputing the identical base objective to
-  twelve digits. `blocks.encode_blocks` reads with **no formula involved** and keeps fifteen
+  twelve digits. `engine.encode_blocks` reads with **no formula involved** and keeps fifteen
   bytes a row plus the key of every combination (1.09 GB for the training half); each
   candidate's design is then two tables built by putting its formula through **3,001** loan
-  combinations and **153,309** calendar keys. `creditsurv select --traced` goes back to tracing
-  autograd and re-reading, which is what the equivalence tests hold the other to; `--workers`
-  applies to it only, because a reading is one process.
+  combinations and **152,565** calendar keys -- or **286,387** when the reading covers all
+  fifteen macro candidates instead of the selected model's six, because `volatility_change` and
+  `inflation_change` are changes since origination and split a key the selected model leaves
+  whole. Both numbers are of the same cells; which one a run sees is the covering set.
+  `creditsurv select --traced` goes back to tracing autograd and re-reading, which is what the
+  equivalence tests hold the other to; `--workers` applies to it only, because a reading is one
+  process.
+- **And a reading is written once per table, not once per run.** It involves no formula, so
+  nothing in it depends on the model: `engine.cache` writes it as five memory-mapped arrays and
+  two key frames and maps it back in **0.4 seconds against 693.9**, 1.0 GB on disk, with the fit
+  from it identical **bit for bit** -- the same blocks in the same order, which is the one thing
+  a reading can change about an objective. Rule 2's four runs share **six** readings, two causes
+  by three samples. The name covers the table's identity, the two covariate lists, the cause,
+  the parity, the window, the batch size and the macro panel's own numbers *clipped to the
+  months the window can reach*: the panel is live FRED data, and a month published above the cut
+  cannot have entered a reading that stops below it.
 - **Nothing holds the panel any more, and nothing should start again.** Every command that
   used to expand the training half now reads the cell file a batch at a time: the fits
-  (`models.blocks`), the selection (`Fits(blocks=...)`), the views (`views.streamed`) and the
+  (`models.engine`), the selection (`Fits(blocks=...)`), the views (`views.streamed`) and the
   backtest windows. A whole selection was measured at **2.75 GB** across its parent and three
   workers, where one fit holding the half had been 15 GB. `split_cells` remains for a caller
   that genuinely needs both halves as frames; on this table that is nobody.
@@ -123,7 +136,8 @@ change between evaluations -- and `_Slicer` removed it: **1.9x on every evaluati
 left is autograd, and reducing that means owning an analytic gradient, which is the second
 implementation of lifelines' likelihood this engine exists to avoid. **That line was crossed
 deliberately on `perf/fit-engine`**, with the equivalence tests as the contract: every column of
-the design is a function of the loan combination (3,001 of them) or of the calendar key (153,309)
+the design is a function of the loan combination (3,001 of them) or of the calendar key (152,565
+for the published model, 286,387 for a selection's covering set)
 and never of both, so `eta = A[i] + B[j]`, the interval is always one month and exact
 observations never occur. Measured on the real cardinalities, one thread: a value-and-gradient
 over 53.3 million rows in **10.2 s** and one with the Hessian in **29.9**, against 57.8 and 396
@@ -404,6 +418,9 @@ per quarter; the decisive one is that parquet row counts still match the manifes
 ## Conventions
 
 - `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not network"`
+  plus `uv run mkdocs build --strict`. Sync back with **`uv sync --group docs`**: a bare
+  `uv sync` drops the group and the build then fails on `pymdownx`, which looks like a broken
+  site and is a missing dependency.
 - **And `mypy` on the other leg of the matrix before pushing.** `tool.mypy` sets
   `python_version = "3.12"`, so a local run checks one of the two the CI runs, and numpy's
   stubs infer differently under 3.11: **twice now** a branch has gone green locally and failed

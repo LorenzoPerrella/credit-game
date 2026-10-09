@@ -62,6 +62,12 @@ Measured on the training window -- 72,671,500 cells over 2.11 billion loan-month
 | the same with the LTV band, which `ltv_change` needs | **153,309** |
 | rows the likelihood distinguishes, cause `default` | **53,273,105** of 72,671,500 (1.36x) |
 
+The 153,309 is what the calendar *can* distinguish; the key a reading actually builds is
+**152,565** for the published model's six macro columns, because a few hundred (month, age,
+band) triples land on identical macro values and are one key. A reading covering all fifteen
+candidates finds **286,387**, which is a different quantity and not a disagreement: see the end
+of "One reading, many fits".
+
 The 1.36x is the exact merge: the model never reads `delinquency_state`, and for one cause
 the three-state outcome collapses to a boolean, so rows agreeing on the design and on their
 bounds are one row with the weights summed. It is smaller than it looks like it should be,
@@ -197,6 +203,51 @@ which combinations were new to it is two passes over 250,000 rows for each of 44
 million interpreted iterations, and it made an encoding *slower* than the scan. `np.unique`
 with `return_index` does it in one sorted call.
 
+### The reading is written once, and the second one is half a second
+
+A reading involves no formula, so nothing in it depends on the model: it is parquet, the macro
+family and the key coding. Written to disk and mapped back it stops being a cost at all.
+Measured on the production training half, the same covering set a selection needs:
+
+| | |
+|---|---|
+| the reading | **693.9 s** and **717.9** on a second run, 72,671,500 cells, 1,440,771 defaults, 443 blocks |
+| its footprint | **2.37 GB** -- one batch expanded, beside the rows it keeps |
+| mapped back, in a new process | **0.4 s**, a **1,735x** saving, and 7.98 s for the whole process |
+| its footprint | **0.63 GB**: the 1.09 GB of rows is mapped, not resident |
+| what it occupies | **1.0 GB** on disk, against 448 MB of parquet it was read from |
+| two independent readings | the five row arrays **byte-identical**, `shasum` on 1.09 GB |
+| the fit from it | the same log-likelihood, coefficients and standard errors, **bit for bit** |
+
+The last two rows are the claim worth making, and the second is the one that matters. A reading that came back *almost* the
+same would be a different model published under the same name, and it can be exact because
+nothing is recomputed: the rows come back as views of a memory map, the keys in the order their
+codes were handed out in, and the blocks cut where they were cut -- and the blocks are where the
+sums are cut, which is the one thing a reading can change about an objective, floating-point
+addition not being associative. That is also why the batch size is in the name.
+
+Restoring the key tables is **replaying the keys, not the rows**: the key frames come back in
+the order the codes were handed out in and are registered in that order, so every combination
+keeps the index the saved rows point at. The categorical levels are re-applied from the
+declaration rather than taken from parquet, because what a formula's expansion reads off a key
+frame is its *dtypes*: a column that came back as plain strings would hand `C(purpose)` whatever
+reference level pandas sorted first.
+
+**The name is the reading, not the run.** It covers the cell table's identity, the two covariate
+lists, the cause, the parity, the window, the batch size and the macro panel's own numbers --
+clipped to the months the window can reach, because the panel is live FRED data and a month
+published above the cut cannot have entered a reading that stops below it. So rule 2's four runs
+share **six** readings, two causes by three samples, where they used to pay twelve; and a run
+that stops now picks up at the fit it was on instead of at the reading, which on a job that
+takes a day matters more than the minutes.
+
+**And the key is the covering set, which is why two numbers are right.** The table above reads
+152,565 calendar keys for the *selected* model's six macro columns and the selection's reading
+finds **286,387**, on the same cells: a selection has to cover all fifteen candidates before the
+first specification exists, and two of the ones it drops -- `volatility_change` and
+`inflation_change` -- are changes since origination, so they split a calendar key the selected
+model leaves whole. 1.88x the key, for a reading that serves every candidate.
+
 ## Newton instead of the optimiser's long path
 
 The cold fit's 142 SLSQP evaluations at 17 seconds each were 96% of its 43.79 minutes, while
@@ -230,13 +281,16 @@ that mode exists to reproduce lifelines exactly and is what the equivalence test
 
 A selection run now comes to roughly:
 
-    3 readings                   32 min
+    3 readings                   35 min   (0 where they are already on disk)
     1 cold fit                   10 min   (was 44)
     ~29 warm candidates         164 min   (5.67 min each)
                                 ------
-                                3.4 hours
+                                3.5 hours, or 2.9 on a table already read
 
-against the **10.5 hours** the four recorded runs averaged, and 42.0 hours for all four. The
+against the **10.5 hours** the four recorded runs averaged, and 42.0 hours for all four. Rule 2
+needs four runs and a reading does not depend on the family, so the two families share one and
+the two causes do not: **70 minutes of reading across the four** instead of 140, and none at all
+on a re-run. The
 reading is no longer the problem and the optimiser's path is no longer the problem; what is left
 is the **curvature**. A warm candidate's 5.67 minutes are five Hessians at 39 seconds and six
 evaluations at 17, so it is Hessian-bound, and a Hessian is where a fused loop has most to

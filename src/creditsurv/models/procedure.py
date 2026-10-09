@@ -36,7 +36,7 @@ nearest model already fitted, which changes how long it takes and not where it e
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 
 import pandas as pd
@@ -187,7 +187,16 @@ def run_selection(
     # What a reading has to cover, said before the first specification exists: a reading is
     # made once and serves every fit of the run, so it cannot be narrowed to the first
     # formula's columns. The order is the one the candidate lists were given in.
-    fits.covering = tuple(dict.fromkeys([*continuous, *base_categorical, *candidate_categorical]))
+    #
+    # Decided here and **not** written into the caller's object. The candidate lists are this
+    # function's own arguments -- a test runs the sequence on a handful of covariates -- so the
+    # command line cannot say what a reading covers without saying the lists twice. A copy
+    # carries the run's own record and readings, which are the same objects, so the caller sees
+    # every fit this procedure makes.
+    fits = replace(
+        fits,
+        covering=tuple(dict.fromkeys([*continuous, *base_categorical, *candidate_categorical])),
+    )
 
     # 5. Pairs that say the same thing -- reported, not resolved.
     log.info("step 5: weighted correlation of %d candidates", len(continuous))

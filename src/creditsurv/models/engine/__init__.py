@@ -39,7 +39,7 @@ number.
 
 ----
 
-The module this package came from was 2,325 lines and seven concerns. They are now eight files,
+The module this package came from was 2,325 lines and seven concerns. They are now nine files,
 and the dependency graph between them is a line:
 
 * :mod:`.contract` -- what an evaluation *means*, and what ends a fit that cannot finish. The
@@ -51,12 +51,18 @@ and the dependency graph between them is a line:
 * :mod:`.workers` -- the same, split across processes, added in the parts' own order.
 * :mod:`.polish` -- damped Newton, the certificate, and the method chain behind it.
 * :mod:`.fit` -- the two entry points.
+* :mod:`.cache` -- a reading written once and mapped back, so the eleven minutes are paid once.
 
 What a caller needs is re-exported here, so nothing outside has to know which file a name is
 in. What a *test* needs it should import from the file, because which concern a test names is
 part of what the test says.
 """
 
+from creditsurv.models.engine.cache import (
+    encoding_fingerprint,
+    load_encoding,
+    save_encoding,
+)
 from creditsurv.models.engine.contract import (
     POLISH_TOLERANCE_SE,
     Pinned,
@@ -82,6 +88,9 @@ __all__ = [
     "Pinned",
     "StoredColumn",
     "encode_blocks",
+    "encoding_fingerprint",
     "fit_encoded",
     "fit_interval_censoring_in_blocks",
+    "load_encoding",
+    "save_encoding",
 ]

@@ -53,7 +53,15 @@ from creditsurv.data.panel import (
 )
 from creditsurv.data.store import find_fits, fit_fingerprint, load_fit, save_fit
 from creditsurv.models.aft import FitResult, Likelihood, fit_aft, fit_encoding, fit_streamed
-from creditsurv.models.engine import DEFAULT_BLOCK_ROWS, Encoding, Pinned, encode_blocks
+from creditsurv.models.engine import (
+    DEFAULT_BLOCK_ROWS,
+    Encoding,
+    Pinned,
+    encode_blocks,
+    encoding_fingerprint,
+    load_encoding,
+    save_encoding,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -117,9 +125,10 @@ class Fits:
     #: and the two origination-year halves step 9 compares, against thirty readings.
     held: dict[int | None, Encoding] = field(default_factory=dict, repr=False)
     #: Every covariate the run will ever read, which a reading has to cover because it is made
-    #: once and before the first specification exists. `run_selection` sets it from its own
-    #: candidate lists; without it the description's own covariates are all that is assumed,
-    #: and a formula naming anything else fails where it is expanded rather than silently.
+    #: once and before the first specification exists. `run_selection` decides it from its own
+    #: candidate lists and takes a copy of these fits carrying it; without it the description's
+    #: own covariates are all that is assumed, and a formula naming anything else fails where
+    #: it is expanded rather than silently.
     covering: tuple[str, ...] | None = None
 
     def fit(
@@ -193,6 +202,14 @@ class Fits:
 
         The two halves of step 9 are different rows, so they are different readings; nothing
         else in a selection is.
+
+        **And a reading outlives the run that made it.** It is 10.9 minutes on the production
+        table and there is no formula in it, so it is written to disk under a name taken from
+        everything that decides it -- the cell table's identity, the two covariate lists, the
+        cause, the parity, the window, the batch size and the macro panel's own numbers -- and
+        the second and every later reading is mapped back in seconds. Rule 2's four runs share
+        six readings between them where they used to pay twelve, and a job that stops picks up
+        at the fit it was on instead of at the reading.
         """
         held = self.held.get(parity)
         if held is not None:
@@ -201,17 +218,53 @@ class Fits:
         assert self.calendar is not None
         calendar = set(self.calendar)
         covering = self.covering or self.blocks.covariates
+        loan = [name for name in covering if name not in calendar]
+        macro = [name for name in covering if name in calendar]
         source = replace(self.blocks, covariates=tuple(covering), vintage_parity=parity).prepared()
-        held = encode_blocks(
-            source(),
-            loan=[name for name in covering if name not in calendar],
-            calendar=[name for name in covering if name in calendar],
-            lower_bound_col=LOWER_BOUND,
-            upper_bound_col=UPPER_BOUND,
-            event_col=EXACT_OBSERVATION,
-            entry_col=AGE_START,
-            weights_col=WEIGHT,
+        name = encoding_fingerprint(
+            identity=self.identity,
+            loan=loan,
+            calendar=macro,
+            age_column=AGE_START,
+            cause=source.cause,
+            parity=parity,
+            months=source.months,
+            block_rows=source.rows,
+            macro=source.macro,
+            lag_months=source.lag_months,
         )
+        held = load_encoding(name)
+        if held is None:
+            held = encode_blocks(
+                source(),
+                loan=loan,
+                calendar=macro,
+                lower_bound_col=LOWER_BOUND,
+                upper_bound_col=UPPER_BOUND,
+                event_col=EXACT_OBSERVATION,
+                entry_col=AGE_START,
+                weights_col=WEIGHT,
+            )
+            save_encoding(
+                held,
+                name,
+                {
+                    "identity": self.identity,
+                    "moratorium": self.moratorium,
+                    "as_of": self.as_of,
+                    "cause": source.cause,
+                    "parity": parity,
+                    "months": list(source.months) if source.months is not None else None,
+                    "block_rows": source.rows,
+                    "loan": loan,
+                    "calendar": macro,
+                    "cells": held.episodes,
+                    "events": held.events,
+                    "loan_months": held.weight,
+                },
+            )
+        else:
+            log.info("the reading %s, mapped back: %s cells", name, f"{held.episodes:,}")
         self.held[parity] = held
         return held
 

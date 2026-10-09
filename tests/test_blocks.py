@@ -1192,6 +1192,58 @@ def test_two_models_are_fitted_from_one_reading_of_the_rows(weighted: pd.DataFra
         assert fitter.log_likelihood_ == pytest.approx(fresh.log_likelihood, rel=1e-9), formula
 
 
+def test_a_fit_from_a_mapped_reading_is_the_same_fit_bit_for_bit(
+    weighted: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The claim a cached reading makes, and the only one that matters: it changes nothing.
+
+    A reading of the production table is 10.9 minutes and 1.09 GB, a selection pays three of
+    them and rule 2's four runs pay twelve. Written once and mapped back it is seconds -- but a
+    reading that came back *almost* the same would be a different model published under the
+    same name, so the test is not a tolerance. The same formula fitted from the reading and
+    from the mapping of it has to agree **bit for bit**: the same log-likelihood, the same
+    coefficients, the same standard errors.
+
+    It can be that strict because nothing is recomputed. The rows come back as views of a
+    memory map, the keys in the order their codes were handed out in, and the blocks cut where
+    they were cut -- and the blocks are where the sums are cut, which is the one thing a
+    reading can change about an objective, floating-point addition not being associative.
+    """
+    from creditsurv.data.panel import model_blocks
+    from creditsurv.models.aft import FITTERS
+    from creditsurv.models.engine.cache import load_encoding, save_encoding
+    from creditsurv.models.engine.fit import fit_encoded
+    from creditsurv.models.engine.scan import encode_blocks
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    encoding = encode_blocks(
+        model_blocks(weighted, COVARIATES, rows=5_000, weights_col="loan_months"),
+        loan=[name for name in COVARIATES if name not in CALENDAR],
+        calendar=CALENDAR,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+    )
+    save_encoding(encoding, "the-training-half", {"cells": encoding.episodes})
+    mapped = load_encoding("the-training-half")
+    assert mapped is not None
+
+    read = FITTERS["weibull"](penalizer=0.0)
+    from_rows = fit_encoded(read, encoding, formula=FORMULA)
+    remapped = FITTERS["weibull"](penalizer=0.0)
+    from_disk = fit_encoded(remapped, mapped, formula=FORMULA)
+
+    assert from_disk.rows == from_rows.rows
+    assert from_disk.events == from_rows.events
+    assert remapped.log_likelihood_ == read.log_likelihood_
+    np.testing.assert_array_equal(remapped.params_.to_numpy(), read.params_.to_numpy())
+    np.testing.assert_array_equal(
+        remapped.standard_errors_.to_numpy(), read.standard_errors_.to_numpy()
+    )
+
+
 def test_an_unclassified_covariate_has_no_index_to_be_looked_up_by(
     weighted: pd.DataFrame,
 ) -> None:

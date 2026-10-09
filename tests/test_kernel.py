@@ -15,7 +15,7 @@ the optimiser backtracks from, and a wall that moves by an epsilon moves
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import autograd.numpy as anp
 import numpy as np
@@ -35,6 +35,9 @@ from creditsurv.models.kernel import (
     log_times,
     row_likelihood,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _weibull(
@@ -701,3 +704,133 @@ def test_a_coupled_column_is_refused_when_the_tables_are_built_from_the_keys() -
 
     with pytest.raises(ValueError, match="move with the loan"):
         factorisation.expand(coupled.transform_df, primary="lambda_")
+
+
+def test_a_saved_encoding_comes_back_the_same_encoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reading of the production table is 10.9 minutes and 1.09 GB, and a selection pays
+    three of them where the four runs rule 2 needs pay twelve. Written once and mapped back,
+    the second and every later reading is seconds -- and it survives a restart, which on a job
+    that takes a day matters more than the minutes.
+
+    What has to come back identical is everything a fit reads: the rows, the keys in the order
+    their codes were handed out in, the counts the column moments are computed from, and the
+    bounds the univariate seed is fitted on. The codes live in the rows, so a restored
+    factorisation that renumbered a combination would be a different model silently.
+    """
+    from creditsurv.data.panel import AGE_START, EXACT_OBSERVATION, LOWER_BOUND, UPPER_BOUND
+    from creditsurv.models.engine.cache import load_encoding, save_encoding
+    from creditsurv.models.engine.scan import encode_blocks
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    # The frame `model_frame` hands over: the covariates, the age the episode opens at, the
+    # interval and the weight. Nothing else -- a column in neither key has no index to be
+    # looked up by, which is what the scan refuses by name.
+    book = _book(range(0, 5), range(0, 7))
+    defaulted = book.pop("outcome").to_numpy(dtype=bool)
+    book[AGE_START] = book.pop("age").astype(float)
+    book[LOWER_BOUND] = np.where(defaulted, book[AGE_START], book[AGE_START] + 1.0)
+    book[UPPER_BOUND] = np.where(defaulted, book[AGE_START] + 1.0, np.inf)
+    book[EXACT_OBSERVATION] = False
+
+    encoded = {
+        "loan": LOAN,
+        "calendar": CALENDAR,
+        "lower_bound_col": LOWER_BOUND,
+        "upper_bound_col": UPPER_BOUND,
+        "event_col": EXACT_OBSERVATION,
+        "entry_col": AGE_START,
+        "weights_col": "loan_months",
+    }
+    original = encode_blocks([book.iloc[:400], book.iloc[400:]], **encoded)  # type: ignore[arg-type]
+    save_encoding(original, "fixture", {"what": "a fixture book"})
+    restored = load_encoding("fixture")
+
+    assert restored is not None
+    assert restored.episodes == original.episodes
+    assert restored.events == original.events
+    assert restored.weight == original.weight
+    assert restored.names == original.names
+    assert [block.rows for block in restored.rows] == [block.rows for block in original.rows]
+    for was, now in zip(original.rows, restored.rows, strict=True):
+        for column in ("i", "j", "age", "event", "weight"):
+            np.testing.assert_array_equal(
+                getattr(now, column), getattr(was, column), err_msg=column
+            )
+    pd.testing.assert_series_equal(restored.bounds, original.bounds, check_names=False)
+
+    # The keys in their codes' own order, which is what the rows point at -- and on their
+    # declared levels, because what a formula's expansion reads off a key frame is its dtypes.
+    for before, after in zip(
+        original.factorisation.keys(), restored.factorisation.keys(), strict=True
+    ):
+        pd.testing.assert_frame_equal(after, before)
+    np.testing.assert_array_equal(
+        restored.factorisation.loan_counts, original.factorisation.loan_counts
+    )
+    np.testing.assert_array_equal(
+        restored.factorisation.calendar_counts, original.factorisation.calendar_counts
+    )
+
+    # And a model expanded from the restored keys is the model expanded from the original ones,
+    # which is the claim a cached reading makes: a candidate's tables come off the keys.
+    regressors = _regressors(
+        FULL,
+        book.drop(columns=["loan_months", AGE_START, LOWER_BOUND, UPPER_BOUND, EXACT_OBSERVATION]),
+    )
+    tables = original.factorisation.expand(regressors.transform_df, primary="lambda_")
+    remapped = restored.factorisation.expand(regressors.transform_df, primary="lambda_")
+    np.testing.assert_array_equal(remapped.loan, tables.loan)
+    np.testing.assert_array_equal(remapped.calendar, tables.calendar)
+    np.testing.assert_allclose(remapped.first, tables.first, rtol=0, atol=0)
+
+
+def test_a_macro_month_the_window_cannot_reach_does_not_rename_a_reading() -> None:
+    """A reading is named by the macro panel's own numbers, but only the readable ones.
+
+    The 10.9 minutes a reading costs are paid again whenever its name changes, and the macro
+    panel is live FRED data that gains a month without anything about the model moving. A cell
+    reads the panel at its observation month less the lag or at its origination month less the
+    lag, both at or before the cut the window stops at -- so a month above the cut cannot enter
+    a reading, and must not retire one. A month *inside* it must, because that is a different
+    calendar key on the same cell file, which the cell table's identity cannot see.
+    """
+    from creditsurv.data.panel import month_ordinal
+    from creditsurv.models.engine.cache import encoding_fingerprint
+
+    def named(macro: pd.DataFrame, months: tuple[int | None, int | None] | None) -> str:
+        return encoding_fingerprint(
+            identity="cells_exclude.parquet:448169670:1789713959804446587",
+            loan=LOAN,
+            calendar=CALENDAR,
+            age_column="age_start",
+            cause="default",
+            parity=None,
+            block_rows=250_000,
+            lag_months=3,
+            macro=macro,
+            months=months,
+        )
+
+    periods = pd.period_range("2019-01", "2021-12", freq="M")
+    macro = pd.DataFrame({"unemployment_rate": np.linspace(3.5, 6.0, len(periods))}, index=periods)
+    cut = (None, month_ordinal(pd.Period("2021-12", freq="M")))
+    extended = pd.concat(
+        [
+            macro,
+            pd.DataFrame(
+                {"unemployment_rate": [9.9]},
+                index=pd.period_range("2022-01", periods=1, freq="M"),
+            ),
+        ]
+    )
+    assert named(extended, cut) == named(macro, cut)
+
+    revised = macro.copy()
+    revised.iloc[-1, 0] = 6.1  # the last readable month, restated
+    assert named(revised, cut) != named(macro, cut)
+
+    # And with no cut -- `creditsurv fit` without an `--as-of` -- the whole table is read, so the
+    # month that could not reach the window above is a month the reading does see.
+    assert named(extended, None) != named(macro, None)

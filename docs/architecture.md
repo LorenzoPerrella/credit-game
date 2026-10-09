@@ -91,10 +91,15 @@ Named rather than introduced: most of these were here before anyone wrote them d
   `StoredColumn`, `Moments`, `Split` — frozen, compared by value, derived rather than mutated.
   There are no entities: nothing in this codebase has an identity that outlives a computation.
 - **Strategy** at the two ports above.
-- **Repository** for the artefacts a long run must not lose. `data/store.py` gives a fit a
-  fingerprint of everything that determines it, an atomic write, a readable description beside
-  the bytes, and a search over the descriptions. A fit on this book is minutes to hours; losing
-  one to a crash while writing a report is how the cache came to exist.
+- **Repository** for the artefacts a long run must not lose, and it has two kinds now, which
+  is what earns it the name. `data/artefacts.py` holds what a **fit** and a **reading** share:
+  a fingerprint of everything that determines the artefact, an atomic write, a readable
+  description beside the bytes, a search over those descriptions, and a *miss rather than an
+  error* on anything unreadable. The two serialisations differ completely -- a pickle against a
+  directory of memory-mapped arrays and two parquet files -- and neither format is in the
+  store: `data/store.py` knows a fit's, `models/engine/cache.py` a reading's. A fit on this
+  book is minutes to hours and a reading is 11.6 minutes; losing one to a crash while writing a
+  report is how the cache came to exist.
 - **Declared rules, held to a record by a test.** The strongest discipline here and the least
   like a pattern. `docs/rules.md` states what will be decided before the fit that decides it;
   `tests/` holds the configuration to the record the selection wrote, the master scale to the

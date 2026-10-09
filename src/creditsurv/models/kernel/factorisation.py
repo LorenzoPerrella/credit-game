@@ -176,6 +176,7 @@ class Factorisation:
         columns: Sequence[str] = (),
     ) -> None:
         self._loan = tuple(loan)
+        self._declared_calendar = tuple(calendar)
         self._calendar = (*calendar, age_column)
         self._age_column = age_column
         self._columns = tuple(columns)
@@ -252,6 +253,63 @@ class Factorisation:
             event=np.asarray(event, dtype=bool),
             weight=_counts(np.asarray(weight)),
         )
+
+    @property
+    def loan(self) -> tuple[str, ...]:
+        """The covariates the cell key carries, which the loan combination is of."""
+        return self._loan
+
+    @property
+    def calendar(self) -> tuple[str, ...]:
+        """The covariates that are functions of the calendar, without the age beside them.
+
+        The key itself carries the age -- the interval bounds are a function of it -- but the
+        *declaration* is the covariate list the caller gave, and that is what a reader wants
+        back and what a restored factorisation is given.
+        """
+        return self._declared_calendar
+
+    @property
+    def age_column(self) -> str:
+        return self._age_column
+
+    @property
+    def loan_counts(self) -> np.ndarray:
+        """How many rows each loan combination carries. The column moments need nothing else."""
+        return self._loan_counts
+
+    @property
+    def calendar_counts(self) -> np.ndarray:
+        return self._calendar_counts
+
+    @classmethod
+    def restored(
+        cls,
+        *,
+        loan: Sequence[str],
+        calendar: Sequence[str],
+        age_column: str,
+        loan_keys: pd.DataFrame,
+        calendar_keys: pd.DataFrame,
+        loan_counts: np.ndarray,
+        calendar_counts: np.ndarray,
+    ) -> Factorisation:
+        """A factorisation rebuilt from its keys rather than from the rows.
+
+        **Replaying the keys, not the rows.** The key frames come back in the order the codes
+        were handed out in, so registering them in that order gives every combination the index
+        it had -- which is what makes a saved reading usable at all, since the indices are in
+        the rows. Nothing is recomputed and nothing is renumbered, and a restored factorisation
+        can be added to like any other.
+        """
+        restored = cls(loan=loan, calendar=calendar, age_column=age_column)
+        restored._loan_codes.restore(_stable_codes(loan_keys, restored._loan))
+        restored._calendar_codes.restore(_stable_codes(calendar_keys, restored._calendar))
+        restored._loan_keys.append(loan_keys.reset_index(drop=True))
+        restored._calendar_keys.append(calendar_keys.reset_index(drop=True))
+        restored._loan_counts = np.asarray(loan_counts, dtype=np.int64)
+        restored._calendar_counts = np.asarray(calendar_counts, dtype=np.int64)
+        return restored
 
     def keys(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         """The two key frames, one row per combination, in their codes' own order."""
@@ -457,6 +515,16 @@ class _Growing:
     def __init__(self) -> None:
         self._seen: dict[bytes, int] = {}
         self._rows = 0
+
+    def restore(self, values: np.ndarray) -> None:
+        """Register these rows as codes 0, 1, 2 ... in the order they are given.
+
+        Not through :meth:`of`, which sorts within a call and would renumber them: a restored
+        table has to hand out the indices the saved rows already point at.
+        """
+        for index, row in enumerate(values):
+            self._seen[np.ascontiguousarray(row).tobytes()] = index
+        self._rows = len(values)
 
     def of(self, values: np.ndarray) -> np.ndarray:
         distinct, inverse = np.unique(values, axis=0, return_inverse=True)
