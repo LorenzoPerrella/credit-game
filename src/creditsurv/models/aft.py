@@ -34,6 +34,7 @@ import numpy as np
 import pandas as pd
 from lifelines import LogLogisticAFTFitter, LogNormalAFTFitter, WeibullAFTFitter
 
+from creditsurv.config import KERNEL_THREADS
 from creditsurv.data.panel import (
     AGE_START,
     AGE_STOP,
@@ -318,6 +319,9 @@ def fit_encoding(
         polish=polish,
         prefer=prefer,
         floor=floor,
+        # Declared in `config`, not read off the machine: the count is part of what determines
+        # the answer, so a fit's last digits must not be a property of the hardware.
+        threads=KERNEL_THREADS,
     )
     return FitResult(
         fitter=fitter,

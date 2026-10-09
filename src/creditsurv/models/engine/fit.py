@@ -98,6 +98,11 @@ class BlockFit:
     #: Newton steps taken after SLSQP stopped, and what they left, in the same units.
     polish_steps: int
     residual_error_se: float
+    #: How many contiguous parts the compiled kernel summed the rows in, or 1 for the NumPy
+    #: path. Recorded because it is **part of what determines the answer**: two runs at the
+    #: same count agree bit for bit, and two counts agree only to the last digits of a sum
+    #: over 72.7 million terms. A fit that cannot say what summed it cannot be reproduced.
+    threads: int = 1
 
 
 def fit_interval_censoring_in_blocks(
@@ -221,6 +226,7 @@ def _fit_from_scan(
     prefer: str | None = None,
     floor: float | None = None,
     started: float | None = None,
+    threads: int = 1,
 ) -> BlockFit:
     """Everything a fit does once the rows have been read: seed, optimise, polish, store.
 
@@ -273,7 +279,7 @@ def _fit_from_scan(
     kernel = (
         None
         if scan.factorisation is None
-        else _kernel(fitter, scan, norm_std.to_numpy(), total_weight)
+        else _kernel(fitter, scan, norm_std.to_numpy(), total_weight, threads)
     )
     local = _Objective(
         fitter,
@@ -425,6 +431,7 @@ def _fit_from_scan(
         stopping_error_se=stopped,
         polish_steps=steps,
         residual_error_se=remaining,
+        threads=threads if kernel is not None else 1,
     )
 
 
@@ -440,6 +447,7 @@ def fit_encoded(
     polish: bool = True,
     prefer: str | None = None,
     floor: float | None = None,
+    threads: int = 1,
 ) -> BlockFit:
     """Fit one model from rows that were read once, without reading them again.
 
@@ -490,4 +498,5 @@ def fit_encoded(
         prefer=prefer,
         floor=floor,
         started=started,
+        threads=threads,
     )

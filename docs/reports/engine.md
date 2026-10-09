@@ -331,10 +331,11 @@ that mode exists to reproduce lifelines exactly and is what the equivalence test
 Roughly:
 
     3 readings                   35 min   (0 where they are already on disk)
-    1 cold fit                    4 min   (was 44, then 10 before the compiled kernel)
-    ~29 warm candidates          72 min   (~2.5 min each)
+    the candidates' moments        0 min   (4.6 before they came off the keys)
+    1 cold fit                    2 min   (was 44, then 10, then 4 on one thread)
+    ~29 warm candidates          32 min   (~1.1 min each: 5 Hessians at 4.2 s, 6 values at 2.5)
                                 ------
-                                1.9 hours, or 1.3 on a table already read
+                                1.2 hours, or 0.6 on a table already read
 
 against the **10.5 hours** the four recorded runs averaged, and 42.0 hours for all four. Rule 2
 needs four runs and a reading does not depend on the family, so the two families share one and
@@ -409,6 +410,54 @@ extension fits, so there is no rebuild of the cell table to carry the sort for f
 one-step screen was abandoned with the number that says why: 75 minutes before the compiled
 kernel, fifteen after, and it is the only item that would touch the declared procedure. And the
 compiled kernel is done, at 2.80x and an exception declared beside rule 13.
+
+## Threads, and the gate they were measured against
+
+Rule 13 declared the gate before any of this was written: a value, a gradient and a Hessian over
+the whole training half at least **twice** as fast as the single-threaded 9.74 s -- 4.87 s or
+better -- on this machine's four physical cores, or abandoned with the number published. And the
+summation stays deterministic: the rows go into a **fixed** number of contiguous parts, each part
+sums its own in its own order, and the partials are added in the parts' own order rather than as
+they finish.
+
+| threads | value+gradient | with the Hessian | ns a row |
+|---|---|---|---|
+| 1 | 8.69 s | 11.34 s | 156 |
+| 2 | 4.65 | 6.81 | 94 |
+| **4** | **2.45** | **4.22** | **58** |
+| 6 | 2.29 | 3.77 | 52 |
+| 8 | 2.20 | 3.53 | 49 |
+
+**It passes, and both readings of the gate agree this time**: 4.22 s is inside the declared 4.87,
+and 11.34 / 4.22 = **2.69x within the run**, inside which the single-threaded figure was measured
+alongside. Against the NumPy path in the same conditions -- 31.18 s -- four threads are **7.4x**.
+The process holds 471 MB, unchanged: the threads share the mapped rows and each keeps 2.5 MB of
+accumulators.
+
+**The machine drifted 13 to 18% during the session, which is why nothing here is a ratio against
+an older number.** The single-threaded kernel read 9.74 s this morning and 11.34 this evening on
+the same source, and the restructuring looked like a 15% regression until the NumPy baseline was
+re-measured and had drifted with it, 27.4 s to 31.2. Hours of sustained load on a laptop; the
+only defensible comparison is one taken inside a run.
+
+**The objective is identical across thread counts, not merely close**, and that is the
+compensated sum: Neumaier recovers the same total whatever the grouping. The gradient and the
+curvature accumulate into per-combination bins, which are grouped differently, and agree to
+6.8e-14. Two runs at the same count agree **bit for bit** at every count tried, including counts
+that do not divide the rows and one larger than the machine's cores.
+
+And the fit is the same fit. The published model's cached optimum, re-fitted warm through the
+**four-thread** kernel on the whole half: 0.35 minutes, one evaluation, certifying it 7.73e-05
+standard errors out at a log-likelihood of -10,688,088.42593586 against the cached
+-10,688,088.42593586 -- a difference of exactly **0.0**, the same numbers the single-threaded run
+produced.
+
+**Four, and declared rather than discovered.** `config.KERNEL_THREADS` is the count, and it is a
+constant rather than `os.cpu_count()` because the count is part of what determines the answer: a
+number read off the hardware would make a fit's last digits a property of the machine, which is
+the mistake a pooled fit in this project already made once. Six and eight reach 3.77 and 3.53,
+and half a second is not worth a count that has stopped meaning anything. Every fit records what
+summed it.
 
 ## The gate for compiling anything
 

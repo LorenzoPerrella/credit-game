@@ -101,6 +101,19 @@ class Kernel:
     shape_index: int
     blocks: tuple[Rows, ...]
     total_weight: float
+    #: Threads the row loop is cut into, and **part of what determines the answer**.
+    #:
+    #: The rows go into this many contiguous parts, each part sums its own in its own order, and
+    #: the partials are added in the parts' own order rather than as they finish. So two runs at
+    #: the same count agree bit for bit and a run at a different count agrees to the last digits
+    #: of a sum over 72.7 million terms -- which is why the count is carried here and recorded
+    #: with the fit, not taken from whatever machine happens to run it. Rule 13 of
+    #: `docs/rules.md` declares that, and the reason is a pooled fit that once took its shares
+    #: from whichever worker finished first.
+    #:
+    #: One by default, because the NumPy backend is single-threaded and is what the equivalence
+    #: tests compare against; a caller that wants the cores asks for them.
+    threads: int = 1
     #: Rows evaluated at a time, and the measurement rather than a guess: swept from 2,048 to
     #: 1,048,576 on five million rows, a value-and-gradient runs 289, 347, 241, **212**, 217
     #: and 265 ns a row, so the curve is shallow and 131,072 is the floor of it. Small chunks
@@ -151,6 +164,7 @@ class Kernel:
             rows.weight,
             self.total_weight,
             curvature,
+            self.threads,
         )
         whole = np.zeros(len(x))
         whole[self._order] = gradient

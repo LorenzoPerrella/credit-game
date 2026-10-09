@@ -15,6 +15,7 @@ the optimiser backtracks from, and a wall that moves by an epsilon moves
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
 import autograd.numpy as anp
@@ -1160,3 +1161,82 @@ def test_a_reading_whose_description_cannot_be_read_is_not_called_current() -> N
     )
     assert not unknown.current
     assert unknown.describe()["parity"] == "whole"
+
+
+@pytest.mark.parametrize("threads", [1, 2, 3, 7])
+def test_the_threaded_kernel_is_the_single_threaded_one_to_the_last_bit(threads: int) -> None:
+    """Rule 13's condition on threads, and the one a parallel sum can fail silently.
+
+    The rows go into a **fixed** number of contiguous parts, each part sums its own in its own
+    order, and the partials are added in the parts' own order rather than as they finish. So
+    two runs at the same count agree **bit for bit** -- which is what this holds -- and two
+    different counts agree to the last digits of a sum over many terms, which is the other
+    assertion here.
+
+    The counts include ones that do not divide the row count, because an uneven cut is where an
+    off-by-one in the partition would land, and one larger than the machine's cores, because
+    oversubscription must not change an answer either.
+
+    **The objective is identical across counts**, not merely close, and that is the compensated
+    sum doing its work: Neumaier recovers the same total whatever the grouping. The gradient and
+    the curvature accumulate into per-combination bins and are grouped differently, so they
+    agree to a tolerance.
+    """
+    from creditsurv.models.kernel import terms
+
+    if terms._compiled is None:
+        pytest.skip("the compiled kernel is not installed (`uv sync --extra kernel`)")
+    kernel, _ = _kernel("weibull")
+    x = np.array(_POINTS["inside the data"])
+
+    one = replace(kernel, threads=1)(x, curvature=True)
+    many = replace(kernel, threads=threads)
+    first = many(x, curvature=True)
+    again = many(x, curvature=True)
+
+    assert again.value.hex() == first.value.hex(), "the same count, the same bits"
+    np.testing.assert_array_equal(again.gradient, first.gradient)
+    np.testing.assert_array_equal(np.asarray(again.curvature), np.asarray(first.curvature))
+
+    assert first.value == one.value, "the compensated sum recovers the same total"
+    np.testing.assert_allclose(first.gradient, one.gradient, rtol=1e-12, atol=1e-300)
+    np.testing.assert_allclose(
+        np.asarray(first.curvature), np.asarray(one.curvature), rtol=1e-12, atol=1e-300
+    )
+
+
+def test_more_threads_than_rows_is_not_an_error() -> None:
+    """The partition is cut by index, so it cannot hand a thread an empty slice by accident.
+
+    A fixture block is a few hundred rows and a count can be anything a caller declares, so the
+    cut is clamped to the rows rather than trusted to divide them.
+    """
+    from creditsurv.models.kernel import terms
+    from creditsurv.models.kernel.factorisation import Factorisation
+
+    if terms._compiled is None:
+        pytest.skip("the compiled kernel is not installed (`uv sync --extra kernel`)")
+    frame = _book(range(0, 1), range(0, 2))
+    weight = frame["loan_months"].to_numpy(dtype=float)
+    factorisation = Factorisation(
+        loan=LOAN, calendar=CALENDAR, age_column="age", columns=DESIGN_COLUMNS
+    )
+    rows = factorisation.add(
+        frame, _design(frame), event=frame["outcome"].to_numpy(dtype=bool), weight=weight
+    )
+    loan, calendar, loan_positions, calendar_positions = factorisation.tables()
+    kernel = Kernel(
+        distribution="weibull",
+        loan=loan,
+        calendar=calendar,
+        loan_index=loan_positions,
+        calendar_index=calendar_positions,
+        shape_index=len(DESIGN_COLUMNS),
+        blocks=(rows,),
+        total_weight=float(weight.sum()),
+        threads=rows.rows * 4,
+    )
+    totals = kernel(np.concatenate([[5.0], np.zeros(len(DESIGN_COLUMNS) - 1), [0.3]]))
+
+    assert np.isfinite(totals.value)
+    assert np.isfinite(totals.gradient).all()
