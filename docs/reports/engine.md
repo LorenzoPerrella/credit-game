@@ -331,10 +331,11 @@ that mode exists to reproduce lifelines exactly and is what the equivalence test
 Roughly:
 
     3 readings                   35 min   (0 where they are already on disk)
-    1 cold fit                    4 min   (was 44, then 10 before the compiled kernel)
-    ~29 warm candidates          72 min   (~2.5 min each)
+    the candidates' moments        0 min   (4.6 before they came off the keys)
+    1 cold fit                    2 min   (was 44, then 10, then 4 on one thread)
+    ~29 warm candidates          32 min   (~1.1 min each: 5 Hessians at 4.2 s, 6 values at 2.5)
                                 ------
-                                1.9 hours, or 1.3 on a table already read
+                                1.2 hours, or 0.6 on a table already read
 
 against the **10.5 hours** the four recorded runs averaged, and 42.0 hours for all four. Rule 2
 needs four runs and a reading does not depend on the family, so the two families share one and
@@ -347,80 +348,116 @@ it is Hessian-bound, and a Hessian over the whole half was 29.69 s of which the 
 spent on allocation and dispatch rather than on arithmetic, which is what a fused loop takes and
 Python cannot. It is 9.74 s now.
 
-## What is left, priced, and none of it taken
+## The last pass over the parquet, and what is left after it
 
-Three options remain, each worth **80 to 100 minutes across a campaign of four selections**, and
-each costing a format change or a change to a published number. Together they would take a
-campaign from about seven hours to about four. They are set out here with their arithmetic so
-that the decision takes a minute, because the decision is not a technical one: every one of them
-trades something a report says for something a run spends.
+**Steps 5 and 6 were the last thing in a selection that read the cell file for itself.** They
+need a weighted covariance of the 19 continuous candidates, and `weighted_moments` took it off
+the expanded episodes. It comes off the key frames instead, by the argument the whole encoding
+rests on: every candidate is a function of the loan combination or of the calendar key, so a sum
+over rows is a sum over combinations times the weight they carry. The weighted count per
+combination is one scatter-add over the mapped rows; a pair on the same side is then a dot
+product over 3,001 or 286,387 entries; and a pair across the sides is `A.T @ (W B)`, one gather
+and one scatter-add per calendar candidate, which is the only part that touches 72.7 million
+numbers. **Nothing new is stored** -- the rows are already on disk and the keys already carry the
+values.
 
-**1. Step 9 reads the book twice more than it needs to.** The rehearsal wrote **three** readings:
-the window, and the two origination-parity halves stability is measured on. The halves are
-*subsets of the first*, but a parity is not recoverable from an encoded row -- the row carries
-`(i, j, age, event, weight)` and the origination month is in neither key -- so each is read from
-the parquet again, 11.6 minutes apiece on the production window. Carrying the origination month
-on the calendar key **frame** (as a column, not as a design column) makes the parity a lookup by
-`j`, and each half becomes a boolean mask over the five row arrays: seconds instead of minutes.
-Cost: masking cuts the blocks differently, so step 9's two fits differ in their last digits from
-a freshly-read pair, and the published stability table moves with them. **23 minutes a
-selection.**
+Measured on the production half, 19 candidates over 72,671,500 rows:
 
-**2. The moments pass reads the whole parquet for a dozen numbers.** Steps 5 and 6 need a
-weighted covariance of 19 candidates, and `weighted_moments` gets it from the expanded episodes
--- the one pass the encoding exists to avoid, 20 minutes on the production window. Every column
-is a function of one side of the key, so the loan-by-loan and calendar-by-calendar blocks come
-off the key frames and the counts; the cross-terms are one gather and one scatter-add per
-calendar candidate over the rows, about ten seconds. Cost: the encoding has to store weighted
-sums per combination as well as row counts, which is a format change that retires the cached
-reading, and the correlation and inflation tables move in their last digits. **20 minutes a
-selection.**
+| | off the keys | off the cells |
+|---|---|---|
+| time | **19.68 s** | **273.39 s** |
+| rows, loan-months | 72,671,500 and 2,112,532,468 | the same |
+| covariance | max relative **1.06e-11** | |
+| correlation | max relative **1.07e-11** | |
+| the deviations the design is scaled by | max relative **8.89e-14** | |
 
-**3. The exact row merge, which needs the table sorted.** Measured above: 1.11x unsorted, 1.34x
-sorted, and a per-quarter sort recovers all of it. Cost: a re-aggregation of the whole book, the
-fit cache, the cached reading, and the row count every report prints as its sample size. **About
-24 minutes a selection**, and the largest presentational cost of the three.
+**14x**, and the two agree to the digits a sum over 72.7 million terms taken in two orders can.
+What the steps read off it are thresholds on a correlation and on a variance inflation factor, so
+1e-11 cannot move a decision; what it can move is the last digits of two committed tables, and
+that is the whole cost.
+
+**And the figure that justified it was wrong, by a factor of four.** The pass was described in a
+comment as "twenty minutes of parquet", which is where that number came from in this report and
+in CLAUDE.md -- a stale figure carried forward, not a measurement anybody took. It is **4.6
+minutes**. So the saving is 4.2 minutes a selection and about **17 minutes a campaign**, not the
+80 published here this morning. It is kept because it is done, verified and simpler -- the
+command loses a step and a pass -- but it is the smallest of the three options and not the
+largest, and the ordering below is corrected with it.
+
+### What is left, priced
+
+Two, and the arithmetic is per *campaign* -- four selections, two causes by two families --
+because that is the unit a decision is taken in. A reading is cached on disk and does not depend
+on the family, so a campaign pays **six** readings once per table and nothing on a re-run; what
+recurs is what nothing caches.
+
+**1. The exact row merge, which needs the table sorted** -- 1.34x on every evaluation, so a warm
+candidate from about 2.5 minutes to 1.9: **70 minutes a campaign, every campaign**, and the
+largest of the two. Measured above: 1.11x unsorted, 1.34x sorted, and a per-quarter sort recovers
+all of it. Cost: a re-aggregation of the whole book, the fit cache, the cached readings, and the
+row count every report prints as its sample size.
+
+**2. Step 9 reads the book twice more than it needs to** -- **46 minutes, once per table**, not
+per campaign, because those two readings are cached like any other. The two origination-parity
+halves are subsets of the first reading, but a parity is not recoverable from an encoded row: the
+row carries `(i, j, age, event, weight)` and the origination month is in neither key. Carrying it
+on the calendar key *frame*, or one byte of parity on the row, makes each half a boolean mask.
+Cost: masking cuts the blocks differently, so step 9's two fits differ in their last digits from a
+freshly-read pair and the published stability table moves with them.
 
 What is *not* on the list, and why. Rule 7 was re-priced on 9 October and neither given-up
 extension fits, so there is no rebuild of the cell table to carry the sort for free. Step 7's
 one-step screen was abandoned with the number that says why: 75 minutes before the compiled
 kernel, fifteen after, and it is the only item that would touch the declared procedure. And the
-compiled kernel itself is done, at 2.80x and an exception declared beside rule 13.
+compiled kernel is done, at 2.80x and an exception declared beside rule 13.
 
-### The exact row merge is 1.11x, not 1.36x, until the table is sorted
+## Threads, and the gate they were measured against
 
-The 1.36x is distinct `(i, j, age, event)` over the **whole table** -- 53,273,105 of 72,671,500
--- and the encoding reads a batch at a time, so what a merge can reach is what lands in the same
-block. Measured on the production reading, 443 blocks: **65,463,707 distinct within their own
-block, a merge of 1.1101x**. Four fifths of the saving is split across batches.
+Rule 13 declared the gate before any of this was written: a value, a gradient and a Hessian over
+the whole training half at least **twice** as fast as the single-threaded 9.74 s -- 4.87 s or
+better -- on this machine's four physical cores, or abandoned with the number published. And the
+summation stays deterministic: the rows go into a **fixed** number of contiguous parts, each part
+sums its own in its own order, and the partials are added in the parts' own order rather than as
+they finish.
 
-The reason is a sort order nobody chose. Rows that merge differ only in `delinquency_state` and
-in the three-state outcome -- the model never reads the payment state, and for one cause the
-outcome collapses to a boolean -- and both are key columns, so sorting by the key with those two
-last would put every duplicate next to its own. The aggregation does `GROUP BY ALL` a quarter at
-a time and concatenates, with no `ORDER BY` anywhere, so the order inside a quarter is whatever
-DuckDB's hash produced.
+| threads | value+gradient | with the Hessian | ns a row |
+|---|---|---|---|
+| 1 | 8.69 s | 11.34 s | 156 |
+| 2 | 4.65 | 6.81 | 94 |
+| **4** | **2.45** | **4.22** | **58** |
+| 6 | 2.29 | 3.77 | 52 |
+| 8 | 2.20 | 3.53 | 49 |
 
-**Which settles whose work it is.** The merge was deferred to the branch that rebuilds the cell
-table on the grounds that a rebuild kills the fit cache anyway; the better reason is that the
-rebuild is what can *sort* the table, and sorted it is worth 1.36x where unsorted it is worth
-1.11x. Taken without one, 11% is the whole prize for invalidating every cached fit and changing
-every published row count.
+**It passes, and both readings of the gate agree this time**: 4.22 s is inside the declared 4.87,
+and 11.34 / 4.22 = **2.69x within the run**, inside which the single-threaded figure was measured
+alongside. Against the NumPy path in the same conditions -- 31.18 s -- four threads are **7.4x**.
+The process holds 471 MB, unchanged: the threads share the mapped rows and each keeps 2.5 MB of
+accumulators.
 
-**A sort by quarter recovers all of it.** On 2007Q1's 1,040,722 cells, within blocks of 250,000:
-**1.1373x as written and 1.3398x sorted by the merge key**, which is that quarter's own
-whole-frame figure to the digit. Each quarter is already a frame in memory when the aggregation
-collapses it, so the sort costs nothing where it would happen, and the quarter's 1.3398x is
-within a per cent of the whole table's 1.3641x -- so there is nothing a global sort would add.
+**The machine drifted 13 to 18% during the session, which is why nothing here is a ratio against
+an older number.** The single-threaded kernel read 9.74 s this morning and 11.34 this evening on
+the same source, and the restructuring looked like a 15% regression until the NumPy baseline was
+re-measured and had drifted with it, 27.4 s to 31.2. Hours of sustained load on a laptop; the
+only defensible comparison is one taken inside a run.
 
-**And it is not taken, with the arithmetic that says why.** Rule 7 was re-priced on the same day
-and neither given-up extension fits the ceiling, so there is no rebuild to put the sort in. On
-its own it would cost a re-aggregation of the whole book, the fit cache, the one cached reading,
-and the published row count of every report -- to save a Hessian from 9.74 s to about 7.3, a warm
-candidate from 2.5 minutes to 1.9, and **about 1.6 hours across a campaign of four selections**.
-That is a presentational change to what every report calls its sample size for an hour and a
-half, and the decision belongs to whoever is publishing, not to whoever is optimising. The
-numbers are here so that it takes a minute.
+**The objective is identical across thread counts, not merely close**, and that is the
+compensated sum: Neumaier recovers the same total whatever the grouping. The gradient and the
+curvature accumulate into per-combination bins, which are grouped differently, and agree to
+6.8e-14. Two runs at the same count agree **bit for bit** at every count tried, including counts
+that do not divide the rows and one larger than the machine's cores.
+
+And the fit is the same fit. The published model's cached optimum, re-fitted warm through the
+**four-thread** kernel on the whole half: 0.35 minutes, one evaluation, certifying it 7.73e-05
+standard errors out at a log-likelihood of -10,688,088.42593586 against the cached
+-10,688,088.42593586 -- a difference of exactly **0.0**, the same numbers the single-threaded run
+produced.
+
+**Four, and declared rather than discovered.** `config.KERNEL_THREADS` is the count, and it is a
+constant rather than `os.cpu_count()` because the count is part of what determines the answer: a
+number read off the hardware would make a fit's last digits a property of the machine, which is
+the mistake a pooled fit in this project already made once. Six and eight reach 3.77 and 3.53,
+and half a second is not worth a count that has stopped meaning anything. Every fit records what
+summed it.
 
 ## The gate for compiling anything
 

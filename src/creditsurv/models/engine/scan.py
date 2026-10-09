@@ -489,6 +489,7 @@ def _kernel(
     scan: _Scan,
     scale: np.ndarray,
     total_weight: float,
+    threads: int = 1,
 ) -> Kernel:
     """The written-out objective over the rows this scan encoded.
 
@@ -541,4 +542,9 @@ def _kernel(
         shape_index=position,
         blocks=tuple(scan.encoded),
         total_weight=total_weight,
+        # Part of what determines the answer, so it arrives from the caller rather than from
+        # whatever machine is running: rule 13 of `docs/rules.md`, and the reason is that two
+        # runs at the same count agree bit for bit where two counts agree only to the last
+        # digits of a sum over 72.7 million terms.
+        threads=threads,
     )

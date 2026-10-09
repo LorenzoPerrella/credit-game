@@ -526,6 +526,23 @@ BANDED_REFERENCE: Final[dict[str, float]] = {
 SELECTION_RECORD: Final = "selection.json"
 
 
+#: Threads the compiled kernel cuts its row loop into, and **part of what determines the answer**.
+#:
+#: Declared here rather than read off the machine, because the rows go into this many contiguous
+#: parts and the partial sums are added in the parts' own order: two runs at the same count agree
+#: bit for bit, and two different counts agree only to the last digits of a sum over 72.7 million
+#: terms. A number taken from `os.cpu_count()` would make a fit's last digits a property of the
+#: hardware, which is the mistake a pooled fit in this project already made once -- one queue,
+#: `get` returning whichever worker finished first, two runs five significant figures apart forty
+#: evaluations later.
+#:
+#: **Four**, measured on the production half against the gate rule 13 declared: a Hessian in
+#: 4.21 s where one thread takes 11.39 and NumPy 31.18 -- 2.71x within the run, 7.4x against
+#: NumPy. Six and eight reach 3.76 and 3.55 on this machine's four physical cores, and half a
+#: second is not worth a count that has stopped meaning anything.
+KERNEL_THREADS: Final = 4
+
+
 #: How a cell's loan-months ended: in default, in a voluntary repayment, or in neither.
 #:
 #: Declared here rather than in `data.panel`, which is where the columns are, because three

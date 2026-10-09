@@ -414,6 +414,69 @@ struct Totals {
     shape_second: Compensated,
 }
 
+impl Totals {
+    /// An empty set of accumulators, sized for the two tables.
+    fn empty(loans: usize, calendars: usize, calendar_columns: usize, curvature: bool) -> Self {
+        let curved = |size: usize| vec![0.0; if curvature { size } else { 0 }];
+        Totals {
+            value: Compensated::default(),
+            by_loan: vec![0.0; loans],
+            by_calendar: vec![0.0; calendars],
+            shape_first: Compensated::default(),
+            curved_loan: curved(loans),
+            curved_calendar: curved(calendars),
+            crossed: curved(loans * calendar_columns),
+            mixed_loan: curved(loans),
+            mixed_calendar: curved(calendars),
+            shape_second: Compensated::default(),
+        }
+    }
+
+    /// Add another part's sums into this one.
+    ///
+    /// **Called in the parts' own order, never as they finish.** Floating-point addition is not
+    /// associative, so the order of this reduction is part of what determines the answer: a
+    /// pooled fit in this project once took its shares from whichever worker finished first, and
+    /// two runs of the identical model split at the twelfth digit and were five significant
+    /// figures apart forty evaluations later.
+    fn absorb(&mut self, other: &Totals) {
+        self.value.add(other.value.value());
+        self.shape_first.add(other.shape_first.value());
+        self.shape_second.add(other.shape_second.value());
+        for (into, from) in [
+            (&mut self.by_loan, &other.by_loan),
+            (&mut self.by_calendar, &other.by_calendar),
+            (&mut self.curved_loan, &other.curved_loan),
+            (&mut self.curved_calendar, &other.curved_calendar),
+            (&mut self.crossed, &other.crossed),
+            (&mut self.mixed_loan, &other.mixed_loan),
+            (&mut self.mixed_calendar, &other.mixed_calendar),
+        ] {
+            for (slot, value) in into.iter_mut().zip(from) {
+                *slot += value;
+            }
+        }
+    }
+}
+
+/// Where one part of the rows begins and ends.
+///
+/// Contiguous and **fixed**: the rows are cut into as many parts as there are threads, by index,
+/// so the same count always cuts them the same way. Nothing is stolen and nothing is rebalanced.
+fn parts(rows: usize, threads: usize) -> Vec<(usize, usize)> {
+    let threads = threads.max(1).min(rows.max(1));
+    let each = rows / threads;
+    let extra = rows % threads;
+    let mut cuts = Vec::with_capacity(threads);
+    let mut at = 0;
+    for part in 0..threads {
+        let length = each + usize::from(part < extra);
+        cuts.push((at, at + length));
+        at += length;
+    }
+    cuts
+}
+
 #[allow(clippy::too_many_arguments)]
 fn accumulate(
     family: u8,
@@ -431,30 +494,14 @@ fn accumulate(
     event: &[bool],
     weight: &[u32],
     curvature: bool,
+    from: usize,
+    to: usize,
 ) -> Totals {
     let loans = eta_loan.len();
     let calendars = eta_calendar.len();
     // The shape's jet is the same for every row: one exponential and one chain, not 72.7 million.
     let rate = rate_of(family, shape);
-    let mut totals = Totals {
-        value: Compensated::default(),
-        by_loan: vec![0.0; loans],
-        by_calendar: vec![0.0; calendars],
-        shape_first: Compensated::default(),
-        curved_loan: vec![0.0; if curvature { loans } else { 0 }],
-        curved_calendar: vec![0.0; if curvature { calendars } else { 0 }],
-        crossed: vec![
-            0.0;
-            if curvature {
-                loans * calendar_columns
-            } else {
-                0
-            }
-        ],
-        mixed_loan: vec![0.0; if curvature { loans } else { 0 }],
-        mixed_calendar: vec![0.0; if curvature { calendars } else { 0 }],
-        shape_second: Compensated::default(),
-    };
+    let mut totals = Totals::empty(loans, calendars, calendar_columns, curvature);
 
     // The five row arrays are walked by iterator, which costs nothing and reads better. The
     // **tables** are indexed with their bounds checked, and that is a decision taken after
@@ -462,7 +509,12 @@ fn accumulate(
     // the first thing it did was turn a wrong accumulator length into a segmentation fault
     // inside an ordinary fit, where a bounds check would have named the array and the index.
     // Two per cent is not what this project pays for that.
-    let rows = i.iter().zip(j).zip(age).zip(event).zip(weight);
+    let rows = i[from..to]
+        .iter()
+        .zip(&j[from..to])
+        .zip(&age[from..to])
+        .zip(&event[from..to])
+        .zip(&weight[from..to]);
     for ((((loan, key), months), exits), count) in rows {
         let loan = *loan as usize;
         let key = *key as usize;
@@ -522,7 +574,7 @@ type Evaluated<'py> = (
 #[pyfunction]
 #[pyo3(signature = (
     family, loan, calendar, x_loan, x_calendar, shape, log_entry, log_following, log_far,
-    i, j, age, event, weight, total_weight, curvature,
+    i, j, age, event, weight, total_weight, curvature, threads = 1,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn evaluate<'py>(
@@ -543,6 +595,7 @@ fn evaluate<'py>(
     weight: PyReadonlyArray1<'py, u32>,
     total_weight: f64,
     curvature: bool,
+    threads: usize,
 ) -> PyResult<Evaluated<'py>> {
     if family != WEIBULL && family != LOGLOGISTIC {
         return Err(PyValueError::new_err(
@@ -613,23 +666,78 @@ fn evaluate<'py>(
         calendar_columns,
         coefficients_calendar,
     );
-    let totals = accumulate(
-        family,
-        &eta_loan,
-        &eta_calendar,
-        shape,
-        entry,
-        following,
-        log_far,
-        calendar_table,
-        calendar_columns,
-        rows,
-        keys,
-        ages,
-        events,
-        counts,
-        curvature,
-    );
+    // **The rows in as many contiguous parts as there are threads, reduced in the parts' own
+    // order.** Each part sums its own in its own order and the partials are added by index, not
+    // as they finish: with a fixed count the answer is the same to the last bit on every run,
+    // which is what rule 13 asks of it and what a pooled fit in this project learned the hard
+    // way. The GIL is released around the whole of it -- nothing here touches a Python object.
+    let cuts = parts(rows.len(), threads);
+    let eta_loan = eta_loan.as_slice();
+    let eta_calendar = eta_calendar.as_slice();
+    let totals = py.allow_threads(|| {
+        // One part runs here rather than on a thread of its own, which saves a spawn and a join
+        // and nothing else. It was written to explain a 15% regression on the single-threaded
+        // path and did not: the machine had drifted, which the NumPy baseline confirmed by
+        // drifting with it, from 27.4 s to 31.2 on the same code. Kept because spawning one
+        // thread to do all the work is pointless, not because it was measured to be faster.
+        if cuts.len() == 1 {
+            return accumulate(
+                family,
+                eta_loan,
+                eta_calendar,
+                shape,
+                entry,
+                following,
+                log_far,
+                calendar_table,
+                calendar_columns,
+                rows,
+                keys,
+                ages,
+                events,
+                counts,
+                curvature,
+                0,
+                rows.len(),
+            );
+        }
+        let mut parts: Vec<Totals> = Vec::with_capacity(cuts.len());
+        std::thread::scope(|scope| {
+            let mut running = Vec::with_capacity(cuts.len());
+            for (from, to) in &cuts {
+                let (from, to) = (*from, *to);
+                running.push(scope.spawn(move || {
+                    accumulate(
+                        family,
+                        eta_loan,
+                        eta_calendar,
+                        shape,
+                        entry,
+                        following,
+                        log_far,
+                        calendar_table,
+                        calendar_columns,
+                        rows,
+                        keys,
+                        ages,
+                        events,
+                        counts,
+                        curvature,
+                        from,
+                        to,
+                    )
+                }));
+            }
+            for handle in running {
+                parts.push(handle.join().expect("a kernel thread panicked"));
+            }
+        });
+        let mut whole = Totals::empty(loans, calendars, calendar_columns, curvature);
+        for part in &parts {
+            whole.absorb(part);
+        }
+        whole
+    });
 
     let parameters = loan_columns + calendar_columns + 1;
     let gradient_loan = contract(loan_table, loan_columns, &totals.by_loan);

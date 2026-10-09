@@ -409,6 +409,31 @@ all measured:
   decides a fit -- identical wherever the curvature is a number, and not a number wherever the
   other is not.
 
+### Threads, declared before they are written
+
+The plan made releasing the GIL conditional on the gate passing. It did not pass, and the kernel
+was kept under the exception above, so the condition is restated here on its own terms rather
+than inherited.
+
+**The gate for threads, declared 9 October 2026 before any of it is written:** a value, a
+gradient and a Hessian over the whole training half at least **twice** as fast as the
+single-threaded **9.74 s**, so 4.87 s or better, on this machine's four physical cores. Below
+that it is abandoned and the number is published, because a parallel sum is a reproducibility
+liability and half a core's worth of speed does not pay for one.
+
+**And the summation stays deterministic, which decides the design.** The rows are split into a
+**fixed** number of contiguous parts, each part is summed in its own order, and the partial sums
+are added **in the parts' own order** -- not as they finish. That is the lesson a pooled fit
+already taught this project: one queue served every worker, `get` returned whichever finished
+first, and two runs of the identical prepayment fit split at the twelfth digit and were five
+significant figures apart forty evaluations later.
+
+So the **thread count is part of what determines the answer**, exactly as the batch size is for a
+reading: two runs at the same count agree **bit for bit**, a run at a different count agrees to
+the last digits of a sum over 72.7 million terms, and the count is recorded with the fit rather
+than taken from whatever machine happened to run it. No work-stealing, no unordered reduction, no
+atomic accumulation.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.

@@ -78,7 +78,35 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
   backtest windows. A whole selection was measured at **2.75 GB** across its parent and three
   workers, where one fit holding the half had been 15 GB. `split_cells` remains for a caller
   that genuinely needs both halves as frames; on this table that is nobody.
-- **The views are sums.** Every calibration table is loan-months at risk, the defaults among
+- **The compiled kernel runs on four threads, and the count is declared rather than discovered.**
+Rule 13's gate for them, written first: twice the single-threaded 9.74 s or abandoned. Measured on
+the whole half, a Hessian at 1, 2, 4, 6 and 8 threads reads **11.34, 6.81, 4.22, 3.77 and 3.53
+s** -- so four passes both readings of the gate, 4.22 inside the declared 4.87 and 2.69x within
+the run, and **7.4x against NumPy's 31.18 s** in the same conditions. The rows go into a fixed
+number of contiguous parts and the partials are added **in the parts' own order**, so two runs at
+the same count agree bit for bit; `config.KERNEL_THREADS` is a constant and not `os.cpu_count()`,
+because a number read off the hardware would make a fit's last digits a property of the machine.
+Every fit records what summed it. **The objective is identical across counts** -- the compensated
+sum recovers the same total whatever the grouping -- and the published model re-fitted warm at
+four threads lands on the cached optimum with a difference of exactly 0.0.
+
+**And the machine drifted 13 to 18% across one session**, which is why no ratio here is taken
+against a number from earlier in the day: the single-threaded kernel read 9.74 s in the morning
+and 11.34 in the evening on the same source, and that looked like a regression until the NumPy
+baseline was re-measured and had drifted with it, 27.4 to 31.2 s. Measure the baseline in the
+same run or do not quote a ratio.
+
+**Steps 5 and 6 read nothing of their own any more.** They need a weighted covariance of the 19
+continuous candidates, and that was the last pass over the parquet the encoding had not replaced.
+It comes off the key frames by the same argument: a sum over rows is a sum over combinations times
+the weight they carry, with one gather and one scatter-add per calendar candidate for the terms
+that cross the two sides. Measured on the production half: **273.39 s to 19.68**, a 14x, with the
+covariance agreeing to **1.06e-11** and the deviations to 8.89e-14. **And the figure that
+justified it was wrong by a factor of four**: "twenty minutes of parquet" was carried in a comment
+and never measured -- it is 4.6 minutes, so the saving is 17 minutes a campaign and not 80.
+Nothing new is stored for it.
+
+**The views are sums.** Every calibration table is loan-months at risk, the defaults among
   them and the defaults expected, grouped by an age, a year, a segment or a decile -- and sums
   add over batches, so one pass fills every table for every segment and every family.
   `survival_by_age` and `actual_expected` are each split into the additive part and the
