@@ -12,16 +12,15 @@ week's data.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import pickle
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
 from creditsurv.config import processed_dir
+from creditsurv.data.artefacts import FITS, fingerprint
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
@@ -258,8 +257,9 @@ def cells_identity(policy: str = DEFAULT_POLICY) -> str:
     return f"{path.name}:{source.st_size}:{source.st_mtime_ns}"
 
 
-#: Where fitted models are cached, under the processed directory.
-FITS_DIRNAME = "fits"
+#: Where fitted models are cached, under the processed directory. The store owns the path now;
+#: this name is kept because the reports and the CLI print it.
+FITS_DIRNAME: Final = FITS.kind
 
 
 def fit_fingerprint(**parts: object) -> str:
@@ -273,15 +273,14 @@ def fit_fingerprint(**parts: object) -> str:
     not catch a change that leaves the row count alone -- a re-aggregation with
     different cut points, say -- which is why the cache is opt-in rather than automatic.
     """
-    rendered = "|".join(f"{key}={parts[key]!r}" for key in sorted(parts))
-    return hashlib.sha256(rendered.encode()).hexdigest()[:16]
+    return fingerprint(**parts)
 
 
-def fit_path(fingerprint: str) -> Path:
-    return processed_dir() / FITS_DIRNAME / f"{fingerprint}.pickle"
+def fit_path(name: str) -> Path:
+    return FITS.path(name)
 
 
-def save_fit(result: object, fingerprint: str, description: dict[str, object]) -> Path:
+def save_fit(result: object, name: str, description: dict[str, object]) -> Path:
     """Persist a fitted model so a later run need not spend the hours again.
 
     A fit on the whole population is two and a half hours. A run that completes one and
@@ -291,12 +290,10 @@ def save_fit(result: object, fingerprint: str, description: dict[str, object]) -
     The description is written beside the pickle as readable JSON, because a directory
     of hashed filenames is unusable otherwise.
     """
-    path = fit_path(fingerprint)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as handle:
+    with FITS.writing(name) as partial, partial.open("wb") as handle:
         pickle.dump(result, handle, protocol=pickle.HIGHEST_PROTOCOL)
-    path.with_suffix(".json").write_text(json.dumps(description, indent=2, default=str) + "\n")
-    return path
+    FITS.describe(name, description)
+    return FITS.path(name)
 
 
 def find_fits(**criteria: object) -> list[tuple[str, dict[str, object]]]:
@@ -311,38 +308,34 @@ def find_fits(**criteria: object) -> list[tuple[str, dict[str, object]]]:
     A criterion of ``None`` requires the key to be **absent**, which is how a report's fit is
     told from a selection's: one carries ``purpose`` and the other does not.
     """
-    directory = processed_dir() / FITS_DIRNAME
-    if not directory.exists():
-        return []
-    found: list[tuple[float, str, dict[str, object]]] = []
-    for path in directory.glob("*.json"):
-        try:
-            described = cast("dict[str, object]", json.loads(path.read_text()))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if any(
-            (key in described) if wanted is None else (described.get(key) != wanted)
-            for key, wanted in criteria.items()
-        ):
-            continue
-        found.append((path.stat().st_mtime, path.stem, described))
-    return [(fingerprint, described) for _, fingerprint, described in sorted(found, reverse=True)]
+    return FITS.find(**criteria)
 
 
-def load_fit(fingerprint: str) -> object | None:
+def load_fit(name: str) -> object | None:
     """Read a cached fit, or ``None`` if there is not a usable one.
 
     An unreadable cache is a miss, not an error. A pickle is tied to the versions of
     lifelines and numpy that wrote it, so an upgrade should cost a refit rather than a
     traceback.
+
+    **The reason is logged with it**, because the reasons are not interchangeable. A version
+    skew wants a refit and there is nothing to do about it; a `ModuleNotFoundError` wants a
+    module that moved to stay importable under its old name, which is what
+    `creditsurv/models/blocks.py` is for and what a run that silently refits everything would
+    never have told anyone.
     """
-    path = fit_path(fingerprint)
+    path = FITS.path(name)
     if not path.exists():
         return None
     try:
         with path.open("rb") as handle:
             loaded: object = pickle.load(handle)
         return loaded
-    except Exception:
-        _LOGGER.warning("Cached fit at %s could not be read; refitting.", path)
+    except Exception as unreadable:
+        _LOGGER.warning(
+            "Cached fit at %s could not be read (%s: %s); refitting.",
+            path,
+            type(unreadable).__name__,
+            unreadable,
+        )
         return None

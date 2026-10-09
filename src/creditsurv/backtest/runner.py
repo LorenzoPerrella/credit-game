@@ -137,7 +137,7 @@ class Acceptance:
 
 
 #: The criteria every backtest in this project is judged against.
-ACCEPTANCE = Acceptance()
+ACCEPTANCE: Final = Acceptance()
 
 #: The reporting dates the model is cut at, and how long each is judged on. From
 #: `docs/rules.md`, fixed before the runs.

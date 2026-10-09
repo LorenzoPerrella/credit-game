@@ -122,7 +122,7 @@ covariates too — which is still a single parametric model, not a segmentation.
 
 ### 5. Weighted correlation — which pairs say the same thing?
 
-`explore.weighted_correlation` and `explore.collinear_pairs`.
+`models.selection.weighted_correlation` and `explore.collinear_pairs`.
 **Threshold: |ρ| > 0.8 → keep one.**
 
 Pairs are **reported, not resolved**. Which of two collinear covariates to keep is a

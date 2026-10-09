@@ -23,8 +23,23 @@ dependencies = [
     "duckdb>=1.5.5",
 ]
 
+# The compiled kernel is **optional at import**: `uv sync --extra kernel` builds it, and
+# everything works without it. Rule 13 of docs/rules.md says why the NumPy path stays
+# normative, and nobody needs a Rust toolchain to run this project.
+[project.optional-dependencies]
+kernel = ["creditsurv-kernel"]
+
 [project.scripts]
 creditsurv = "creditsurv.cli:app"
+
+# One workspace, two members: this package stays pure Python under hatchling, and the crate is
+# built by maturin beside it. The boundary between the two languages is one function; see
+# `crates/creditsurv-kernel/src/lib.rs` and rule 13.
+[tool.uv.workspace]
+members = ["crates/creditsurv-kernel"]
+
+[tool.uv.sources]
+creditsurv-kernel = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -78,8 +93,21 @@ warn_unreachable = true
 
 # lifelines and autograd ship no type information. Everything the project
 # itself exposes stays strictly typed; only the third-party surface is relaxed.
+#
+# `creditsurv_kernel` is the compiled kernel, and it is in this list for a reason beyond
+# convenience: it is **optional at import**, so the type checker has to pass whether or not the
+# extension is installed. What is checked instead is the behaviour -- the equivalence tests
+# compare it against the NumPy kernel, which is normative.
 [[tool.mypy.overrides]]
-module = ["lifelines.*", "autograd.*", "formulaic.*", "scipy.*", "pyarrow.*", "plotly.*"]
+module = [
+    "lifelines.*",
+    "autograd.*",
+    "formulaic.*",
+    "scipy.*",
+    "pyarrow.*",
+    "plotly.*",
+    "creditsurv_kernel.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

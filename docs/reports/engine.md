@@ -62,6 +62,12 @@ Measured on the training window -- 72,671,500 cells over 2.11 billion loan-month
 | the same with the LTV band, which `ltv_change` needs | **153,309** |
 | rows the likelihood distinguishes, cause `default` | **53,273,105** of 72,671,500 (1.36x) |
 
+The 153,309 is what the calendar *can* distinguish; the key a reading actually builds is
+**152,565** for the published model's six macro columns, because a few hundred (month, age,
+band) triples land on identical macro values and are one key. A reading covering all fifteen
+candidates finds **286,387**, which is a different quantity and not a disagreement: see the end
+of "One reading, many fits".
+
 The 1.36x is the exact merge: the model never reads `delinquency_state`, and for one cause
 the three-state outcome collapses to a boolean, so rows agreeing on the design and on their
 bounds are one row with the weights summed. It is smaller than it looks like it should be,
@@ -106,6 +112,12 @@ accumulator and three small matrix products. On arrays of the real cardinalities
 |---|---|---|---|---|---|
 | 242,419 | 0.061 s | 0.171 s | 253 ns | 705 ns | 0.01 GB |
 | 53,273,105 | **10.2 s** | **29.9 s** | 192 ns | 562 ns | **0.81 GB** |
+| 72,671,500, the half as it is fitted | **12.95 s** | **29.69 s** | 178 ns | 409 ns | 1.10 GB |
+
+The third row is the one to quote and the one the gate below is declared against: the whole
+training half, unmerged, at the 26 parameters rule 12 produced, read from the cached encoding
+in 0.45 s and expanded from the keys in 0.48. The process holds **467 MB** -- the rows are a
+memory map, so the gigabyte of them is never resident.
 
 Against the table at the top -- 970 ns a row for a value-and-gradient and 6,634 with a Hessian
 -- that is **5.1x** and **11.8x**. A pass over the training half goes from 57.8 s to 11.4, and
@@ -126,6 +138,44 @@ product does, and carrying them through a gradient-only evaluation cost 420 ns a
 289, 347, 241, 212, 217 and 265 ns, so small chunks pay numpy's per-call overhead, large ones
 leave cache, and neither is worth more than about 30%. What the chunking is for is a working set
 that does not grow with the table.
+
+### The chain's own waste, removed -- and what that says about the rest
+
+The chain performed **178 array operations a chunk** where the mathematics needs about forty,
+and four of them were waste rather than generality:
+
+* a row reads the cumulative hazard at three times and the survival at **two**, and the
+  entry's survival was computed and thrown away -- 19 operations including two exponentials;
+* the log-logistic's `log(safe_exp(eta))` does not depend on the time and was recomputed for
+  each of the three -- 52 operations;
+* `safe_exp(-H)` negated six arrays to get its argument, where the chain gives `exp(-x)` from
+  `f' = -f` and `f'' = f` directly;
+* and `a - b` was `a + (-b)`, twelve arrays for six.
+
+Removed, with the answer identical to the last bit at three points including one far out where
+every clip binds, on the whole training half at 26 parameters:
+
+| | value+gradient | with the Hessian |
+|---|---|---|
+| Weibull, before | 186 ns/row | 471 ns/row |
+| Weibull | **166** | **415** |
+| log-logistic, before | 298 | 630 |
+| log-logistic | **271** | **557** |
+
+**12% on a Hessian in both families** -- and the interesting part is that it is only 12% for a
+quarter fewer operations. Timing the halves separately, on the real tables, says where a
+Hessian's 409 ns a row goes: the **jet 67%**, the **scatter-adds 18%**, the gathers and the
+masks 4%, and the rest the dots and the final matrix products. So the chain is the cost, but
+its cost is not its arithmetic: 178 traversals of a 512 KB array should be about 5 ms a chunk
+and the jet takes 19. What is left is **allocation and dispatch** -- a fresh array per
+operation, and numpy's per-call overhead -- which is also why the chunk sweep has a floor in
+the middle: small chunks pay the dispatch and large ones pay the memory. Neither is arithmetic,
+and neither is reachable from Python.
+
+The sweep was retaken after the change and its floor moved from 131,072 rows to 65,536, worth
+nothing on the Weibull and 2% on the log-logistic. **Not taken**: the chunk is where the sums
+are cut, so moving it re-partitions every sum and a re-run of a cached fit would differ in its
+last digits. Two percent does not buy that.
 
 The row itself is **fifteen bytes** -- four for each index, two for the age, one for the exit and
 four for the weight, which is a count of loan-months and therefore an integer -- against the 208
@@ -197,6 +247,56 @@ which combinations were new to it is two passes over 250,000 rows for each of 44
 million interpreted iterations, and it made an encoding *slower* than the scan. `np.unique`
 with `return_index` does it in one sorted call.
 
+### The reading is written once, and the second one is half a second
+
+A reading involves no formula, so nothing in it depends on the model: it is parquet, the macro
+family and the key coding. Written to disk and mapped back it stops being a cost at all.
+Measured on the production training half, the same covering set a selection needs:
+
+| | |
+|---|---|
+| the reading | **693.9 s** and **717.9** on a second run, 72,671,500 cells, 1,440,771 defaults, 443 blocks |
+| its footprint | **2.37 GB** -- one batch expanded, beside the rows it keeps |
+| the same reading in the table above | 10.88 min and 2.88 GB, measured separately |
+| mapped back, in a new process | **0.4 s**, a **1,735x** saving, and 7.98 s for the whole process |
+| its footprint | **0.63 GB**: the 1.09 GB of rows is mapped, not resident |
+| what it occupies | **1.0 GB** on disk, against 448 MB of parquet it was read from |
+| two independent readings | the five row arrays **byte-identical**, `shasum` on 1.09 GB |
+| the fit from it | the same log-likelihood, coefficients and standard errors, **bit for bit** |
+
+The third row is the same reading measured earlier in this report, and the spread -- 10.88 to
+11.97 minutes, 2.37 to 2.88 GB -- is the repeatability to expect of a figure dominated by
+parquet and a laptop's page cache. It is not a disagreement and nothing here turns on it.
+
+The last two rows are the claim worth making, and the second is the one that matters. A reading that came back *almost* the
+same would be a different model published under the same name, and it can be exact because
+nothing is recomputed: the rows come back as views of a memory map, the keys in the order their
+codes were handed out in, and the blocks cut where they were cut -- and the blocks are where the
+sums are cut, which is the one thing a reading can change about an objective, floating-point
+addition not being associative. That is also why the batch size is in the name.
+
+Restoring the key tables is **replaying the keys, not the rows**: the key frames come back in
+the order the codes were handed out in and are registered in that order, so every combination
+keeps the index the saved rows point at. The categorical levels are re-applied from the
+declaration rather than taken from parquet, because what a formula's expansion reads off a key
+frame is its *dtypes*: a column that came back as plain strings would hand `C(purpose)` whatever
+reference level pandas sorted first.
+
+**The name is the reading, not the run.** It covers the cell table's identity, the two covariate
+lists, the cause, the parity, the window, the batch size and the macro panel's own numbers --
+clipped to the months the window can reach, because the panel is live FRED data and a month
+published above the cut cannot have entered a reading that stops below it. So rule 2's four runs
+share **six** readings, two causes by three samples, where they used to pay twelve; and a run
+that stops now picks up at the fit it was on instead of at the reading, which on a job that
+takes a day matters more than the minutes.
+
+**And the key is the covering set, which is why two numbers are right.** The table above reads
+152,565 calendar keys for the *selected* model's six macro columns and the selection's reading
+finds **286,387**, on the same cells: a selection has to cover all fifteen candidates before the
+first specification exists, and two of the ones it drops -- `volatility_change` and
+`inflation_change` -- are changes since origination, so they split a calendar key the selected
+model leaves whole. 1.88x the key, for a reading that serves every candidate.
+
 ## Newton instead of the optimiser's long path
 
 The cold fit's 142 SLSQP evaluations at 17 seconds each were 96% of its 43.79 minutes, while
@@ -230,19 +330,22 @@ that mode exists to reproduce lifelines exactly and is what the equivalence test
 
 A selection run now comes to roughly:
 
-    3 readings                   32 min
+    3 readings                   35 min   (0 where they are already on disk)
     1 cold fit                   10 min   (was 44)
     ~29 warm candidates         164 min   (5.67 min each)
                                 ------
-                                3.4 hours
+                                3.5 hours, or 2.9 on a table already read
 
-against the **10.5 hours** the four recorded runs averaged, and 42.0 hours for all four. The
-reading is no longer the problem and the optimiser's path is no longer the problem; what is left
-is the **curvature**. A warm candidate's 5.67 minutes are five Hessians at 39 seconds and six
-evaluations at 17, so it is Hessian-bound, and a Hessian is where a fused loop has most to
-take: `_times` -- one array multiply -- is 46% of a call, because the chain rule performs about
-180 of them per chunk where the mathematics needs forty, and each allocates and traverses an
-array. The primitives themselves are 1.3 ns a row for an exponential and 0.3 for a multiply.
+against the **10.5 hours** the four recorded runs averaged, and 42.0 hours for all four. Rule 2
+needs four runs and a reading does not depend on the family, so the two families share one and
+the two causes do not: **70 minutes of reading across the four** instead of 140, and none at all
+on a re-run.
+
+The reading is no longer the problem and the optimiser's path is no longer the problem; what is
+left is the **curvature**. A warm candidate's 5.67 minutes are five Hessians and six
+evaluations, so it is Hessian-bound, and a Hessian over the whole half is 29.69 s of which the
+jet is 67% -- spent on allocation and dispatch rather than on arithmetic, which is what a fused
+loop takes and Python cannot.
 
 So the order is: the compiled kernel on the curvature, then the exact row merge (1.36x,
 measured) and step 7's screen.
@@ -253,19 +356,146 @@ The compiled kernel is measured **against the NumPy above**, not against autogra
 against autograd would credit a compiled language with removing a tape that NumPy already
 removed.
 
-The profile says where the remaining time goes, and it is not arithmetic: `_times` -- one array
-multiply -- was 46% of a call, because the chain rule performs about 180 of them per chunk where
-the mathematics needs perhaps 40, and each one allocates and traverses an array. The primitives
-themselves are 1.3 ns a row for an exponential, 0.3 for a multiply, 1.7 for a gather and 3.1 for
-a scatter-add into 153,309 bins. A fused loop holds the six jet components in registers, lets
-the compiler delete the structural zeros outright, and traverses the fifteen bytes of a row once.
+And what is left is not arithmetic. Of a Hessian's 409 ns a row the jet is 67%, the
+scatter-adds 18% and the gathers 4% -- and the jet's 178 array operations a chunk should cost
+about 5 ms by the memory they move where they cost 19, the difference being a fresh array per
+operation and numpy's per-call dispatch. That is also why removing a quarter of those operations
+bought 12% and not 25%, and why the chunk sweep has a floor in the middle rather than at an end:
+small chunks pay the dispatch, large ones pay the memory. The primitives themselves are 1.3 ns a
+row for an exponential, 0.3 for a multiply, 1.7 for a gather and 3.1 for a scatter-add. A fused
+loop holds the six jet components in registers, lets the compiler delete the structural zeros
+outright, and traverses the fifteen bytes of a row once -- so what it removes is exactly the
+part that is not arithmetic.
 
-So the gate, if it is still worth passing: **value+gradient+Hessian over the whole half at
-least three times faster than 29.9 s, with resident memory no higher than the 1.31 GB measured
-here.**
+So the gate, declared before anything is written: **value+gradient+Hessian over the whole
+training half -- 72,671,500 rows at 26 parameters -- in at most 9.90 s against the 29.69
+measured here, with resident memory no higher than 1.31 GB.** Three times, on the same rows,
+the same parameters and this machine. If it does not pass, it is abandoned and the number is
+published here.
 
-**But the measurement above has moved it down the queue.** A fit is now 53 seconds of
-arithmetic behind twelve minutes of reading, so compiling the evaluation would take the 53 to
-perhaps fifteen and leave the twelve minutes exactly where they are. Removing the re-scan is
-worth an order of magnitude on a selection where the compiled kernel is worth a few per cent,
-and it should be done first. The gate stands; the priority does not.
+**It is third in the queue, not first, and the reason is still the arithmetic above.** A
+selection is now three readings and thirty fits, and a fit is a handful of Hessians: compiling
+the evaluation takes a warm candidate's 5.67 minutes to perhaps two and a selection's 3.5 hours
+to about 1.6. Worth having, after the two changes that cost nothing and cannot fail.
+
+## The compiled kernel, measured against that gate
+
+`crates/creditsurv-kernel` is the same arithmetic as a fused loop: one `#[pyfunction]`, numpy
+arrays of fixed dtype across the boundary, and the six jet components in registers instead of
+six arrays over a chunk. It is built by `uv sync --extra kernel`, optional at import, and
+`models/kernel/terms.py` stays normative -- the suite runs the equivalence tests against each
+backend that is present and passes with neither.
+
+Three readings on the whole training half, 72,671,500 rows at 26 parameters, one thread:
+
+| | NumPy | compiled | ratio |
+|---|---|---|---|
+| value+gradient | 12.17, 12.18, 12.25 s | **7.79, 7.72, 7.72 s** | **1.57x** |
+| with the Hessian | 26.86, 27.55, 27.44 s | **9.73, 9.76, 9.74 s** | **2.80x** |
+| resident | 0.47 GB | **0.47 GB** | ceiling 1.31 |
+
+The compiled figure is stable to **0.15%** across runs; the NumPy baseline is not, and that
+matters below.
+
+**The verdict is that it does not pass, and the reason the verdict needs a paragraph is a defect
+in how the gate was written.** It was declared two ways in the same sentence -- "in at most
+**9.90 s** against the **29.69** the NumPy kernel is measured at" and "**three times**, on the
+same rows and this machine" -- and the two disagree: 9.74 s is inside 9.90, and 2.80x is not
+three. What settles it is that the **absolute** number is not reproducible. The same NumPy code,
+unchanged, measures 26.86 to 29.69 s across this session's runs, an 8% spread with machine state;
+the ratio measured inside one run does not move. So the meaningful quantity is the ratio, the
+ratio is 2.80x with a spread of 0.05, and three is outside it. Reading the 9.74 as a pass would
+be choosing the thermometer that suits: the final run's baseline was the fastest of six.
+
+**It is kept, and the exception is declared in rule 13.** The condition the owner attached was
+that the logic be airtight rather than that the number be three, so what follows is what that
+cost and what it bought.
+
+**The two backends on the production table, element by element.** 72.7 million rows at the
+published specification, both families, at the seed and at a point in the data:
+
+| | agreement |
+|---|---|
+| the objective | **1.2e-15** relative, and 1.97e-16 on one point |
+| the gradient, 26 entries | **1.1e-13** at worst |
+| the curvature, 676 entries | **1.7e-13** of the largest entry |
+
+The curvature's worst *elementwise* relative figure is 4.9e-10, and it is on an entry of 6.19
+against a largest entry of 8.09e+07 -- seven orders below the matrix's scale, where a relative
+measure means nothing. The absolute spread over the whole Hessian is 1.35e-05.
+
+**And every fit on disk was unreadable until this was found.** The engine was one module before
+this branch, and a pickle resolves a class by importing the module it was written from: all 176
+cached fits name `creditsurv.models.blocks.BlockFit`, which the split into `models/engine/` had
+removed. `load_fit` turns an unreadable pickle into a **miss** -- deliberately, because a pickle
+is tied to the versions that wrote it -- so the cache went silently empty and a run would have
+started cold. `creditsurv/models/blocks.py` keeps the old name importable, a test holds it to the
+class so nobody tidies it away as the decoy it looks like, and `load_fit`'s warning now names the
+exception, because a `ModuleNotFoundError` wants a shim where a version skew wants a refit. It
+was found by trying to load a real fit, not by a test.
+
+**Those figures are two orders better than the first ones, and the reason is a summation order.**
+Three of the accumulators are scalars over every row, and 72.7 million sequential additions into
+one `f64` is the worst order there is: the error grows with the count, where NumPy's `bincount`
+and `dot` sum pairwise and it grows with its square root. The two backends read 4.0e-11 apart on
+the objective, 7.9e-11 on the gradient -- against the **1.97e-16** that 443 blocks and 800
+reproduce, which is this project's own standard for two orderings of one sum. Neumaier's
+compensation on those three sums closes it for a handful of flops a row, inside the noise of the
+evaluation, and it is deterministic: fixed order, no reassociation, the same bits every run. The
+gradient and the curvature need none of it -- they accumulate into 3,001 and 286,387 bins, so
+each sums about 24,000 terms rather than 72.7 million.
+
+**And the proof that settles it is a fit.** The published model's optimum in the cache was found
+by the NumPy kernel; re-fitted warm from its own coefficients through the **compiled** one, on
+the whole training half:
+
+| | |
+|---|---|
+| time | **0.30 minutes**, 1 evaluation, 0 Newton steps |
+| where it began, and ended | **7.73e-05 standard errors** from the optimum |
+| log-likelihood | **-10,688,088.42593586**, against the cached -10,688,088.42593586 |
+| the difference | **0.0** |
+| coefficients | moved at most **7.1e-15 standard errors** |
+| standard errors | differ by at most **3.5e-13** relative |
+| resident | 0.47 GB |
+
+So the compiled kernel certifies the NumPy kernel's optimum as the optimum, on the production
+table, with the polish's own measure. That is the equivalence that matters: not that two arrays
+of numbers are close, but that a fit lands in the same place.
+
+**One difference is declared rather than fixed.** Outside the data the log-logistic's Hessian
+overflows and the two reach a different flavour of non-finite in the same entries: `-inf` from
+the compiled loop where the NumPy reads `nan`. It is structural. The Python chain carries a
+structural zero as the literal `0.0` and drops the term, so `0 * inf` never arises there, while
+an array element that is merely numerically zero gets no such treatment and poisons the sum; the
+compiled loop takes the shortcut on the value instead. What the engine reads is the objective,
+which agrees there to the last bit, and a step to a non-finite curvature is refused by the polish
+either way -- so the test holds the claim that decides a fit: identical wherever the curvature is
+a number, and not a number wherever the other is not.
+
+**Where the remaining 20% is, measured rather than assumed.** The obvious guess is libm -- a row
+needs three cumulative hazards, two survivals and one logarithm, six transcendentals, and no loop
+engineering removes them. It is wrong. Rebuilt with every `exp` and `ln` replaced by an affine
+expression, which keeps the control flow and destroys the answer, the compiled Hessian reads
+**92 ns a row against 137**: the transcendentals are **33%** and the jet chain is the other two
+thirds. There is room, and it is not in libm.
+
+Two things that were tried and are recorded because they look like they should work:
+
+* **`-C target-cpu=native` is a regression**, 11.71 s against 10.18 on the same source. The row
+  loop is scalar and dependent, so there is nothing to vectorise, and the instruction selection
+  it chooses instead is worse. Removed.
+* **Panics unwind rather than abort**, which was not the first setting. `panic = "abort"` is
+  the faster one in principle and what it does here is kill the interpreter with no traceback in
+  the middle of a fit that may be an hour old; unwinding lets pyo3 raise a Python exception the
+  engine can see. Measured both ways in the same conditions: **10.19 s against 10.27**, 0.8%,
+  inside the noise. An earlier reading of 6.5% was machine state and is retracted.
+* **Unchecked indexing bought 2% and cost a segmentation fault.** Replacing the tables' bounds
+  checks with `get_unchecked` took a Hessian from 10.18 s to 9.96, and the first thing it did was
+  turn a wrong accumulator length into a crash **inside an ordinary fit**: a model with no
+  calendar covariate hands over a table of *n* rows and **zero** columns, and the length had been
+  derived by dividing the flat slice by the column count, which gives zero rows. The
+  accumulators were allocated empty and the loop wrote past them. A bounds check would have named
+  the array and the index; two per cent is not what this project pays for that. The checks are
+  back, the length comes from the shape, and `tests/test_kernel.py` fits a loan-only model through
+  both backends.

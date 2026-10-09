@@ -28,6 +28,9 @@ from typing import Final, TypeAlias
 
 import duckdb
 
+from creditsurv.config import CENSORED, DEFAULT_CAUSE, PREPAYMENT_CAUSE
+from creditsurv.data.ingest import completed_files
+
 #: What the readers accept: nothing (use the manifest), one path, or many.
 PathSpec: TypeAlias = str | Path | Sequence[str] | None
 
@@ -372,15 +375,27 @@ def state_of_the_book_sql(
         t.age,
         t.period_key,
         t.eltv,
-        COALESCE(t.defaulted AND t.period_key = t.terminal_period, FALSE) AS event,
-        COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE)  AS prepaid,
         COALESCE(t.left_the_book AND t.period_key = t.terminal_period, FALSE)
                                                                          AS left_the_book,
         t.previous_status,
+        -- **One spelling of what ended the month.** This used to be three in this one
+        -- SELECT -- a boolean `event`, a boolean `prepaid` and this column -- and the two
+        -- booleans were not the same fact: `prepaid` is a prepayment code in the terminal
+        -- month and takes no view of a default in it, where `outcome` gives default
+        -- precedence. Measured over the whole book, 52,357 loan-months are both: 3.07% of
+        -- the 1,704,432 defaults and 0.15% of the 34,316,184 prepayments, counted once as a
+        -- default by every model and once again as a prepayment by the site's CPR.
+        --
+        -- The precedence here is the one rule 1 states: at three missed payments the loan has
+        -- defaulted by definition, so a payoff after that is a recovery and not a voluntary
+        -- prepayment. The cells carry this column and both hazards are fitted on it, so it is
+        -- the definition; a caller that wants a boolean writes `outcome = 'default'`.
         CASE
-            WHEN COALESCE(t.defaulted AND t.period_key = t.terminal_period, FALSE) THEN 'default'
-            WHEN COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE) THEN 'prepayment'
-            ELSE 'none'
+            WHEN COALESCE(t.defaulted AND t.period_key = t.terminal_period, FALSE)
+                THEN '{DEFAULT_CAUSE}'
+            WHEN COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE)
+                THEN '{PREPAYMENT_CAUSE}'
+            ELSE '{CENSORED}'
         END                                                              AS outcome,
         o.*
     FROM truncated t JOIN orig o USING (loan_identifier)
@@ -508,8 +523,10 @@ CATEGORICAL: Final[dict[str, str]] = {
         "WHEN insurance_coverage = 0 THEN 'uninsured' END"
     ),
     # Screened like everything else rather than ingested and forgotten. It reached the
-    # parquet without appearing in any screening table or in DEGENERATE_FIELDS, which is
-    # the gap that let three performance fields disappear silently.
+    # parquet without appearing in any screening table or in `aggregate.DEGENERATE_FIELDS`,
+    # which is the gap that let three performance fields disappear silently. That register is
+    # now held to its consequence by a test: a field taking one value is in no key and in no
+    # formula (`tests/test_aggregate.py`).
     #
     # Mapped from the field, not from the layout. The layout calls a blank "not super
     # conforming" and the first mapping turned NULL into N, but across all 49.2 million
@@ -578,12 +595,12 @@ def connect() -> duckdb.DuckDBPyConnection:
 def sources(spec: PathSpec, kind: str) -> list[str]:
     """Turn a caller's argument into a concrete list of parquet paths.
 
-    The manifest is read here rather than imported at the top, because `data.ingest` imports the
-    record layout from `data.freddiemac` and that module needs the event definition from this
-    one. A function-local import is how the rest of this package breaks such a knot.
+    ``None`` means every quarter the manifest records as complete, which is what every command
+    that reads the whole book passes. This import used to be taken inside the function, because
+    `data.ingest` reads the record layout from `data.freddiemac` and that module read the event
+    definition from this one -- a cycle, broken by hand. The loader that closed it now lives in
+    `tests/freddiemac_sample.py`, and there is no knot left to break.
     """
-    from creditsurv.data.ingest import completed_files
-
     if spec is None:
         return completed_files(kind)
     if isinstance(spec, str | Path):

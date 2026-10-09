@@ -42,7 +42,7 @@ is the most common way these models go wrong.
 | 1. Raw macro | one month of one economic series | 354 months × 14 series |
 | 2. Origination record | one loan, as underwritten | **49,186,171** |
 | 3. Performance record | one loan in one calendar month | **2,881,397,251** |
-| 4. Weighted cell | a covariate combination at one age, with a count | **63,639,116** under `exclude` |
+| 4. Weighted cell | a covariate combination at one age, with a count | **91,575,827** under `exclude` |
 | 5. Model matrix | one *episode*, carrying that count as a weight | same as layer 4 |
 
 Layer 4 is where this project differs from a textbook treatment, and it is not an
@@ -253,18 +253,26 @@ fitter is actually handed.
 | `vintage` | str | Origination quarter, `YYYYQn`, read off the file name |
 | `origination_month` | int | Origination month, as `year × 12 + month − 1`. The calendar is read from it: with only the quarter, every macro series was read about two months late (M1) |
 | `age` | int | Loan age in months, the start of the episode |
-| `event` | bool | Whether this cell's loan-months ended in default |
+| `outcome` | category | What the cell's loan-months ended in: `default`, `prepayment` or `none`. **Three states, not a boolean** -- prepayment is a competing risk, and a boolean `event` column cannot say which exit happened. Default takes precedence where a terminal month is both, which is 52,357 loan-months of the book |
 | `loan_months` | int | **How many loan-months the row stands for** |
 | `credit_score`, `original_ltv`, `debt_to_income` | float | Coarse-classed, carried at the band's midpoint: the score in points, the ratios in percent |
 | `purpose`, `occupancy`, `mortgage_insurance` (formerly `has_mi`), `buyer_type` | category | Mapped levels, such as `cash_out_refinance`, `insured`, `first_time` |
 | `term_years` | int | 15 or 30 |
+| `harp` | category | `standard` or `harp`: the programme the loan was refinanced under, which the debt-to-income's missingness is identical to (rule 8) |
+| `delinquency_state` | category | The payment state of the month **before**, which is what a servicer knows in time to act. Never the month itself: at three missed payments the loan has defaulted by definition |
 
 Episodes agreeing on every covariate and on their position in time are
 exchangeable, so they collapse into one row carrying a count, and the likelihood
-treats that count as a frequency weight. 2.54 billion loan-months become 63.6
-million cells — 40× — and the estimate is identical. The table was four times smaller
-before the validation, when the key carried the origination quarter rather than the month
-and neither mortgage insurance nor first-time buyer status.
+treats that count as a frequency weight. 2.774 billion loan-months become **91,575,827**
+cells — 30× — and the estimate is identical.
+
+The table has grown twice, both times by a key extension priced before it was taken. It was four
+times smaller before the validation, when the key carried the origination quarter rather than
+the month and neither mortgage insurance nor first-time buyer status; and it was 63,639,116
+cells before the HARP level and the payment state, which `docs/rules.md` admitted at a measured
+1.063x and 1.185x against a declared ceiling of 150 million. The projection from nine quarters
+said 80.4 million and the rebuild produced 91.6, so **a ratio estimated that way runs about 14%
+light**.
 
 **`loan_months` is a count of loan-months, never an amount.** Weighting by exposure would
 answer a different question from the one Basel and IFRS 9 ask: a PD is defined per

@@ -24,18 +24,19 @@ several gigabytes to fill a table of a few hundred rows.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import pandas as pd
 
-from creditsurv.data.panel import AGE, DEFAULT_CAUSE, WEIGHT, ended_in
+from creditsurv.config import DEFAULT_CAUSE
+from creditsurv.data.panel import AGE, WEIGHT, ended_in
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 #: The group label of a table computed over the whole book.
-WHOLE_BOOK = "all loans"
+WHOLE_BOOK: Final = "all loans"
 
 
 def _codes(groups: pd.Series | None, rows: int) -> tuple[np.ndarray, list[str]]:

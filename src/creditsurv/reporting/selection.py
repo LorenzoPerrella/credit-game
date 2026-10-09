@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
-from creditsurv.data.panel import DEFAULT_CAUSE
-from creditsurv.models.procedure import MATERIALITY_THRESHOLD
+from creditsurv.config import DEFAULT_CAUSE, SELECTION_RECORD, record_name
+from creditsurv.models.rules import MATERIALITY_THRESHOLD
 from creditsurv.reporting.builder import Report, provenance
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 #: The summary the configuration is tested against, written beside the report. It belongs to
 #: the **published** model: see :func:`record_name`.
-SUMMARY_FILE: Final = "selection.json"
+SUMMARY_FILE: Final = SELECTION_RECORD
 
 #: Every table behind the report, one file each. A notebook shows these rather than
 #: recomputing them: the correlation and the variance inflation read ~60 million rows of
@@ -40,23 +40,6 @@ TABLE_FILES: Final[dict[str, str]] = {
 
 #: The fits the run made, with their times and whether they came from the cache.
 FITS_FILE: Final = "selection_fits.csv"
-
-
-def record_name(*, distribution: str, cause: str, published: str = "weibull") -> str:
-    """What this run's files are called.
-
-    ``selection`` is the **published** model's record, which ``tests/test_procedure.py``
-    holds the configuration to. Every other run -- the other family, the prepayment model --
-    is a record of a run rather than of the model in the configuration, and would otherwise
-    overwrite it: two selections write two records, and the family rule then decides which
-    one the configuration should agree with.
-    """
-    if distribution == published and cause == DEFAULT_CAUSE:
-        return "selection"
-    parts = ["selection", distribution]
-    if cause != DEFAULT_CAUSE:
-        parts.append(cause)
-    return "_".join(parts)
 
 
 def generate(record: SelectionRecord, *, reports_dir: Path, name: str | None = None) -> Path:

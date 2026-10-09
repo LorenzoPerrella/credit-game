@@ -112,9 +112,10 @@ them, as it does for default.
 
 ## 7. How far the key may grow
 
-The cell table may reach **150 million cells**, about 2.4 times the current 63.6 million. The
-engine reads it a batch at a time, so what the ceiling protects is the aggregation itself and
-the time every later fit costs, not a fit's memory.
+The cell table may reach **150 million cells**. That was about 2.4 times the 63.6 million the
+key produced when the ceiling was declared; the extensions this rule admitted took it to
+**91,575,827**, so 1.6 times remains. The engine reads it a batch at a time, so what the ceiling
+protects is the aggregation itself and the time every later fit costs, not a fit's memory.
 
 If the measured cost of the extensions exceeds it, they are given up in this order:
 
@@ -287,6 +288,77 @@ and in every decile, Gini above 0.45, and the share of calendar years in band. T
 not read until the windows report is regenerated, and the comparison published is against the
 numbers above, which are already recorded.
 
+## 13. What a compiled kernel may be, and what it may not
+
+Declared before any of it is written, because a second language in a credit model is a thing to
+be bounded in advance rather than contained afterwards.
+
+**The gate, first.** A compiled implementation of the likelihood is kept only if it computes a
+value, a gradient and a Hessian over the whole training half -- 72,671,500 rows at 26
+parameters -- in at most **9.90 s** against the **29.69** the NumPy kernel is measured at, with
+resident memory no higher than **1.31 GB**. Three times, on the same rows and this machine. If
+it does not pass, it is abandoned and the number is published in `docs/reports/engine.md`.
+Measured against the NumPy, never against autograd: measuring it against autograd would credit
+a compiled language with removing a tape that NumPy already removed.
+
+**And the segregation, which is not negotiable with the gate.**
+
+- **One** crate, `crates/creditsurv-kernel/`, built as a separate workspace member and installed
+  through an optional extra. Nobody needs a Rust toolchain to run this project.
+- At most **three** `#[pyfunction]`. The boundary is a function call, not an object graph.
+- Across it pass **only numpy arrays of fixed dtype** -- `f64` for parameters and tables, `u32`
+  for the codes, `u16` for the age, `u8` for the flags -- and back a scalar, an `f64[p]` and an
+  `f64[p, p]`. No Python objects, no pandas, no lifelines.
+- **Inside** it: no I/O, no logging, no configuration and **no rule of this document**. The loop
+  over rows and nothing else.
+- `models/kernel/terms.py` stays **normative**. It is what the equivalence tests compare
+  against, and the extension is optional at import: a missing one is the NumPy path, not an
+  error.
+- The summation is **deterministic**: a fixed chunk order, no unordered reduction, no FMA
+  reassociation. Two runs agree bit for bit, as the Python path already does.
+- CI runs the suite **twice on both Python legs**, with and without the extension, so neither
+  path can rot.
+
+What the gate buys, if it passes: a warm candidate's 5.67 minutes become about two and a
+selection's 3.5 hours about 1.6. What it cannot buy is a different answer -- the estimator is
+lifelines' own likelihood on the same rows, and the damped Newton polish certifies every fit to
+under a thousandth of a standard error whichever backend evaluated it.
+
+### The gate was not passed, and the exception is declared here
+
+**Measured, 9 October 2026: 2.80x on a Hessian, against the 3x this rule asked for.** Three
+readings on the whole training half, stable to 0.15%: a value, a gradient and a Hessian in
+**9.73, 9.76, 9.74 s** against a NumPy baseline of 26.86 to 27.55, in 0.47 GB against the 1.31
+ceiling. `docs/reports/engine.md` carries the table and why the ratio decides rather than the
+absolute 9.90 s this rule also named -- the same NumPy code measures 26.86 to 29.69 s across a
+session, so the absolute number is not reproducible and reading 9.74 as a pass would be choosing
+the thermometer that suits.
+
+**It is kept anyway, by the project owner's decision, and the condition attached to that decision
+was that the logic be airtight rather than that the number be three.** What was done to meet it,
+all measured:
+
+* the two backends are compared **element by element** at four points, including two outside the
+  data where every clip binds, for both families, at 1e-12 relative -- and on the production
+  table, 72.7 million rows at the published specification, they agree to **1.2e-15** on the
+  objective, 1.1e-13 on the gradient and 1.7e-13 of the Hessian's largest entry;
+* the three sums that run over every row carry **Neumaier compensation**, because 72.7 million
+  sequential additions into one `f64` had put the backends 4e-11 apart where this project's
+  standard for two orderings of the same sum is 1.97e-16. It costs nothing measurable and the
+  objective now reproduces to 1.2e-15;
+* panics **unwind** rather than abort, so a bug raises a Python exception instead of killing an
+  hour-old fit. Measured both ways: 10.19 s against 10.27, inside the noise;
+* the bounds checks are **on**. Removing them bought 2% and segfaulted inside an ordinary fit;
+* the arithmetic has unit tests in the crate -- the compensated sum, the capped exponential,
+  the chain's shortcut on a zero factor -- and `cargo test` runs in CI beside `clippy -D
+  warnings`;
+* and **one difference is declared rather than fixed**: outside the data the log-logistic's
+  Hessian overflows and the two backends reach a different flavour of non-finite in the same
+  entries, `-inf` against `nan`. The objective agrees there to the last bit and a step to a
+  non-finite curvature is refused by the polish either way, so the test holds the claim that
+  decides a fit -- identical wherever the curvature is a number, and not a number wherever the
+  other is not.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.
@@ -299,3 +371,5 @@ numbers above, which are already recorded.
 - Letting the payment state into any model of the remaining life.
 - Removing a covariate without fitting the model that remains.
 - Reading a banded covariate as a line through its midpoints.
+- Letting a compiled kernel read a declared constant, touch a file, or be the only
+  implementation of the likelihood.

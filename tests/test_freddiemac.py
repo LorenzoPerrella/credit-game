@@ -13,15 +13,15 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import pytest
 
-from creditsurv.data.freddiemac import (
-    ORIGINATION_COLUMNS,
+from creditsurv.data.freddiemac import ORIGINATION_COLUMNS
+from creditsurv.data.panel import validate_episodes
+from fixtures import origination_row, performance_row
+from freddiemac_sample import (
     FreddieMacDataMissingError,
     load_sample,
     read_origination,
     to_canonical_panel,
 )
-from creditsurv.data.panel import validate_episodes
-from fixtures import origination_row, performance_row
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -216,7 +216,7 @@ def test_negative_loan_ages_are_dropped(tmp_path: Path) -> None:
 def test_frames_can_be_mapped_without_touching_disk(files: tuple[Path, Path]) -> None:
     """to_canonical_panel takes frames, so a caller with the full dataset can chunk
     it rather than loading fifty million rows at once."""
-    from creditsurv.data.freddiemac import read_performance
+    from freddiemac_sample import read_performance
 
     panel = to_canonical_panel(read_origination(files[0]), read_performance(files[1]))
 

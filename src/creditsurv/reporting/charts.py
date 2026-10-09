@@ -14,7 +14,7 @@ when the number of series changes.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import matplotlib
 
@@ -34,14 +34,14 @@ if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
 # Categorical slots, in fixed assignment order.
-SERIES = ("#2a78d6", "#eb6834", "#1baf7a")
-INK = "#0b0b0b"
-INK_MUTED = "#52514e"
-SURFACE = "#fcfcfb"
-GRID = "#e3e2df"
+SERIES: Final = ("#2a78d6", "#eb6834", "#1baf7a")
+INK: Final = "#0b0b0b"
+INK_MUTED: Final = "#52514e"
+SURFACE: Final = "#fcfcfb"
+GRID: Final = "#e3e2df"
 
-_LINE_WIDTH = 2.0
-_MARKER_SIZE = 6.0
+_LINE_WIDTH: Final = 2.0
+_MARKER_SIZE: Final = 6.0
 
 
 def _style(axis: Axes, *, title: str, xlabel: str, ylabel: str) -> None:

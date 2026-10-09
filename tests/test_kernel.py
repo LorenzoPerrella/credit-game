@@ -15,7 +15,7 @@ the optimiser backtracks from, and a wall that moves by an epsilon moves
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final
 
 import autograd.numpy as anp
 import numpy as np
@@ -25,6 +25,7 @@ from autograd import grad, hessian
 from lifelines.utils.safe_exp import safe_exp
 
 from creditsurv.models.kernel import (
+    FAMILIES,
     INTERVAL_CEILING,
     INTERVAL_FLOOR,
     MAX_EXPONENT,
@@ -32,9 +33,13 @@ from creditsurv.models.kernel import (
     SURVIVAL_FLOOR,
     Factorisation,
     Kernel,
+    Rows,
     log_times,
     row_likelihood,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _weibull(
@@ -258,7 +263,7 @@ def test_the_safe_exponential_reports_the_derivative_lifelines_reports() -> None
     autograd's surface, not on the mathematical one. Reproducing the cap but not its derivative
     would move a wall this engine's guards are calibrated against.
     """
-    from creditsurv.models.kernel import _Jet, _safe_exp
+    from creditsurv.models.kernel.likelihood import _Jet, _safe_exp
 
     above = MAX_EXPONENT + 10.0
     jet = _safe_exp(_Jet(np.array([above]), de=1.0))
@@ -500,10 +505,46 @@ def test_plain_text_is_refused_because_its_codes_would_be_this_blocks_own() -> N
         )
 
 
+@pytest.fixture(params=["numpy", "compiled"])
+def backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run the test against each backend the port has, and skip the one that is not built.
+
+    Rule 13 of `docs/rules.md` says the NumPy kernel is **normative** and the compiled one is
+    optional at import, so the suite has to hold both to the same reference and has to pass
+    with neither installed. Forcing the NumPy path is a one-line patch because the port decides
+    which arithmetic to use in one place.
+    """
+    from creditsurv.models.kernel import terms
+
+    if request.param == "numpy":
+        monkeypatch.setattr(terms, "_compiled", None)
+    elif terms._compiled is None:
+        pytest.skip("the compiled kernel is not installed (`uv sync --extra kernel`)")
+    return str(request.param)
+
+
+def test_the_compiled_backend_agrees_with_the_port_about_which_family_is_which() -> None:
+    """A number crosses the boundary where a name would be safer, so the two are compared.
+
+    `FAMILIES` is sorted, so a code derived from it would hand the log-logistic the Weibull's
+    number: the other family, fitted under the right name, with no error anywhere. The crate
+    exports its own constants for exactly this test.
+    """
+    from creditsurv.models.kernel import terms
+
+    if terms._compiled is None:
+        pytest.skip("the compiled kernel is not installed (`uv sync --extra kernel`)")
+    assert terms._FAMILY_CODE["weibull"] == terms._compiled.WEIBULL
+    assert terms._FAMILY_CODE["loglogistic"] == terms._compiled.LOGLOGISTIC
+    assert terms._compiled.MAX_EXPONENT == MAX_EXPONENT
+    assert set(terms._FAMILY_CODE) == set(FAMILIES), "every family the port writes out has a code"
+
+
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
 @pytest.mark.parametrize("distribution", ["weibull", "loglogistic"])
 def test_the_kernel_is_the_objective_autograd_gives_over_the_whole_design(
     distribution: str,
+    backend: str,
 ) -> None:
     """The accumulation, end to end, against the design it exists not to build.
 
@@ -701,3 +742,347 @@ def test_a_coupled_column_is_refused_when_the_tables_are_built_from_the_keys() -
 
     with pytest.raises(ValueError, match="move with the loan"):
         factorisation.expand(coupled.transform_df, primary="lambda_")
+
+
+def test_a_saved_encoding_comes_back_the_same_encoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reading of the production table is 10.9 minutes and 1.09 GB, and a selection pays
+    three of them where the four runs rule 2 needs pay twelve. Written once and mapped back,
+    the second and every later reading is seconds -- and it survives a restart, which on a job
+    that takes a day matters more than the minutes.
+
+    What has to come back identical is everything a fit reads: the rows, the keys in the order
+    their codes were handed out in, the counts the column moments are computed from, and the
+    bounds the univariate seed is fitted on. The codes live in the rows, so a restored
+    factorisation that renumbered a combination would be a different model silently.
+    """
+    from creditsurv.data.panel import AGE_START, EXACT_OBSERVATION, LOWER_BOUND, UPPER_BOUND
+    from creditsurv.models.engine.cache import load_encoding, save_encoding
+    from creditsurv.models.engine.scan import encode_blocks
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    # The frame `model_frame` hands over: the covariates, the age the episode opens at, the
+    # interval and the weight. Nothing else -- a column in neither key has no index to be
+    # looked up by, which is what the scan refuses by name.
+    book = _book(range(0, 5), range(0, 7))
+    defaulted = book.pop("outcome").to_numpy(dtype=bool)
+    book[AGE_START] = book.pop("age").astype(float)
+    book[LOWER_BOUND] = np.where(defaulted, book[AGE_START], book[AGE_START] + 1.0)
+    book[UPPER_BOUND] = np.where(defaulted, book[AGE_START] + 1.0, np.inf)
+    book[EXACT_OBSERVATION] = False
+
+    encoded = {
+        "loan": LOAN,
+        "calendar": CALENDAR,
+        "lower_bound_col": LOWER_BOUND,
+        "upper_bound_col": UPPER_BOUND,
+        "event_col": EXACT_OBSERVATION,
+        "entry_col": AGE_START,
+        "weights_col": "loan_months",
+    }
+    original = encode_blocks([book.iloc[:400], book.iloc[400:]], **encoded)  # type: ignore[arg-type]
+    save_encoding(original, "fixture", {"what": "a fixture book"})
+    restored = load_encoding("fixture")
+
+    assert restored is not None
+    assert restored.episodes == original.episodes
+    assert restored.events == original.events
+    assert restored.weight == original.weight
+    assert restored.names == original.names
+    assert [block.rows for block in restored.rows] == [block.rows for block in original.rows]
+    for was, now in zip(original.rows, restored.rows, strict=True):
+        for column in ("i", "j", "age", "event", "weight"):
+            np.testing.assert_array_equal(
+                getattr(now, column), getattr(was, column), err_msg=column
+            )
+    pd.testing.assert_series_equal(restored.bounds, original.bounds, check_names=False)
+
+    # The keys in their codes' own order, which is what the rows point at -- and on their
+    # declared levels, because what a formula's expansion reads off a key frame is its dtypes.
+    for before, after in zip(
+        original.factorisation.keys(), restored.factorisation.keys(), strict=True
+    ):
+        pd.testing.assert_frame_equal(after, before)
+    np.testing.assert_array_equal(
+        restored.factorisation.loan_counts, original.factorisation.loan_counts
+    )
+    np.testing.assert_array_equal(
+        restored.factorisation.calendar_counts, original.factorisation.calendar_counts
+    )
+
+    # And a model expanded from the restored keys is the model expanded from the original ones,
+    # which is the claim a cached reading makes: a candidate's tables come off the keys.
+    regressors = _regressors(
+        FULL,
+        book.drop(columns=["loan_months", AGE_START, LOWER_BOUND, UPPER_BOUND, EXACT_OBSERVATION]),
+    )
+    tables = original.factorisation.expand(regressors.transform_df, primary="lambda_")
+    remapped = restored.factorisation.expand(regressors.transform_df, primary="lambda_")
+    np.testing.assert_array_equal(remapped.loan, tables.loan)
+    np.testing.assert_array_equal(remapped.calendar, tables.calendar)
+    np.testing.assert_allclose(remapped.first, tables.first, rtol=0, atol=0)
+
+
+def test_a_macro_month_the_window_cannot_reach_does_not_rename_a_reading() -> None:
+    """A reading is named by the macro panel's own numbers, but only the readable ones.
+
+    The 10.9 minutes a reading costs are paid again whenever its name changes, and the macro
+    panel is live FRED data that gains a month without anything about the model moving. A cell
+    reads the panel at its observation month less the lag or at its origination month less the
+    lag, both at or before the cut the window stops at -- so a month above the cut cannot enter
+    a reading, and must not retire one. A month *inside* it must, because that is a different
+    calendar key on the same cell file, which the cell table's identity cannot see.
+    """
+    from creditsurv.data.panel import month_ordinal
+    from creditsurv.models.engine.cache import encoding_fingerprint
+
+    def named(macro: pd.DataFrame, months: tuple[int | None, int | None] | None) -> str:
+        return encoding_fingerprint(
+            identity="cells_exclude.parquet:448169670:1789713959804446587",
+            loan=LOAN,
+            calendar=CALENDAR,
+            age_column="age_start",
+            cause="default",
+            parity=None,
+            block_rows=250_000,
+            lag_months=3,
+            macro=macro,
+            months=months,
+        )
+
+    periods = pd.period_range("2019-01", "2021-12", freq="M")
+    macro = pd.DataFrame({"unemployment_rate": np.linspace(3.5, 6.0, len(periods))}, index=periods)
+    cut = (None, month_ordinal(pd.Period("2021-12", freq="M")))
+    extended = pd.concat(
+        [
+            macro,
+            pd.DataFrame(
+                {"unemployment_rate": [9.9]},
+                index=pd.period_range("2022-01", periods=1, freq="M"),
+            ),
+        ]
+    )
+    assert named(extended, cut) == named(macro, cut)
+
+    revised = macro.copy()
+    revised.iloc[-1, 0] = 6.1  # the last readable month, restated
+    assert named(revised, cut) != named(macro, cut)
+
+    # And with no cut -- `creditsurv fit` without an `--as-of` -- the whole table is read, so the
+    # month that could not reach the window above is a month the reading does see.
+    assert named(extended, None) != named(macro, None)
+
+
+def test_a_model_with_no_calendar_covariate_is_evaluated_and_not_a_segmentation_fault(
+    backend: str,
+) -> None:
+    """A table of `n` rows and **zero** columns, which is what a loan-only model hands over.
+
+    The compiled kernel sized its accumulators by dividing the table's flat length by its column
+    count, and zero columns gave zero rows: the accumulators were allocated empty and the row
+    loop wrote past them. With the bounds checks removed -- which bought 2% -- that was a
+    **segmentation fault inside an ordinary fit**, found by the suite and not by a test of this
+    case, because there was none. There is now, and the checks are back.
+    """
+    frame = _book(range(0, 4), range(0, 5))
+    weight = frame["loan_months"].to_numpy(dtype=float)
+    event = frame["outcome"].to_numpy(dtype=bool)
+    factorisation = Factorisation(
+        loan=LOAN, calendar=(), age_column="age", columns=["Intercept", "credit_score"]
+    )
+    design = np.column_stack(
+        [np.ones(len(frame)), (frame["credit_score"].to_numpy() == 680.0).astype(float)]
+    )
+    rows = factorisation.add(frame, design, event=event, weight=weight)
+    loan, calendar, loan_positions, calendar_positions = factorisation.tables()
+    assert calendar.shape[1] == 0, "nothing in this model is a function of the calendar"
+
+    kernel = Kernel(
+        distribution="weibull",
+        loan=loan,
+        calendar=calendar,
+        loan_index=loan_positions,
+        calendar_index=calendar_positions,
+        shape_index=design.shape[1],
+        blocks=(rows,),
+        total_weight=float(weight.sum()),
+    )
+    totals = kernel(np.array([5.0, 0.1, 0.3]), curvature=True)
+
+    assert np.isfinite(totals.value) and totals.value > 0, backend
+    assert np.isfinite(totals.gradient).all()
+    assert totals.curvature is not None
+    assert np.isfinite(totals.curvature).all()
+
+
+def _kernel(distribution: str) -> tuple[Kernel, np.ndarray]:
+    """A kernel on the fixture book, and the parameter vector its design expects."""
+    frame = _book(range(0, 5), range(0, 7))
+    design = _design(frame)
+    weight = frame["loan_months"].to_numpy(dtype=float)
+    event = frame["outcome"].to_numpy(dtype=bool)
+    factorisation = _factorisation()
+    rows = factorisation.add(frame, design, event=event, weight=weight)
+    loan, calendar, loan_positions, calendar_positions = factorisation.tables()
+    deviations = np.array([1.0, 0.4, 17.5, 0.5, 0.06, 2.3, 1.0])
+    kernel = Kernel(
+        distribution=distribution,
+        loan=loan / deviations[loan_positions],
+        calendar=calendar / deviations[calendar_positions],
+        loan_index=loan_positions,
+        calendar_index=calendar_positions,
+        shape_index=design.shape[1],
+        blocks=(rows,),
+        total_weight=float(weight.sum()),
+    )
+    return kernel, deviations
+
+
+#: Where the two backends are compared: the seed, a point in the middle of the data, and one
+#: far outside it where every clip binds and the second-order association decides the answer.
+_POINTS: Final = {
+    "the seed": [5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "inside the data": [4.6, -0.3, 0.21, 0.14, -0.9, 0.35, 0.28],
+    "over the cliff": [-500.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0],
+    "the shape on its other bound": [6.0, 0.1, -0.2, 0.0, 0.3, 0.0, -3.0],
+}
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+@pytest.mark.parametrize("distribution", ["weibull", "loglogistic"])
+@pytest.mark.parametrize("point", list(_POINTS))
+def test_the_two_backends_are_the_same_objective_everywhere_it_is_evaluated(
+    distribution: str, point: str
+) -> None:
+    """The compiled kernel against the NumPy one, element by element, at four points.
+
+    Both are held to autograd elsewhere; this is the comparison that matters once there are
+    two, because the engine's guards read the *objective* and not a reference. **A wall that
+    moves by an epsilon moves which fits are refused**, so the points include two outside the
+    data: `eta = -500` with the shape on its bound, where the cumulative hazard overflows and
+    `(f'' * d) * d` is the only grouping that does not produce a `nan`, and the shape on the
+    other bound.
+
+    The tolerance is 1e-12 relative and not zero, because the two accumulate in different
+    orders -- the NumPy in chunks through `bincount` and pairwise sums, the compiled loop row
+    by row with Neumaier compensation on the three sums that are over every row -- and rule 13
+    asks each to be deterministic rather than identical to the other. On the production table,
+    72.7 million rows at the published specification, they agree to **1.2e-15** on the
+    objective, 1.1e-13 on the gradient and 1.7e-13 of the Hessian's largest entry; see
+    `docs/reports/engine.md`.
+
+    **And where a curvature is not a number, the two are compared on that rather than on its
+    digits.** Outside the data the log-logistic's Hessian overflows, and the two arrive at a
+    different flavour of non-finite in the same entries: `-inf` from the compiled loop where
+    the NumPy reads `nan`. That is the one declared difference between the backends and it is
+    structural, not a bug -- the Python chain carries a structural zero as the literal `0.0`
+    and drops the term, so `0 * inf` never arises there, while an array element that is merely
+    numerically zero gets no such treatment and poisons the sum; the compiled loop takes the
+    shortcut on the value instead. What the engine reads is the **objective**, which agrees
+    here to the last bit, and a step to a non-finite curvature is refused by the polish either
+    way. So the claim held is the one that decides a fit: identical wherever the curvature is a
+    number, and not a number wherever the other is not.
+    """
+    from creditsurv.models.kernel import terms
+
+    if terms._compiled is None:
+        pytest.skip("the compiled kernel is not installed (`uv sync --extra kernel`)")
+    kernel, _ = _kernel(distribution)
+    x = np.array(_POINTS[point])
+
+    written = kernel._written(x, curvature=True)
+    compiled = kernel._compiled(x, curvature=True)
+
+    assert np.isnan(compiled.value) == np.isnan(written.value), f"{point}: one is nan"
+    if not np.isnan(written.value):
+        assert compiled.value == pytest.approx(written.value, rel=1e-12, nan_ok=True)
+    np.testing.assert_allclose(
+        compiled.gradient, written.gradient, rtol=1e-12, atol=1e-300, err_msg=point
+    )
+    assert compiled.curvature is not None
+    assert written.curvature is not None
+    defined = np.isfinite(written.curvature)
+    np.testing.assert_array_equal(
+        np.isfinite(compiled.curvature),
+        defined,
+        err_msg=f"{point}: one backend has a number where the other has none",
+    )
+    np.testing.assert_allclose(
+        compiled.curvature[defined],
+        written.curvature[defined],
+        rtol=1e-12,
+        atol=1e-300,
+        err_msg=point,
+    )
+
+
+@pytest.mark.parametrize("distribution", ["weibull", "loglogistic"])
+def test_the_compiled_kernel_gives_the_same_bits_on_every_call(distribution: str) -> None:
+    """Rule 13 asks for a deterministic summation, and this is what that means.
+
+    A fixed chunk order, no unordered reduction and no FMA reassociation -- so the same point
+    evaluated again is the same number to the last bit, not to a tolerance. It matters because
+    an optimiser turns a difference in the last digit into a different search: two runs of the
+    identical prepayment fit once agreed to every printed digit for eighty evaluations, split
+    at 0.065288491918 against 0.065288491919, and were five significant figures apart forty
+    evaluations later.
+    """
+    from creditsurv.models.kernel import terms
+
+    if terms._compiled is None:
+        pytest.skip("the compiled kernel is not installed (`uv sync --extra kernel`)")
+    kernel, _ = _kernel(distribution)
+    x = np.array(_POINTS["inside the data"])
+
+    first = kernel._compiled(x, curvature=True)
+    for _ in range(3):
+        again = kernel._compiled(x, curvature=True)
+        assert again.value.hex() == first.value.hex()
+        np.testing.assert_array_equal(again.gradient, first.gradient)
+        assert again.curvature is not None
+        assert first.curvature is not None
+        np.testing.assert_array_equal(again.curvature, first.curvature)
+
+
+def test_the_rows_cross_the_boundary_as_one_buffer_of_the_right_dtype() -> None:
+    """What `joined` promises the compiled backend: one C-contiguous array a column.
+
+    Shared where the blocks are already adjacent views of one array, which is what a reading
+    off the disk cache is -- copying there would put 1.09 GB inside a 1.31 GB ceiling -- and
+    concatenated anywhere else. Either way the dtype is the declared one, checked here rather
+    than refused at the boundary in the middle of an hour-old fit.
+    """
+    from creditsurv.models.kernel.factorisation import _ROW_DTYPES, joined
+
+    whole = np.arange(12, dtype=np.uint32)
+    views = [
+        Rows(
+            i=whole[start:stop],
+            j=whole[start:stop],
+            age=np.arange(stop - start, dtype=np.uint16),
+            event=np.zeros(stop - start, dtype=bool),
+            weight=np.ones(stop - start, dtype=np.uint32),
+        )
+        for start, stop in ((0, 5), (5, 12))
+    ]
+    one = joined(views)
+
+    assert one.rows == 12
+    assert np.shares_memory(one.i, whole), "adjacent views of one array are shared, not copied"
+    assert one.i is whole, "and shared means the array itself, with nothing between"
+    np.testing.assert_array_equal(one.age, [0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 5, 6])
+    for column, dtype in _ROW_DTYPES.items():
+        assert getattr(one, column).dtype == dtype
+        assert getattr(one, column).flags.c_contiguous
+
+    # And a column that is not what the kernel reads is refused by name, not misread.
+    wrong = Rows(
+        i=np.arange(3, dtype=np.int64),
+        j=np.arange(3, dtype=np.uint32),
+        age=np.arange(3, dtype=np.uint16),
+        event=np.zeros(3, dtype=bool),
+        weight=np.ones(3, dtype=np.uint32),
+    )
+    with pytest.raises(TypeError, match="column is int64"):
+        joined([wrong, wrong])

@@ -19,15 +19,11 @@ import pandas as pd
 import pytest
 
 from creditsurv.data.panel import to_interval_censored
-from creditsurv.models.blocks import Pinned
-from creditsurv.models.procedure import (
-    Fits,
-    SelectionRecord,
-    Specification,
-    _not_identified,
-    _worst,
-    run_selection,
-)
+from creditsurv.models.engine import Pinned
+from creditsurv.models.fits import Fits
+from creditsurv.models.procedure import SelectionRecord, run_selection
+from creditsurv.models.rules import Removal, not_identified, worst
+from creditsurv.models.specification import Specification
 from fixtures import DEFAULT_PARAMS, build_panel
 
 if TYPE_CHECKING:
@@ -118,7 +114,7 @@ def test_report_finds_the_fit_the_selection_ended_on_and_starts_from_it(
     """
     from creditsurv.data.panel import WEIGHT
     from creditsurv.models.aft import fit_aft
-    from creditsurv.models.procedure import selected_fit
+    from creditsurv.models.fits import selected_fit
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     record, fits = _run(train)
@@ -151,9 +147,9 @@ def test_report_starts_from_the_selection_only_on_the_table_it_selected_on(
     """The glue ``creditsurv report`` uses: the record's formula, date and policy, and the
     cell table as it stands now. A table rebuilt since the selection offers nothing to
     start from, and neither does a record written for another reporting date."""
-    from creditsurv.cli import _selection_start
     from creditsurv.config import reports_dir
     from creditsurv.data.store import cells_identity, cells_path
+    from creditsurv.models.fits import selection_start
     from creditsurv.reporting import selection
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
@@ -166,13 +162,13 @@ def test_report_starts_from_the_selection_only_on_the_table_it_selected_on(
     selection.generate(record, reports_dir=reports_dir())
     ended = fits.fit(record.selected)
 
-    start = _selection_start("2008-12", "exclude")
+    start = selection_start("2008-12", "exclude")
     assert start is not None
     assert start.equals(ended.fitter.params_)
-    assert _selection_start("2009-12", "exclude") is None
+    assert selection_start("2009-12", "exclude") is None
 
     table.write_bytes(b"cells, rebuilt since")
-    assert _selection_start("2008-12", "exclude") is None
+    assert selection_start("2008-12", "exclude") is None
 
 
 def test_the_formula_states_every_reference_level() -> None:
@@ -186,14 +182,17 @@ def test_the_formula_states_every_reference_level() -> None:
     assert spec.minus("purpose").formula == "credit_score"
 
 
-def _fitted(rows: dict[str, tuple[float, float, float]]) -> SimpleNamespace:
-    """A stand-in with the one table the rules read: coefficient, error and p-value."""
-    index = pd.MultiIndex.from_tuples([("lambda_", name) for name in rows])
-    summary = pd.DataFrame(
-        [list(values) for values in rows.values()], index=index, columns=["coef", "se(coef)", "p"]
-    )
-    return SimpleNamespace(
-        fitter=SimpleNamespace(summary=summary, _primary_parameter_name="lambda_")
+def _coefficients(rows: dict[str, tuple[float, float, float]]) -> pd.DataFrame:
+    """The one table the rules read: a coefficient, its error and its p-value, by covariate.
+
+    It used to be a whole stand-in `FitResult`, built so that `_terms` could reduce it to
+    exactly this. The rules take the table now, so the fake is gone and what the test supplies
+    is what the rule uses.
+    """
+    return pd.DataFrame(
+        [list(values) for values in rows.values()],
+        index=list(rows),
+        columns=["coef", "se(coef)", "p"],
     )
 
 
@@ -203,7 +202,7 @@ def test_a_backwards_sign_goes_before_an_insignificant_covariate() -> None:
     spec = Specification(
         continuous=("credit_score", "ltv_change", "unemployment_change", "equity_volatility")
     )
-    result = _fitted(
+    terms = _coefficients(
         {
             "credit_score": (0.3, 0.01, 0.0),
             "ltv_change": (+0.02, 0.001, 0.0),  # expected negative, z = 20
@@ -212,11 +211,11 @@ def test_a_backwards_sign_goes_before_an_insignificant_covariate() -> None:
         }
     )
 
-    worst = _worst(spec, cast("FitResult", result))
+    removal = worst(terms, spec)
 
-    assert worst is not None
-    assert worst[0] == "unemployment_change"
-    assert worst[1].startswith("wrong sign")
+    assert removal is not None
+    assert removal.covariate == "unemployment_change"
+    assert removal.reason.startswith("wrong sign")
 
 
 def test_a_reversed_sign_goes_after_a_backwards_one_and_before_a_thin_one() -> None:
@@ -251,25 +250,25 @@ def test_a_reversed_sign_goes_after_a_backwards_one_and_before_a_thin_one() -> N
         "equity_volatility": (-0.001, 0.01, 0.9),  # prior negative, agrees, insignificant
     }
 
-    worst = _worst(spec, cast("FitResult", _fitted(fitted)), alone=alone)
-    assert worst is not None
-    assert worst[0] == "mortgage_rate_decline"
-    assert worst[1].startswith("reversed sign")
+    removal = worst(_coefficients(fitted), spec, alone=alone)
+    assert removal is not None
+    assert removal.covariate == "mortgage_rate_decline"
+    assert removal.reason.startswith("reversed sign")
 
     backwards = {**fitted, "unemployment_change": (+0.04, 0.0004, 0.0)}
-    worst = _worst(spec, cast("FitResult", _fitted(backwards)), alone=alone)
-    assert worst is not None
-    assert worst[0] == "unemployment_change"
+    removal = worst(_coefficients(backwards), spec, alone=alone)
+    assert removal is not None
+    assert removal.covariate == "unemployment_change"
 
     agreeing = {
         **fitted,
         "mortgage_rate_decline": (-0.018, 0.0008, 0.0),
         "inflation_rate": (+8.0, 0.063, 0.0),
     }
-    worst = _worst(spec, cast("FitResult", _fitted(agreeing)), alone=alone)
-    assert worst is not None
-    assert worst[0] == "equity_volatility"
-    assert worst[1].startswith("p =")
+    removal = worst(_coefficients(agreeing), spec, alone=alone)
+    assert removal is not None
+    assert removal.covariate == "equity_volatility"
+    assert removal.reason.startswith("p =")
 
 
 def test_an_unstable_covariate_goes_only_beside_a_larger_one_of_its_dimension() -> None:
@@ -284,9 +283,11 @@ def test_an_unstable_covariate_goes_only_beside_a_larger_one_of_its_dimension() 
         }
     )
 
-    assert _not_identified(table) == ("financial_conditions", "equity_volatility")
+    verdict = not_identified(table)
+    assert verdict is not None
+    assert (verdict.covariate, verdict.partner) == ("financial_conditions", "equity_volatility")
     # Unstable, but alone in its dimension: kept and left visible.
-    assert _not_identified(table[table["covariate"] != "financial_conditions"]) is None
+    assert not_identified(table[table["covariate"] != "financial_conditions"]) is None
 
 
 def test_the_selection_starts_from_candidates_the_configuration_cannot_change() -> None:
@@ -363,9 +364,9 @@ def test_the_prepayment_macro_block_is_what_its_own_selection_chose() -> None:
         PREPAYMENT_TIME_VARYING_CONTINUOUS,
         STRESSED_COVARIATES,
         TIME_VARYING_CONTINUOUS,
+        record_name,
         reports_dir,
     )
-    from creditsurv.reporting.selection import record_name
 
     path = reports_dir() / f"{record_name(distribution='weibull', cause='prepayment')}.json"
     if not path.exists():
@@ -387,9 +388,9 @@ def test_an_extra_fit_is_estimated_once_and_read_back_after(
 ) -> None:
     """The report's extra fits ran 78 and 25 minutes on the training half and were thrown
     away, so regenerating a report's prose cost them again."""
-    from creditsurv.cli import _cached_fit
     from creditsurv.data.panel import WEIGHT
     from creditsurv.models import aft
+    from creditsurv.models.fits import cached_fit
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     calls: list[str] = []
@@ -400,7 +401,7 @@ def test_an_extra_fit_is_estimated_once_and_read_back_after(
         return real(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(aft, "fit_aft", counted)
-    fit = _cached_fit(as_of="2008-12", moratorium="exclude")
+    fit = cached_fit(as_of="2008-12", moratorium="exclude")
     formula = "credit_score + ltv_change"
 
     first = fit(
@@ -439,7 +440,7 @@ def test_the_family_is_an_input_and_reaches_the_fit_and_its_name(
     runs must not share a cache, since they fit the same formulas on the same rows.
     """
     from creditsurv.data.store import fit_fingerprint
-    from creditsurv.models.procedure import selection_description
+    from creditsurv.models.fits import selection_description
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     fits = Fits(
@@ -466,32 +467,24 @@ def test_step_ten_removes_the_macro_covariate_whose_effect_is_immaterial() -> No
     it applies to the macro block only: a small coefficient on a macro series is usually a
     statement about which of five correlated series happened to be left.
     """
-    from creditsurv.models.procedure import MATERIALITY_THRESHOLD, _immaterial
+    from creditsurv.models.rules import MATERIALITY_THRESHOLD, immaterial
 
     spec = Specification(continuous=("credit_score", "ltv_change", "unemployment_change"))
-    summary = pd.DataFrame(
+    terms = pd.DataFrame(
         {"coef": [0.5, 0.004, -0.06]},
         index=["credit_score", "ltv_change", "unemployment_change"],
     )
-    result = cast(
-        "FitResult",
-        SimpleNamespace(
-            fitter=SimpleNamespace(
-                summary=pd.concat({"lambda_": summary}), _primary_parameter_name="lambda_"
-            )
-        ),
-    )
     deviations = pd.Series({"credit_score": 0.001, "ltv_change": 1.0, "unemployment_change": 1.0})
 
-    verdict = _immaterial(spec, result, deviations, macro=["ltv_change", "unemployment_change"])
+    verdict = immaterial(spec, terms, deviations, macro=["ltv_change", "unemployment_change"])
 
     assert verdict is not None
-    name, effect = verdict
-    assert name == "ltv_change"
-    assert effect == pytest.approx(0.004)
-    assert abs(effect) < MATERIALITY_THRESHOLD
+    assert verdict.covariate == "ltv_change"
+    assert verdict.effect == pytest.approx(0.004)
+    assert abs(verdict.effect) < MATERIALITY_THRESHOLD
+    assert verdict.reason == "1 sd effect +0.0040 on log survival time, under 0.02"
     # The credit score's effect is 0.0005, far under the threshold, and it is not eligible.
-    assert _immaterial(spec, result, deviations, macro=["unemployment_change"]) is None, (
+    assert immaterial(spec, terms, deviations, macro=["unemployment_change"]) is None, (
         "the loan block is not screened for materiality"
     )
 
@@ -542,30 +535,22 @@ def test_the_prepayment_model_is_selected_under_its_own_priors() -> None:
 
 
 def test_a_backwards_sign_is_read_against_the_map_the_run_was_given() -> None:
-    from creditsurv.models.procedure import _worst
+    from creditsurv.models.rules import worst
     from creditsurv.models.selection import PREPAYMENT_SIGNS
 
     spec = Specification(continuous=("credit_score",))
-    summary = pd.DataFrame({"coef": [0.5], "se(coef)": [0.01], "p": [0.0]}, index=["credit_score"])
-    result = cast(
-        "FitResult",
-        SimpleNamespace(
-            fitter=SimpleNamespace(
-                summary=pd.concat({"lambda_": summary}), _primary_parameter_name="lambda_"
-            )
-        ),
-    )
+    terms = pd.DataFrame({"coef": [0.5], "se(coef)": [0.01], "p": [0.0]}, index=["credit_score"])
 
-    assert _worst(spec, result) is None, "a positive score is what the default model expects"
-    verdict = _worst(spec, result, signs=PREPAYMENT_SIGNS)
+    assert worst(terms, spec) is None, "a positive score is what the default model expects"
+    verdict = worst(terms, spec, signs=PREPAYMENT_SIGNS)
     assert verdict is not None
-    assert verdict[0] == "credit_score"
-    assert "wrong sign" in verdict[1]
+    assert verdict.covariate == "credit_score"
+    assert "wrong sign" in verdict.reason
 
 
 def test_a_prepayment_selection_is_cached_under_a_name_of_its_own() -> None:
     from creditsurv.data.store import fit_fingerprint
-    from creditsurv.models.procedure import selection_description
+    from creditsurv.models.fits import selection_description
 
     common = {
         "identity": "cells",
@@ -749,21 +734,16 @@ def test_two_selections_write_two_records(
     """
     from dataclasses import replace as replace_field
 
+    from creditsurv.config import record_name
     from creditsurv.reporting import selection
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     record, _ = _run(train)
     reports = tmp_path / "reports"
 
-    assert selection.record_name(distribution="weibull", cause="default") == "selection"
-    assert (
-        selection.record_name(distribution="loglogistic", cause="default")
-        == "selection_loglogistic"
-    )
-    assert (
-        selection.record_name(distribution="weibull", cause="prepayment")
-        == "selection_weibull_prepayment"
-    )
+    assert record_name(distribution="weibull", cause="default") == "selection"
+    assert record_name(distribution="loglogistic", cause="default") == "selection_loglogistic"
+    assert record_name(distribution="weibull", cause="prepayment") == "selection_weibull_prepayment"
 
     selection.generate(record, reports_dir=reports)
     other = selection.generate(
@@ -957,7 +937,7 @@ def test_a_nested_model_that_fits_better_than_its_parent_is_refused() -> None:
     """
     from lifelines import exceptions
 
-    from creditsurv.models.procedure import _check_nested
+    from creditsurv.models.fits import _check_nested
 
     parent = Specification(continuous=("credit_score", "ltv_change"))
     child = Specification(continuous=("credit_score",))
@@ -982,7 +962,7 @@ def test_the_floor_handed_to_a_nested_fit_is_its_parents_optimum() -> None:
     """A mean, so the parent's total log-likelihood is divided by the exposure it was measured
     over, with one log-likelihood unit allowed back.
     """
-    from creditsurv.models.procedure import _NESTED_TOLERANCE, _floor
+    from creditsurv.models.fits import _NESTED_TOLERANCE, _floor
 
     parent = Specification(continuous=("credit_score", "ltv_change"))
     child = Specification(continuous=("credit_score",))
@@ -1011,7 +991,7 @@ def test_the_allowance_stays_inside_the_edge_of_the_clipped_region() -> None:
     gains -0.000 units. Those probes are the shallow edge of the clipped region, and an allowance
     wide enough to admit them lets a fit converge onto clipped ground and be cached as an optimum.
     """
-    from creditsurv.models.procedure import _NESTED_TOLERANCE, _floor
+    from creditsurv.models.fits import _NESTED_TOLERANCE, _floor
 
     parent = Specification(continuous=("credit_score", "ltv_change"))
     child = Specification(continuous=("credit_score",))
@@ -1046,7 +1026,7 @@ def test_a_pinned_optimiser_is_not_refitted_cold() -> None:
     """
     from lifelines import exceptions
 
-    from creditsurv.models.blocks import Pinned
+    from creditsurv.models.engine import Pinned
 
     spec = Specification(continuous=("credit_score",))
     parent = cast("FitResult", SimpleNamespace(fitter=SimpleNamespace(params_=None)))
@@ -1095,7 +1075,7 @@ def test_the_reference_levels_are_one_set_written_twice_and_held_together() -> N
 
 @pytest.mark.parametrize(
     ("step", "verdict"),
-    [("step 9", "_not_identified"), ("step 10", "_immaterial")],
+    [("step 9", "not_identified"), ("step 10", "immaterial")],
 )
 def test_every_nested_fit_of_the_selection_is_bounded_by_its_parent(
     train: pd.DataFrame,
@@ -1123,25 +1103,26 @@ def test_every_nested_fit_of_the_selection_is_bounded_by_its_parent(
 
     removals = {"left": 1}
 
-    def unstable(table: pd.DataFrame) -> tuple[str, str] | None:
+    def unstable(table: pd.DataFrame) -> Removal | None:
         if removals["left"] and len(table) > 1:
             removals["left"] -= 1
             names = table["covariate"].astype(str).tolist()
-            return names[0], names[1]
+            return Removal(covariate=names[0], reason="forced", partner=names[1])
         return None
 
     def immaterial(
-        spec: Specification, result: FitResult, deviations: pd.Series, *, macro: list[str]
-    ) -> tuple[str, float] | None:
+        spec: Specification, terms: pd.DataFrame, deviations: pd.Series, *, macro: list[str]
+    ) -> Removal | None:
         eligible = [name for name in spec.covariates if name in macro]
         if removals["left"] and len(eligible) > 1:
             removals["left"] -= 1
-            return eligible[0], 0.001
+            return Removal(covariate=eligible[0], reason="forced", effect=0.001)
         return None
 
-    monkeypatch.setattr(
-        procedure, verdict, unstable if verdict == "_not_identified" else immaterial
-    )
+    # The rules live in `models.rules` now, and `run_selection` imports them by name -- so the
+    # module to substitute on is still the one that calls them, which is what a monkeypatch has
+    # to name. Moving them without moving this would have stopped the substitution silently.
+    monkeypatch.setattr(procedure, verdict, unstable if verdict == "not_identified" else immaterial)
 
     asked: list[tuple[Specification, Specification | None, str, Specification | None]] = []
     fitted_on: dict[int, Specification] = {}
@@ -1215,7 +1196,7 @@ def test_a_rebuilt_table_starts_from_the_same_model_fitted_on_the_old_one(
     must land where the cold fit landed, inside the thousandth of a standard error the polish
     promises.
     """
-    from creditsurv.models.blocks import POLISH_TOLERANCE_SE
+    from creditsurv.models.engine import POLISH_TOLERANCE_SE
 
     monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
     spec = Specification(continuous=("credit_score", "unemployment_change"))

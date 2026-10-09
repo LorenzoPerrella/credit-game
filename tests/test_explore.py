@@ -20,8 +20,8 @@ from creditsurv.explore import (
     fill_rate,
     frequency_table,
     survival_by_stratum,
-    weighted_correlation,
 )
+from creditsurv.models.selection import weighted_correlation
 
 
 def cell(frame: pd.DataFrame, row: object, column: str) -> float:

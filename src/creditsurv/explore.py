@@ -21,11 +21,10 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 import pandas as pd
 
+from creditsurv.data.panel import WEIGHT
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-#: Default weight column, produced by the aggregation.
-WEIGHT: Final = "loan_months"
 
 #: A category holding this much of the exposure leaves nothing to estimate from the
 #: rest. Deliberately 99% rather than the 90% one might reach for: a covariate that is
@@ -142,27 +141,6 @@ def default_rate_by_band(
     grouped["default_rate"] = grouped["events"] / grouped["exposure"]
     grouped["share"] = grouped["exposure"] / grouped["exposure"].sum()
     return grouped.reset_index().sort_values("level").reset_index(drop=True)
-
-
-def weighted_correlation(
-    frame: pd.DataFrame, columns: Sequence[str], *, weight: str = WEIGHT
-) -> pd.DataFrame:
-    """Exposure-weighted Pearson correlation between continuous covariates.
-
-    Weighted because the rows are cells: an unweighted matrix would describe the
-    distribution of *cells*, which is an artefact of the binning, rather than the
-    distribution of loan-months, which is the data.
-
-    From the covariance added up a block at a time. The first version held the
-    covariates and a centred copy of them at once -- two copies of every candidate on
-    the training half of the exact key -- for a matrix a dozen entries wide.
-    """
-    from creditsurv.models.selection import weighted_covariance
-
-    covariance = weighted_covariance(frame, columns, weight=weight).to_numpy(dtype=float)
-    deviations = np.sqrt(np.diag(covariance))
-    correlation = covariance / np.outer(deviations, deviations)
-    return pd.DataFrame(correlation, index=list(columns), columns=list(columns))
 
 
 def collinear_pairs(correlation: pd.DataFrame, *, threshold: float = 0.8) -> pd.DataFrame:

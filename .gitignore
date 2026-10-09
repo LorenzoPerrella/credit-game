@@ -45,3 +45,6 @@ data/
 # The independent validation report, saved from the browser: kept locally for reference and
 # summarised on the site's validation response page, not published with the code.
 Convalida PD Lifetime Freddie Mac*
+
+# Rust build products of the optional compiled kernel.
+target/

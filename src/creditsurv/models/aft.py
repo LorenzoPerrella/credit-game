@@ -44,7 +44,7 @@ from creditsurv.data.panel import (
     model_blocks,
     right_censored_frame,
 )
-from creditsurv.models.blocks import (
+from creditsurv.models.engine import (
     DEFAULT_BLOCK_ROWS,
     fit_encoded,
     fit_interval_censoring_in_blocks,
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
     from lifelines.fitters import ParametericAFTRegressionFitter
 
-    from creditsurv.models.blocks import BlockFit, Encoding
+    from creditsurv.models.engine import BlockFit, Encoding
 
 
 class Likelihood(StrEnum):
@@ -191,7 +191,7 @@ def fit_aft(
     equivalence tests hold the two paths to each other and both to lifelines.
 
     The interval-censored likelihood is evaluated ``block_rows`` rows at a time, by
-    :mod:`creditsurv.models.blocks`, and gives the fit lifelines gives. ``initial_point``
+    :mod:`creditsurv.models.engine`, and gives the fit lifelines gives. ``initial_point``
     starts the optimiser somewhere better than lifelines' own seed -- the coefficients of
     a nested model, say -- which changes how long the fit takes and not where it ends.
     """
@@ -295,7 +295,7 @@ def fit_encoding(
     """Fit one model from rows that have already been read, without reading them again.
 
     The expensive half of a fit is the reading: 12.1 minutes against 53 seconds of arithmetic
-    on the production table. An :class:`~creditsurv.models.blocks.Encoding` is that reading,
+    on the production table. An :class:`~creditsurv.models.engine.Encoding` is that reading,
     done once and with no formula involved, and this is a model fitted from it -- its design
     built by putting its formula through the key frames, 3,001 loan combinations and 153,309
     calendar keys, instead of over 72 million rows.

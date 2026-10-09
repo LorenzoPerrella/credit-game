@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
 
     import duckdb
+from creditsurv.config import DEFAULT_CAUSE
 from creditsurv.features import BIN_EDGES
 
 _LOGGER: Final = logging.getLogger(__name__)
@@ -360,7 +361,7 @@ def _levels_for(spec: CellSpec, quarters: Sequence[str]) -> dict[str, tuple[str,
     causes the aggregation writes, and ``vintage`` from the quarters being aggregated -- which
     are the files on disk, so they are known at the top of the run rather than discovered by it.
     """
-    from creditsurv.data.panel import CENSORED, DEFAULT_CAUSE, PREPAYMENT_CAUSE
+    from creditsurv.config import CENSORED, DEFAULT_CAUSE, PREPAYMENT_CAUSE
 
     levels = {
         name: CATEGORICAL_LEVELS[name] for name in spec.categorical if name in CATEGORICAL_LEVELS
@@ -593,7 +594,7 @@ def incomplete_cases(
         query = f"""
         WITH book AS ({state_of_the_book_sql(policy, complete_only=False)}),
         loans AS (
-            SELECT loan_identifier, BOOL_OR(event) AS defaulted, {flags}
+            SELECT loan_identifier, BOOL_OR(outcome = '{DEFAULT_CAUSE}') AS defaulted, {flags}
             FROM book
             GROUP BY loan_identifier
         ),
@@ -658,7 +659,7 @@ def credit_adjacent_exits(
         per_loan AS (
             SELECT
                 loan_identifier,
-                BOOL_OR(event) AS defaulted,
+                BOOL_OR(outcome = '{DEFAULT_CAUSE}') AS defaulted,
                 BOOL_OR(left_the_book) AS exited
             FROM book
             GROUP BY loan_identifier
@@ -723,7 +724,7 @@ def defaults_by_month(
         )
         SELECT
             (period_key // 100) * 12 + (period_key % 100) - 1 AS month,
-            SUM(CASE WHEN outcome = 'default' THEN 1 ELSE 0 END) AS defaults
+            SUM(CASE WHEN outcome = '{DEFAULT_CAUSE}' THEN 1 ELSE 0 END) AS defaults
         FROM classed
         {_not_null_filter(spec)}
         GROUP BY 1

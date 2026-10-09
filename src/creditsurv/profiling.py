@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Final
 
 import pandas as pd
 
+from creditsurv.config import DEFAULT_CAUSE
 from creditsurv.data.aggregate import GIVE_UP_ORDER
 from creditsurv.data.book import (
     CATEGORICAL,
@@ -84,7 +85,7 @@ def _accumulate(
         WITH book AS ({state_of_the_book_sql()})
         SELECT {inner_select},
                COUNT(*) AS loan_months,
-               SUM(CASE WHEN event THEN 1 ELSE 0 END) AS events
+               SUM(CASE WHEN outcome = '{DEFAULT_CAUSE}' THEN 1 ELSE 0 END) AS events
         FROM book
         GROUP BY {group_by}
         """

@@ -39,7 +39,7 @@ one that merely looks like one.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import pandas as pd
@@ -336,7 +336,7 @@ class Scenario:
 #: Nothing happens: every series holds its last observed value. A random walk is
 #: the honest default when no forecast is available, and it is what the
 #: unconditional backtest uses.
-BASELINE = Scenario(name="baseline")
+BASELINE: Final = Scenario(name="baseline")
 
 #: A recession resembling 2008 in shape rather than magnitude, shocked on the series
 #: the fitted model actually reads.
@@ -365,7 +365,7 @@ BASELINE = Scenario(name="baseline")
 #: sixteen months, as 90.4 became 55.3, and housing starts 65% over twenty-one, as 1.35
 #: million became 478 thousand; both are levels, and proportional for the same reason
 #: ``house_price_index`` and ``consumer_price_index`` are.
-ADVERSE = Scenario(
+ADVERSE: Final = Scenario(
     name="adverse",
     shocks={
         "unemployment_rate": [*np.linspace(0.0, 4.0, 12), *([4.0] * 24)],

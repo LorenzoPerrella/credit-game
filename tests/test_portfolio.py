@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import pytest
 
+from creditsurv.config import CENSORED, DEFAULT_CAUSE, PREPAYMENT_CAUSE
 from creditsurv.data.ingest import Quarter, ingest_quarter
-from creditsurv.data.panel import EVENT, WEIGHT
+from creditsurv.data.panel import OUTCOME, WEIGHT
 from creditsurv.portfolio import (
     book_summary,
     covariate_evolution,
@@ -96,6 +97,36 @@ def test_default_rate_is_events_over_exposure(book: tuple[list[str], list[str]])
     assert int(table["loan_months"].sum()) > 0
 
 
+def test_the_default_rate_counts_the_defaults_and_not_a_zero(tmp_path: Path) -> None:
+    """One defaulting loan, counted as one -- which the rate test above cannot see.
+
+    It asserts only that the rate is between 0 and 1 on a fixture with no defaults, so a query
+    counting zero everywhere passes it. That is a real way to fail: this number is read out of
+    the book's three-state `outcome` column by an f-string naming `DEFAULT_CAUSE`, and a
+    placeholder that failed to interpolate would compare the column against the literal text
+    and report a book that never defaults.
+    """
+    origination = [origination_row("F000000001"), origination_row("F000000002")]
+    performance = [
+        performance_row("F000000001", "201503", "0"),
+        performance_row("F000000001", "201504", "1", delinquency="1"),
+        performance_row("F000000001", "201505", "2", delinquency="3"),
+        performance_row("F000000002", "201503", "0"),
+        performance_row("F000000002", "201504", "1"),
+    ]
+    write_archives(tmp_path / "FREDDIE MAC", 2015, {1: (origination, performance)})
+    ingest_quarter(2015, 1)
+    perf = [str(Quarter(2015, 1).parquet_path("perf"))]
+    orig = [str(Quarter(2015, 1).parquet_path("orig"))]
+
+    table = default_rate_by_period(perf, orig).set_index("period")
+
+    events = table["events"].astype(int)
+    assert int(events.sum()) == 1, "one loan reaches three missed payments"
+    assert events.loc["2015-05"] == 1
+    assert events.loc["2015-03"] == 0
+
+
 def test_a_quarter_with_no_valid_quantiles_is_skipped(tmp_path: Path) -> None:
     """A quarter where every value is a sentinel returns no quantiles at all, and
     those rows must be dropped rather than propagate a null through the average."""
@@ -125,7 +156,7 @@ def test_the_book_summary_counts_what_it_says_it_counts() -> None:
         }
     )
     outstanding = pd.DataFrame({"contracts": [3, 5, 4], "balance": [300.0, 520.0, 410.0]})
-    cells = pd.DataFrame({WEIGHT: [3, 4, 4], EVENT: [False, True, False]})
+    cells = pd.DataFrame({WEIGHT: [3, 4, 4], OUTCOME: [CENSORED, DEFAULT_CAUSE, PREPAYMENT_CAUSE]})
 
     summary = book_summary(lending, outstanding, performance_rows=13, cells=cells)
 

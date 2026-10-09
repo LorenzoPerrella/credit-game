@@ -24,12 +24,10 @@ from creditsurv.data.panel import (
     to_interval_censored,
 )
 from creditsurv.models.aft import FITTERS
-from creditsurv.models.blocks import (
-    POLISH_TOLERANCE_SE,
-    StoredColumn,
-    _polish,
-    fit_interval_censoring_in_blocks,
-)
+from creditsurv.models.engine.contract import POLISH_TOLERANCE_SE
+from creditsurv.models.engine.fit import fit_interval_censoring_in_blocks
+from creditsurv.models.engine.polish import _polish
+from creditsurv.models.engine.storage import StoredColumn
 from fixtures import DEFAULT_PARAMS, build_panel
 
 if TYPE_CHECKING:
@@ -77,9 +75,9 @@ def through_the_optimiser(monkeypatch: pytest.MonkeyPatch) -> None:
     Newton declines. Everything the chain does is still reachable and still has to work, and a
     test of it that let Newton answer instead would pass without exercising anything.
     """
-    from creditsurv.models import blocks
+    from creditsurv.models.engine import fit as where_it_is_called
 
-    monkeypatch.setattr(blocks, "_newton_steps_first", lambda objective, start: None)
+    monkeypatch.setattr(where_it_is_called, "_newton_steps_first", lambda objective, start: None)
 
 
 def single_level_rows(frame: pd.DataFrame) -> int:
@@ -355,7 +353,7 @@ def test_the_slicer_hands_lifelines_the_columns_it_asks_for(macro: pd.DataFrame)
     """
     from lifelines.utils import DataframeSlicer
 
-    from creditsurv.models.blocks import _Slicer
+    from creditsurv.models.engine.storage import _Slicer
 
     columns = pd.MultiIndex.from_tuples(
         [("lambda_", "Intercept"), ("lambda_", "credit_score"), ("rho_", "Intercept")]
@@ -396,7 +394,7 @@ def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
     """
     from scipy import optimize
 
-    from creditsurv.models import blocks
+    from creditsurv.models.engine import fit as where_it_is_called
 
     calls: list[str] = []
     real = optimize.minimize
@@ -417,7 +415,7 @@ def test_another_optimiser_is_tried_when_lifelines_own_stops_short(
             return failed
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(blocks, "minimize", refuses_slsqp)
+    monkeypatch.setattr(where_it_is_called, "minimize", refuses_slsqp)
 
     fitter = FITTERS["weibull"]()
     record = fit_interval_censoring_in_blocks(
@@ -455,7 +453,7 @@ def test_the_optimisers_report_is_used_for_nothing_but_its_point(
     """
     from scipy import optimize
 
-    from creditsurv.models import blocks
+    from creditsurv.models.engine import fit as where_it_is_called
 
     real = optimize.minimize
 
@@ -465,7 +463,7 @@ def test_the_optimisers_report_is_used_for_nothing_but_its_point(
         results.fun = float(results.fun)  # kept finite: the engine checks convergence on it
         return results
 
-    monkeypatch.setattr(blocks, "minimize", reports_nonsense)
+    monkeypatch.setattr(where_it_is_called, "minimize", reports_nonsense)
 
     fitter = FITTERS["weibull"]()
     record = fit_interval_censoring_in_blocks(
@@ -490,7 +488,7 @@ def test_the_optimiser_that_worked_is_tried_first_next_time() -> None:
     cost over an hour a fit on the prepayment model -- 25 minutes of SLSQP failing, 40 of
     L-BFGS-B, then an hour of trust-constr answering.
     """
-    from creditsurv.models.blocks import _methods
+    from creditsurv.models.engine.polish import _methods
 
     assert _methods("SLSQP", None) == ("SLSQP", "L-BFGS-B", "trust-constr")
     assert _methods("SLSQP", "slsqp") == ("SLSQP", "L-BFGS-B", "trust-constr")
@@ -511,7 +509,7 @@ def test_the_shape_is_bounded_far_more_tightly_than_the_coefficients() -> None:
     """
     from lifelines import exceptions
 
-    from creditsurv.models.blocks import (
+    from creditsurv.models.engine.contract import (
         _PARAMETER_BOUND,
         _SHAPE_BOUND,
         _check_interior,
@@ -552,7 +550,7 @@ def test_a_method_that_stops_short_of_its_tolerance_is_finished_by_the_polish(
     """
     from scipy import optimize
 
-    from creditsurv.models import blocks
+    from creditsurv.models.engine import fit as where_it_is_called
 
     calls: list[str] = []
     real = optimize.minimize
@@ -564,7 +562,7 @@ def test_a_method_that_stops_short_of_its_tolerance_is_finished_by_the_polish(
         results.message = "Iteration limit reached"
         return results
 
-    monkeypatch.setattr(blocks, "minimize", stops_short)
+    monkeypatch.setattr(where_it_is_called, "minimize", stops_short)
 
     fitter = FITTERS["weibull"]()
     record = fit_interval_censoring_in_blocks(
@@ -594,7 +592,7 @@ def test_the_region_that_is_not_a_likelihood_is_a_wall() -> None:
     trust-constr alike, with the coefficients bounded at 100 throughout. Reported as infinite
     it is a wall, which is how a domain boundary is told to an optimiser.
     """
-    from creditsurv.models.blocks import _outside_the_domain
+    from creditsurv.models.engine.contract import _outside_the_domain
 
     x = np.array([1.0, -2.0, 0.5])
 
@@ -624,7 +622,7 @@ def test_a_point_outside_the_likelihood_stops_the_chain(
     from lifelines import exceptions
     from scipy import optimize
 
-    from creditsurv.models import blocks
+    from creditsurv.models.engine import fit as where_it_is_called
 
     calls: list[str] = []
     real = optimize.minimize
@@ -637,7 +635,7 @@ def test_a_point_outside_the_likelihood_stops_the_chain(
         results.message = "the wall"
         return results
 
-    monkeypatch.setattr(blocks, "minimize", leaves_the_likelihood)
+    monkeypatch.setattr(where_it_is_called, "minimize", leaves_the_likelihood)
 
     with pytest.raises(exceptions.ConvergenceError, match="unbounded below"):
         fit_interval_censoring_in_blocks(
@@ -664,7 +662,7 @@ def test_a_floor_makes_the_unbounded_region_unreachable_while_the_fit_runs() -> 
     that runs for three hours and is thrown away -- the prepayment model's step 8 had reached
     0.0122 against a parent's optimum of 0.0179, which is impossible, and was still going.
     """
-    from creditsurv.models.blocks import _outside_the_domain
+    from creditsurv.models.engine.contract import _outside_the_domain
 
     x = np.array([0.5, -1.0])
 
@@ -692,7 +690,9 @@ def test_the_floor_and_the_progress_line_belong_to_the_objective_over_every_row(
     being in the same place, had been reporting a quarter of the objective for every run made with
     workers.
     """
-    from creditsurv.models.blocks import _Objective, _scan, _seed_regressors, _set_censoring
+    from creditsurv.models.engine.lifelines_glue import _seed_regressors, _set_censoring
+    from creditsurv.models.engine.objective import _Objective
+    from creditsurv.models.engine.scan import _scan
 
     names = ("lower_bound", "upper_bound", "exact_observation", "age_start", "loan_months")
     fitter = FITTERS["weibull"]()
@@ -741,7 +741,7 @@ def test_an_optimiser_pinned_against_the_floor_is_given_up_on() -> None:
     """
     from lifelines import exceptions
 
-    from creditsurv.models.blocks import _PINNED_REFUSALS, _check_pinned, _Pinned
+    from creditsurv.models.engine.contract import _PINNED_REFUSALS, _check_pinned, _Pinned
 
     def turned_back(times: int) -> _Pinned:
         pinned = _Pinned()
@@ -779,7 +779,12 @@ def test_an_optimiser_circling_the_floor_is_given_up_on() -> None:
     """
     from lifelines import exceptions
 
-    from creditsurv.models.blocks import _PINNED_SHARE, _PINNED_WINDOW, _check_pinned, _Pinned
+    from creditsurv.models.engine.contract import (
+        _PINNED_SHARE,
+        _PINNED_WINDOW,
+        _check_pinned,
+        _Pinned,
+    )
 
     def cycle(cycles: int, *, improving: bool) -> _Pinned:
         """Six refused, one accepted -- the prepayment model's own cadence."""
@@ -829,7 +834,12 @@ def test_a_polish_closing_too_slowly_to_finish_is_given_up() -> None:
     """
     from itertools import pairwise
 
-    from creditsurv.models.blocks import _POLISH_STEPS, _STALL_STEPS, _required_ratio, _too_slow
+    from creditsurv.models.engine.polish import (
+        _POLISH_STEPS,
+        _STALL_STEPS,
+        _required_ratio,
+        _too_slow,
+    )
 
     observed = [144.0, 40.7, 81.8, 7.56e3, 3.45e3, 1.37e3, 1.24e3, 1.13e3, 1.05e3, 975.0]
     streaks, stalled = [], 0
@@ -866,7 +876,7 @@ def test_a_polish_the_floor_stalled_is_not_offered_to_another_optimiser() -> Non
     """
     from lifelines import exceptions
 
-    from creditsurv.models.blocks import _PINNED_WINDOW, Pinned, _Pinned
+    from creditsurv.models.engine.contract import _PINNED_WINDOW, Pinned, _Pinned
 
     #: A value a likelihood can take, refused: that is the floor's doing.
     below_floor = _Pinned()
@@ -922,7 +932,7 @@ def test_a_worker_that_dies_ends_the_fit_instead_of_blocking_it() -> None:
     import queue
     from types import SimpleNamespace
 
-    from creditsurv.models.blocks import _Workers
+    from creditsurv.models.engine.workers import _Workers
 
     pool = cast("Any", object.__new__(_Workers))
     pool._results = queue.Queue()
@@ -941,7 +951,7 @@ def test_a_worker_that_dies_ends_the_fit_instead_of_blocking_it() -> None:
         pytest.raises(RuntimeError, match="stopped before answering"),
         pytest.MonkeyPatch.context() as patch,
     ):
-        patch.setattr("creditsurv.models.blocks._WORKER_POLL_SECONDS", 0.05)
+        patch.setattr("creditsurv.models.engine.workers._WORKER_POLL_SECONDS", 0.05)
         pool._collect()
 
 
@@ -960,7 +970,8 @@ def test_the_parent_evaluates_its_own_share_while_the_workers_evaluate_theirs() 
     drains the pool on its way out.
     """
 
-    from creditsurv.models.blocks import _Pinned, _Pooled
+    from creditsurv.models.engine.contract import _Pinned
+    from creditsurv.models.engine.workers import _Pooled
 
     class Pool:
         def __init__(self) -> None:
@@ -1032,7 +1043,7 @@ def test_a_filter_that_selects_every_row_is_not_a_copy_of_the_design() -> None:
     The filtered design with every row *is* the design, so it is the same slicer. Measured, a
     value-and-gradient on one such block went from 232.9 ms to 166.8.
     """
-    from creditsurv.models.blocks import _Slicer
+    from creditsurv.models.engine.storage import _Slicer
 
     design = np.asfortranarray(np.arange(24, dtype=float).reshape(8, 3))
     columns = pd.MultiIndex.from_tuples(
@@ -1141,7 +1152,8 @@ def test_two_models_are_fitted_from_one_reading_of_the_rows(weighted: pd.DataFra
     """
     from creditsurv.data.panel import model_blocks
     from creditsurv.models.aft import FITTERS, fit_aft
-    from creditsurv.models.blocks import encode_blocks, fit_encoded
+    from creditsurv.models.engine.fit import fit_encoded
+    from creditsurv.models.engine.scan import encode_blocks
 
     encoding = encode_blocks(
         model_blocks(weighted, COVARIATES, rows=5_000, weights_col="loan_months"),
@@ -1180,6 +1192,58 @@ def test_two_models_are_fitted_from_one_reading_of_the_rows(weighted: pd.DataFra
         assert fitter.log_likelihood_ == pytest.approx(fresh.log_likelihood, rel=1e-9), formula
 
 
+def test_a_fit_from_a_mapped_reading_is_the_same_fit_bit_for_bit(
+    weighted: pd.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The claim a cached reading makes, and the only one that matters: it changes nothing.
+
+    A reading of the production table is 10.9 minutes and 1.09 GB, a selection pays three of
+    them and rule 2's four runs pay twelve. Written once and mapped back it is seconds -- but a
+    reading that came back *almost* the same would be a different model published under the
+    same name, so the test is not a tolerance. The same formula fitted from the reading and
+    from the mapping of it has to agree **bit for bit**: the same log-likelihood, the same
+    coefficients, the same standard errors.
+
+    It can be that strict because nothing is recomputed. The rows come back as views of a
+    memory map, the keys in the order their codes were handed out in, and the blocks cut where
+    they were cut -- and the blocks are where the sums are cut, which is the one thing a
+    reading can change about an objective, floating-point addition not being associative.
+    """
+    from creditsurv.data.panel import model_blocks
+    from creditsurv.models.aft import FITTERS
+    from creditsurv.models.engine.cache import load_encoding, save_encoding
+    from creditsurv.models.engine.fit import fit_encoded
+    from creditsurv.models.engine.scan import encode_blocks
+
+    monkeypatch.setenv("CREDITSURV_DATA_DIR", str(tmp_path))
+    encoding = encode_blocks(
+        model_blocks(weighted, COVARIATES, rows=5_000, weights_col="loan_months"),
+        loan=[name for name in COVARIATES if name not in CALENDAR],
+        calendar=CALENDAR,
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col="loan_months",
+    )
+    save_encoding(encoding, "the-training-half", {"cells": encoding.episodes})
+    mapped = load_encoding("the-training-half")
+    assert mapped is not None
+
+    read = FITTERS["weibull"](penalizer=0.0)
+    from_rows = fit_encoded(read, encoding, formula=FORMULA)
+    remapped = FITTERS["weibull"](penalizer=0.0)
+    from_disk = fit_encoded(remapped, mapped, formula=FORMULA)
+
+    assert from_disk.rows == from_rows.rows
+    assert from_disk.events == from_rows.events
+    assert remapped.log_likelihood_ == read.log_likelihood_
+    np.testing.assert_array_equal(remapped.params_.to_numpy(), read.params_.to_numpy())
+    np.testing.assert_array_equal(
+        remapped.standard_errors_.to_numpy(), read.standard_errors_.to_numpy()
+    )
+
+
 def test_an_unclassified_covariate_has_no_index_to_be_looked_up_by(
     weighted: pd.DataFrame,
 ) -> None:
@@ -1189,7 +1253,7 @@ def test_an_unclassified_covariate_has_no_index_to_be_looked_up_by(
     index that distinguishes it, so two rows differing only in it would share a design row.
     """
     from creditsurv.data.panel import model_blocks
-    from creditsurv.models.blocks import encode_blocks
+    from creditsurv.models.engine.scan import encode_blocks
 
     with pytest.raises(ValueError, match="neither in the loan key"):
         encode_blocks(
@@ -1260,3 +1324,29 @@ def test_newton_goes_first_from_a_cold_start_and_not_only_from_a_warm_one(
     assert apart.max() < 0.1, f"{apart.max()} standard errors apart"
     assert fitter.log_likelihood_ >= stock.log_likelihood_, "the polish finished the job"
     assert without.residual_error_se > record.residual_error_se
+
+
+def test_the_engines_old_module_name_still_resolves_for_the_cached_fits() -> None:
+    """`creditsurv/models/blocks.py` is not dead code, and deleting it empties the fit cache.
+
+    The engine was one module of 2,325 lines and is now the `models/engine/` package. A pickle
+    written before that split names `creditsurv.models.blocks.BlockFit`, and pickle resolves a
+    class by **importing the module it was written from** -- so without that file every fit on
+    disk raises `ModuleNotFoundError`, `load_fit` turns it into a miss, and a run starts cold.
+    All 176 on this machine were unreadable for exactly as long as it took to find this, and
+    the only thing that said so was a warning nobody was reading.
+
+    This test exists so that the shim cannot be tidied away as the decoy it looks like.
+    """
+    import io
+    import pickle
+
+    from creditsurv.models.blocks import BlockFit as under_the_old_name
+    from creditsurv.models.engine.fit import BlockFit
+
+    assert under_the_old_name is BlockFit
+
+    # And resolved the way pickle resolves it, which is the step that was failing: an
+    # unpickler meeting the old module path calls `find_class` on it.
+    resolver = pickle.Unpickler(io.BytesIO(b""))
+    assert resolver.find_class("creditsurv.models.blocks", "BlockFit") is BlockFit

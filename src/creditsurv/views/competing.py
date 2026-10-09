@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 
 from creditsurv.backtest.metrics import grade_backtest, master_scale_passed
-from creditsurv.data.panel import AGE, CAUSES, DEFAULT_CAUSE, WEIGHT, ended_in
+from creditsurv.config import CAUSES, DEFAULT_CAUSE
+from creditsurv.data.panel import AGE, WEIGHT, ended_in
 from creditsurv.models.nonparametric import cumulative_incidence, predicted_incidence_curve
 from creditsurv.views.tables import View
 
@@ -80,30 +81,6 @@ def exposure_by_level(
         table[f"{cause}_rate"] = np.where(exposure > 0, events / exposure, np.nan)
     table["share"] = exposure / exposure.sum() if exposure.sum() else np.nan
     return table[table["loan_months"] > 0].reset_index(drop=True)
-
-
-def cycle_in_band(by_year: pd.DataFrame, *, low: float = 0.80, high: float = 1.25) -> pd.DataFrame:
-    """The in-sample cycle criterion: the share of calendar years inside the band.
-
-    The criterion the previous model was found not to test. Its actual over expected ran
-    from 0.47 to 1.60 across years, and a single out-of-time ratio near one says nothing
-    beside that spread -- rule 5 asks for at least 70% of years in the band.
-    """
-    ratios = by_year["actual_over_expected"].dropna()
-    inside = ratios.between(low, high)
-    return pd.DataFrame(
-        [
-            {
-                "years": len(ratios),
-                "years_in_band": int(inside.sum()),
-                "share_in_band": float(inside.mean()) if len(ratios) else np.nan,
-                "lowest": float(ratios.min()) if len(ratios) else np.nan,
-                "highest": float(ratios.max()) if len(ratios) else np.nan,
-                "threshold": 0.70,
-                "passed": bool(len(ratios) and inside.mean() >= 0.70),
-            }
-        ]
-    )
 
 
 def anchoring_view(

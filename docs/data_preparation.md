@@ -471,7 +471,8 @@ says changed three times. Monthly is what the data supports, so monthly is what 
 is. The width is then read back off the spacing of the distinct ages rather than
 passed in, so a cell table can never disagree with the width it was built with.
 
-The final collapse, measured on the whole dataset:
+The final collapse, measured on the whole dataset **before the September 2026 key extension**,
+which is the comparison the event definition was chosen on and is left as it was taken:
 
 | | `exclude` | `censor` |
 |---|---|---|
@@ -479,8 +480,9 @@ The final collapse, measured on the whole dataset:
 | Cells out | **63,639,116** | **63,139,859** |
 | Compression | **40×** | **40×** |
 
-The quarter-keyed table was 15,858,492 cells, four times fewer, for the reasons given
-under the grouping key.
+With the HARP level and the payment state in the key, `exclude` is **91,575,827** cells over
+2.774 billion loan-months, a compression of 30x. The quarter-keyed table was 15,858,492 cells,
+four times fewer again, for the reasons given under the grouping key.
 
 The one cost is fit time, and it is real: see [the methodology
 report](reports/methodology.md) for what a fit on this table takes.

@@ -27,7 +27,7 @@ site are all drawn from one fit, <!-- value: views.fit -->, and were generated
 flowchart TD
     subgraph local["On the machine that holds the data"]
         A["40 GB of archives, 28 vintage years"] -->|ingest| B["parquet, one file per quarter"]
-        B -->|"profile, aggregate"| D["63.6 million weighted cells"]
+        B -->|"profile, aggregate"| D["91.6 million weighted cells"]
         D -->|select| E["the specification"]
         E -->|report| F["one fit, on the training half"]
         F -->|views| G["aggregate tables"]

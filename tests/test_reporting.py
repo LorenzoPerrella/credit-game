@@ -10,7 +10,8 @@ import pytest
 from typer.testing import CliRunner
 
 from creditsurv.backtest.metrics import population_stability_index
-from creditsurv.cli import app, default_covariates
+from creditsurv.cli import app
+from creditsurv.config import default_covariates
 from creditsurv.reporting import charts
 from creditsurv.reporting.builder import Report, markdown_table, provenance
 
