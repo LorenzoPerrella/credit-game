@@ -287,6 +287,42 @@ and in every decile, Gini above 0.45, and the share of calendar years in band. T
 not read until the windows report is regenerated, and the comparison published is against the
 numbers above, which are already recorded.
 
+## 13. What a compiled kernel may be, and what it may not
+
+Declared before any of it is written, because a second language in a credit model is a thing to
+be bounded in advance rather than contained afterwards.
+
+**The gate, first.** A compiled implementation of the likelihood is kept only if it computes a
+value, a gradient and a Hessian over the whole training half -- 72,671,500 rows at 26
+parameters -- in at most **9.90 s** against the **29.69** the NumPy kernel is measured at, with
+resident memory no higher than **1.31 GB**. Three times, on the same rows and this machine. If
+it does not pass, it is abandoned and the number is published in `docs/reports/engine.md`.
+Measured against the NumPy, never against autograd: measuring it against autograd would credit
+a compiled language with removing a tape that NumPy already removed.
+
+**And the segregation, which is not negotiable with the gate.**
+
+- **One** crate, `crates/creditsurv-kernel/`, built as a separate workspace member and installed
+  through an optional extra. Nobody needs a Rust toolchain to run this project.
+- At most **three** `#[pyfunction]`. The boundary is a function call, not an object graph.
+- Across it pass **only numpy arrays of fixed dtype** -- `f64` for parameters and tables, `u32`
+  for the codes, `u16` for the age, `u8` for the flags -- and back a scalar, an `f64[p]` and an
+  `f64[p, p]`. No Python objects, no pandas, no lifelines.
+- **Inside** it: no I/O, no logging, no configuration and **no rule of this document**. The loop
+  over rows and nothing else.
+- `models/kernel/terms.py` stays **normative**. It is what the equivalence tests compare
+  against, and the extension is optional at import: a missing one is the NumPy path, not an
+  error.
+- The summation is **deterministic**: a fixed chunk order, no unordered reduction, no FMA
+  reassociation. Two runs agree bit for bit, as the Python path already does.
+- CI runs the suite **twice on both Python legs**, with and without the extension, so neither
+  path can rot.
+
+What the gate buys, if it passes: a warm candidate's 5.67 minutes become about two and a
+selection's 3.5 hours about 1.6. What it cannot buy is a different answer -- the estimator is
+lifelines' own likelihood on the same rows, and the damped Newton polish certifies every fit to
+under a thousandth of a standard error whichever backend evaluated it.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.
@@ -299,3 +335,5 @@ numbers above, which are already recorded.
 - Letting the payment state into any model of the remaining life.
 - Removing a covariate without fitting the model that remains.
 - Reading a banded covariate as a line through its midpoints.
+- Letting a compiled kernel read a declared constant, touch a file, or be the only
+  implementation of the likelihood.
