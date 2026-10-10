@@ -391,6 +391,39 @@ tolerance: the same bytes. The footprint is 2.36 GB against 2.37.
 
 So a campaign's readings go from 70 minutes to 21, and a selection's three from 35 to 11.
 
+## A whole selection, cold, at production scale
+
+The end of it, and the test the whole session answers to: `creditsurv select` re-run on the
+production window with every fit remade, against the specification the project publishes.
+
+| | |
+|---|---|
+| the formula | **identical** |
+| the nine eliminations and their reasons | **identical** |
+| the screening, elimination, stability and materiality tables | agree to **5.7e-10** at worst |
+| time | **20.7 minutes**, peak 2.51 GB |
+| fits | 29 remade: 12 s fastest, **41 s mean**, 142 s slowest |
+
+Against the **10.5 hours** the four recorded runs averaged, on the same table and the same
+procedure. Where the 20.7 minutes go:
+
+    the reading and the moments    0.34 min   (the reading came off the disk cache)
+    step 7, univariate screening  10.33 min
+    step 8, backward elimination   4.03 min
+    step 9, stability              5.23 min   (3.35 of it two readings it had to take)
+    step 10, materiality           0.69 min
+
+**96% of a selection is now the fits**, 19.9 of the 20.7 minutes, and a fit is five Hessians and
+six values at the arithmetic's floor -- 4.22 s and 2.45 s over 72.7 million rows on four threads.
+Everything around them is minutes: the reading 3.58 and cached, the moments 20 seconds, the two
+step-9 readings 3.35.
+
+So the efficiency work is done, and what is left is **the number of fits**, which is the
+procedure `docs/variable_selection.md` declares and not an implementation detail. The two options
+still priced below shrank with the fits they were measured against: the exact row merge is now
+about 17 minutes a campaign where it was 70, and step 9's two extra readings about 7 where they
+were 46. Neither pays for the published numbers it would move.
+
 ## The last pass over the parquet, and what is left after it
 
 **Steps 5 and 6 were the last thing in a selection that read the cell file for itself.** They
@@ -434,14 +467,16 @@ because that is the unit a decision is taken in. A reading is cached on disk and
 on the family, so a campaign pays **six** readings once per table and nothing on a re-run; what
 recurs is what nothing caches.
 
-**1. The exact row merge, which needs the table sorted** -- 1.34x on every evaluation, so a warm
-candidate from about 2.5 minutes to 1.9: **70 minutes a campaign, every campaign**, and the
-largest of the two. Measured above: 1.11x unsorted, 1.34x sorted, and a per-quarter sort recovers
+**1. The exact row merge, which needs the table sorted** -- 1.34x on every evaluation. It was
+**70 minutes a campaign** when a warm candidate took 2.5 minutes; a fit is 41 seconds now, so it
+is about **17 minutes a campaign**, and it still costs a re-aggregation and the row count every
+report prints as its sample size. Measured above: 1.11x unsorted, 1.34x sorted, and a per-quarter sort recovers
 all of it. Cost: a re-aggregation of the whole book, the fit cache, the cached readings, and the
 row count every report prints as its sample size.
 
-**2. Step 9 reads the book twice more than it needs to** -- **46 minutes, once per table**, not
-per campaign, because those two readings are cached like any other. The two origination-parity
+**2. Step 9 reads the book twice more than it needs to** -- **46 minutes once per table** when a
+reading took 11.6 minutes, and about **7** now that one takes 3.58 and the two halves are the
+window between them. Cached like any other reading, so once per table either way. The two origination-parity
 halves are subsets of the first reading, but a parity is not recoverable from an encoded row: the
 row carries `(i, j, age, event, weight)` and the origination month is in neither key. Carrying it
 on the calendar key *frame*, or one byte of parity on the row, makes each half a boolean mask.

@@ -71,14 +71,28 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
   by three samples. The name covers the table's identity, the two covariate lists, the cause,
   the parity, the window, the batch size and the macro panel's own numbers *clipped to the
   months the window can reach*: the panel is live FRED data, and a month published above the cut
-  cannot have entered a reading that stops below it.
+  cannot have entered a reading that stops below it -- and the clip is at the cut **less the
+  lag**, because every series is lagged three months, so the last row a window can touch is
+  `cut - 3`. Stopping at the cut cost a second 1.02 GB reading of the same 72,671,500 cells when
+  FRED revised one of those three months: the two were compared, found identical in every row
+  array and both key frames, and that is how the three months were found.
 - **Nothing holds the panel any more, and nothing should start again.** Every command that
   used to expand the training half now reads the cell file a batch at a time: the fits
   (`models.engine`), the selection (`Fits(blocks=...)`), the views (`views.streamed`) and the
   backtest windows. A whole selection was measured at **2.75 GB** across its parent and three
   workers, where one fit holding the half had been 15 GB. `split_cells` remains for a caller
   that genuinely needs both halves as frames; on this table that is nobody.
-- **A reading is 3.58 minutes, not 11.6, and parquet was never the cost.** It was the largest item
+- **A selection is 20.7 minutes and re-derives the published specification exactly.** Run cold on
+the production window with every fit remade, after the compiled kernel, the four threads, the
+moments off the keys and the faster reading: the **same formula**, the **same nine eliminations
+with the same reasons**, and every table under them agreeing to **5.7e-10** at worst. Against the
+10.5 hours the four recorded runs averaged. **96% of it is now the fits** -- 19.9 of the 20.7
+minutes, 29 of them at 41 seconds mean -- and a fit is five Hessians and six values at the
+arithmetic's floor. What is left is the *number* of fits, which is the declared procedure and not
+an implementation detail; the two options still priced in `docs/reports/engine.md` shrank with
+the fits they were measured against, to about 17 minutes a campaign and 7 once per table.
+
+**A reading is 3.58 minutes, not 11.6, and parquet was never the cost.** It was the largest item
 left in a campaign -- six readings, 70 minutes, once per table -- and had never been profiled
 from the inside, only described. Measured: **parquet is 0.2%**, the macro family 7%, and 88% was
 two things nobody had looked at. `_Growing.of` found a block's distinct combinations with
