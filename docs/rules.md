@@ -46,6 +46,48 @@ default (Aalen-Johansen, which accounts for prepayment as a competing risk):
   model that says tighter financial conditions lengthen survival is not a better model, it
   is a broken one.
 
+### The family is reopened, against a criterion this rule never considered
+
+Amended 10 October 2026, before the log-logistic selection it calls for. **The motive first,
+because stating it is what makes this legitimate rather than convenient.**
+
+**The motive.** This rule chose the Weibull on the distance from the Aalen-Johansen incidence --
+0.1027 percentage points against 0.1498, inside the 0.1 pp tie it had declared -- and kept the
+Weibull for not falling at long ages. None of that measurement is withdrawn. What it never asked
+is whether the selected model **calibrates by decile**, which is section 5's criterion, declared
+before any of this, and which the Weibull fails in sample in six deciles of ten: 0.63, 0.60, 0.63,
+0.70, 0.79, 0.88, 0.98, 1.09, 1.19, 1.00.
+
+**And the argument that made the family look irrelevant to that failure was wrong.** It was put
+as: the hazard ratio between two loans in an AFT is `exp(rho * delta)`, constant in age, so no
+change of family can widen a compressed spread. **That holds only for the Weibull**, which is the
+only family that is both accelerated-failure-time and proportional-hazards. For the log-logistic,
+`h = (rho / t) * u / (1 + u)` with `u = (t / lambda)^rho`: the ratio is `exp(rho * delta)` while
+`u` is small and tends to **1** as `u` grows. So the family does bear on the spread, and in two
+directions at once -- its own curve bends, which may leave a larger `rho` than the Weibull's
+compromise between a profile wanting 1.47 up to age 48 and 0.90 after, while its ratios compress
+at long ages. Which dominates at the ages this book is actually at is empirical, and the argument
+for not asking was a mistake.
+
+**What makes asking it affordable, and therefore owed.** A selection run is **20.7 minutes** where
+the four recorded runs averaged 10.5 hours. The whole question costs about an hour. A rule that
+rests on a tie-break because the measurement was expensive is a rule to re-measure when it stops
+being.
+
+**What is fixed before the fits.**
+
+- The log-logistic goes through **its own selection** under rule 12's band factors, as this rule
+  has always required -- not the Weibull's specification refitted.
+- Both families are judged by **section 5's decile band**, in sample: 0.80 to 1.25 in every
+  decile.
+- If both enter the band, the tie is broken by **this rule exactly as written above**: the mean
+  absolute gap from the Aalen-Johansen incidence over the ages above the exposure floor, the 0.1
+  pp tie, and the long-age preference for the Weibull. The rule is not replaced; it is handed the
+  pair it was written to compare.
+- If one enters, that one. If neither, the family is not the answer and the finding is published.
+- The family and the shape are answered **separately and in that order**, because a model that
+  changed both at once would leave neither measured.
+
 ## 3. Materiality of a macro covariate
 
 A macro covariate whose effect of one standard deviation on log survival time is **below 0.02
@@ -532,6 +574,55 @@ and that is where its economy comes from. So this fit runs on the autograd path,
 slow one -- an hour or two against four minutes. That is a reason to make one declared attempt,
 not a reason to make none.
 
+### Which covariates the shape may read, and why that choice was not mine to make
+
+Amended 10 October 2026, after the first shape fit converged and **before** any fit of the set
+this amendment names. What it replaces is a hand-pick; the hand-pick stays on the record above,
+because the reason it was wrong is the useful part.
+
+**What the rule did, and what was wrong with it.** It named `credit_score` and nothing else, on
+the ground that it is "the primary risk dimension". That was never measured. `credit_score` sits
+in the selection's protected loan block and has therefore **never passed the univariate screen**;
+among the covariates that did, `ltv_change` earns a likelihood ratio of **491,210** and
+`unemployment_change` **361,544**, an order of magnitude above anything else in the table. The
+claim that justified the pick is an assumption, and a specification resting on an unmeasured
+belief about which covariate matters was chosen by hand.
+
+**The line that is not a judgement.** This rule already forbids the shape to depend on the loan
+**age**. `period = cohort + age` holds identically, so **a covariate whose value moves over a
+loan's life moves with the age**, and admitting one to the shape is admitting age dependence
+under another name. The engine's own partition is the same partition: every column of the design
+is a function either of the loan combination, fixed at origination, or of the calendar key --
+which *is* the tuple of the time-varying values together with the age.
+
+| | Covariates | In the shape |
+|---|---|---|
+| Fixed at origination | `credit_score`, `original_ltv`, `debt_to_income`, `term_years`, `purpose`, `occupancy`, `harp`, `mortgage_insurance`, `buyer_type` | **admissible** |
+| Recomputed every loan-month | `ltv_change`, `unemployment_change`, `policy_rate_change`, `yield_curve_slope`, `consumer_sentiment`, `housing_starts_growth` | **refused** |
+
+The six are refused on the identity and not on materiality -- `ltv_change` is the strongest
+covariate in the model, and that is exactly why the reason has to be structural rather than a
+preference.
+
+**And the set is the whole of the admissible side, because any subset is a pick.** The shape reads
+all nine, in the forms rule 12 declares: the three banded covariates as factors against their own
+reference bands, the categoricals as levels, `term_years` as the one term its two values allow.
+About twenty parameters where there is one today. No screen, no per-covariate threshold, no order
+of entry, nothing to stop early -- there is nothing here to tune, which is the property that makes
+this a declaration instead of the search the list at the end of this document forbids.
+
+**The fallback, declared here so that it is not chosen later.** The shape sits in an exponent and
+needs only reach exp(5) to overflow the hazard, so twenty parameters in it are twenty ways to take
+the objective with them. If the fit cannot be made to converge under the bound of 3 on the log
+scale, that is published and the shape drops to **the underwriting block** -- `credit_score`,
+`original_ltv`, `debt_to_income`, `term_years`, the four the cell key bands -- which is a nameable
+set and not a choice among candidates. If that will not converge either, the shape stays scalar
+and this rule is answered in the negative.
+
+**The criterion does not move**: every in-sample decile inside 0.80 to 1.25, the likelihood ratio
+reported and not decisive, the age calibration published beside it, and the test window read once
+at the end or not at all.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.
@@ -548,4 +639,7 @@ not a reason to make none.
   implementation of the likelihood.
 - Letting the hazard's shape depend on the loan **age**, which would leave a hazard that does not
   integrate to a survival function, when the quantity being estimated is that integral.
-- Searching for what to put in the shape by what improves the decile the model is judged on.
+- Letting a covariate that is **recomputed every loan-month** into the shape, which is that
+  same age dependence under another name, because `period = cohort + age` holds identically.
+- Searching for what to put in the shape by what improves the decile the model is judged on,
+  or taking a subset of the admissible side when the whole of it is what can be declared.
