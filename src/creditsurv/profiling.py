@@ -59,7 +59,13 @@ DOMINANCE_THRESHOLD: Final = 0.99
 #: measured: about 2.4 times the 63.6 million the published table holds. What it protects is
 #: the aggregation itself and the hours every later fit costs, not a fit's memory -- the
 #: engine reads the file a batch at a time and does not care how long it is.
-CELL_CEILING: Final = 150_000_000
+#: What `docs/rules.md` caps the cell table at, and the number every extension is priced
+#: against. Raised from 150 million on 10 October 2026, with the motive stated in the rule
+#: before any finer-banded fit existed: the memory that bounded it is gone -- the aggregation
+#: writes a quarter at a time, so its peak is 170 MB rather than the 21 GB a concatenation
+#: wanted at 200 million cells -- and the time has moved by an order of magnitude, a reading
+#: from 11.6 minutes to 3.58 and a whole selection from 10.5 hours to 20.7 minutes.
+CELL_CEILING: Final = 250_000_000
 
 #: What a projection is read with, and the one rebuild this project has done is where it comes
 #: from: a ratio estimated on nine quarters projected 80.4 million cells and produced 91.6,

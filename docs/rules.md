@@ -112,9 +112,10 @@ them, as it does for default.
 
 ## 7. How far the key may grow
 
-The cell table may reach **150 million cells**. That was about 2.4 times the 63.6 million the
-key produced when the ceiling was declared; the extensions this rule admitted took it to
-**91,575,827**, so 1.6 times remains. The engine reads it a batch at a time, so what the ceiling
+The cell table may reach **250 million cells**, raised from 150 on 10 October 2026 for the
+reasons set out below -- the memory that bounded it is gone and the time has moved by an order of
+magnitude. The 150 was about 2.4 times the 63.6 million the key produced when it was declared;
+the extensions this rule admitted took the table to **91,575,827**. The engine reads it a batch at a time, so what the ceiling
 protects is the aggregation itself and the time every later fit costs, not a fit's memory.
 
 If the measured cost of the extensions exceeds it, they are given up in this order:
@@ -139,6 +140,51 @@ projected 80.4 million cells (`docs/reports/key_extensions.csv`).
 The finer bands are individually affordable, at 144.9 million, and go first regardless,
 because the order was fixed by what each extension is *for* rather than by what it turned
 out to cost.
+
+### The ceiling is raised to 250 million cells, and why, declared before the rebuild
+
+Amended 10 October 2026, before any finer-banded fit exists. **The motive is stated first,
+because stating it is what makes this legitimate rather than convenient.**
+
+**The motive.** The backtest fails its decile criterion, which was declared before the run and
+is not to be tuned on the test window. The in-sample evidence says what kind of failure it is:
+by decile of the log hazard, actual over expected runs **0.63, 0.60, 0.63, 0.70, 0.79, 0.88,
+0.98, 1.09, 1.19, 1.00** -- the model over-predicts the safe deciles and under-predicts the
+ninth, so its predicted risk is **compressed** across the spectrum while its ranking is sound
+(Gini 0.561). That is in sample, so it is a statement about the specification and not about the
+test window. And rule 12 is why the band grid is implicated: a banded covariate is read as
+bands, so **five credit-score bands are the resolution of the model's risk ordering**, and the
+safest band pools what the safe deciles are made of. The finer bands are 8 / 8 / 6 where the key
+has 5 / 4 / 4.
+
+**What the ceiling was for, and what has changed.** Rule 7 caps the table because of what a
+table costs: "the aggregation itself and the time every later fit costs". Both have moved, and
+one of them has dissolved.
+
+* The aggregation held every quarter's frame and concatenated them -- 11.3 GB at 91.6 million
+  cells and **about 21 GB at 200 million, on a 16 GB machine, which is what put the finer bands
+  out of reach before any fit was attempted**. It writes a quarter at a time now, so its peak
+  is one quarter: the widest is 1.4 million cells on the published key and **3.2 million with
+  the finer bands, about 170 MB**. The memory reason is gone, not reduced.
+* The time has moved by more than an order of magnitude. Measured on six quarters across the
+  book: the published key aggregates in **33 minutes** and the finer-banded one in **39** --
+  18% more time for 2.16x the cells, because the work is the SQL scan and not the output. A
+  reading of the training half is **3.58 minutes** where it was 11.6, and a whole selection run
+  is **20.7 minutes** where the four recorded runs averaged 10.5 hours.
+
+**The new ceiling: 250 million cells.** Derived from a budget in time, declared here and
+measured on this machine: an aggregation under **45 minutes**, a reading of the training half
+under **10**, and a selection run under **70**. At 250 million cells those come to about 43
+minutes, 9 and 60 -- scaled from the measurements above, since a reading and a fit are linear in
+rows. The old 150 million was 2.4 times the 63.6 million the key then produced; this is 2.7
+times the 91.6 million it produces now.
+
+**What does not move.** The give-up order is unchanged -- the finer bands are first on it, so
+admitting them first reorders nothing. Extensions are still priced **one at a time** against the
+ceiling, so this admits the finer bands and says nothing about the origination spread, which was
+184.4 million on its own and has never been priced beside them. And nothing is tuned on the test
+window: the finer bands are judged on the **in-sample** decile calibration first, and the test
+window is read once, at the end, against the criteria already recorded.
 
 ### How the two given-up extensions are re-priced, declared before the measurement
 
