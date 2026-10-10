@@ -55,7 +55,7 @@ because stating it is what makes this legitimate rather than convenient.**
 0.1027 percentage points against 0.1498, inside the 0.1 pp tie it had declared -- and kept the
 Weibull for not falling at long ages. None of that measurement is withdrawn. What it never asked
 is whether the selected model **calibrates by decile**, which is section 5's criterion, declared
-before any of this, and which the Weibull fails in sample in six deciles of ten: 0.63, 0.60, 0.63,
+before any of this, and which the Weibull fails in sample in five deciles of ten: 0.63, 0.60, 0.63,
 0.70, 0.79, 0.88, 0.98, 1.09, 1.19, 1.00.
 
 **And the argument that made the family look irrelevant to that failure was wrong.** It was put
@@ -85,8 +85,14 @@ being.
   pp tie, and the long-age preference for the Weibull. The rule is not replaced; it is handed the
   pair it was written to compare.
 - If one enters, that one. If neither, the family is not the answer and the finding is published.
-- The family and the shape are answered **separately and in that order**, because a model that
-  changed both at once would leave neither measured.
+- The family and the shape are answered **separately**, because a model that changed both at
+  once would leave neither measured -- and the **shape goes first**, because this reopening is
+  *conditional* on the shape not answering the question. What motivates it is the Weibull failing
+  section 5's decile band; if the Weibull reads that band with the shape rule 14 declares, the
+  motive is gone and there is nothing here to reopen. Written before the log-logistic selection
+  and after the first shape fit, which moved the deciles in band from 5 of 10 to **9 of 10**: that
+  number says nothing about which family wins, so the order it settles is not a result being
+  chosen.
 
 ## 3. Materiality of a macro covariate
 
@@ -557,7 +563,7 @@ would be the thing this document exists to prevent.
 **The criterion, fixed here.**
 
 * It is kept only if **every in-sample decile enters 0.80 to 1.25**, which is the band the
-  backtest declares and the band the current model misses in six deciles of ten. Narrowing the
+  backtest declares and the band the current model misses in five deciles of ten. Narrowing the
   spread of misses without entering the band is not a pass.
 * The likelihood ratio against the scale-only model is reported and is **not** the criterion, for
   the reason rule 2 gives: on 72 million episodes a likelihood measures fit where the data is
