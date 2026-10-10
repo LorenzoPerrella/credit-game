@@ -391,6 +391,54 @@ tolerance: the same bytes. The footprint is 2.36 GB against 2.37.
 
 So a campaign's readings go from 70 minutes to 21, and a selection's three from 35 to 11.
 
+## The finer bands, built and given back
+
+Rule 7's ceiling went to 250 million cells on 10 October 2026, the table was rebuilt at 8 / 8 / 6
+bands of credit score, loan-to-value and debt-to-income against 5 / 4 / 4, and the result is
+recorded here so that nobody pays for it twice.
+
+| | 5 / 4 / 4 | 8 / 8 / 6 |
+|---|---|---|
+| cells | 91,575,827 | **194,340,956** |
+| loan-months, defaults, prepayments | 2,773,640,182 / 1,671,207 / 33,797,300 | **identical** |
+| aggregation | 33 min | **39.3 min** |
+| a selection run | 20.7 min | **56 min** |
+| the two in-sample passes | ~40 min | **86 min** |
+| log-likelihood | -10,688,088 | **-10,662,474** (25,614 better, 19 more parameters) |
+| the specification selected | | **the same formula, the same nine eliminations** |
+
+And the number it was admitted for:
+
+| decile | 5 / 4 / 4 | 8 / 8 / 6 |
+|---|---|---|
+| 1 | 0.632 | 0.639 |
+| **2** | **0.603** | **0.618** |
+| 3 | 0.629 | 0.630 |
+| 5 | 0.789 | 0.776 |
+| 7 | 0.976 | 0.964 |
+| 9 | 1.188 | 1.191 |
+| 10 | 0.995 | 0.999 |
+
+**0.015 on the worst decile**, against a declared band of 0.80 to 1.25, and the spread between
+the extreme deciles from 80x to 83x where the book realises 130x. They fit better and they do
+not calibrate better, and in this project the likelihood is not the criterion. So the key went
+back to 5 / 4 / 4: 2.12x the table doubles every pass downstream for nothing on the thing it
+was admitted to fix. The finer-banded table is kept at `cells_exclude.fine.parquet`.
+
+**Two things worth keeping from it.** The selection chose the **same specification** on both
+grids -- the same ten covariates and the same nine eliminations, at the same steps and for the
+same reasons -- which is a robustness nobody had checked. And the rebuild's invariants held
+exactly: a finer key partitions the same exposure, so the same loan-months, the same defaults
+and the same prepayments over 2.12 times the cells.
+
+**And it sharpens the diagnosis rather than answering it.** The compression is not resolution.
+In a Weibull AFT the hazard ratio between two loans is `exp(rho * delta)`, **constant in age** --
+the Weibull is the only family that is both AFT and proportional-hazards -- so one shape
+parameter sets the whole risk spread. The observed hazard rises to a plateau near age 48 and
+stays there while the model's keeps climbing; a shape fitted to that compromise is pulled down,
+and a smaller shape compresses every hazard ratio. The two symptoms are one cause, and it is the
+shape and not the bands.
+
 ## A whole selection, cold, at production scale
 
 The end of it, and the test the whole session answers to: `creditsurv select` re-run on the

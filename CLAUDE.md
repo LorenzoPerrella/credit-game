@@ -621,6 +621,33 @@ view the manifest lacks, or model views from more than one fit. `creditsurv view
 fits: it stops when the report's fit is not in the cache. Scoring the training half for it
 takes the footprint near 15 GB, so nothing else heavy runs beside it.
 
+## The finer bands were tried, and the diagnosis they leave behind
+
+**They buy 0.015 on the worst in-sample decile, and the key went back to 5 / 4 / 4.** Rule 7's
+ceiling was raised to 250 million cells on 10 October 2026 -- the memory that bounded it was
+gone, because the aggregation writes a quarter at a time, and the time had moved by an order of
+magnitude -- the table was rebuilt at **194,340,956 cells** in 39.3 minutes, and the invariants
+held exactly: a finer key partitions the same 2,773,640,182 loan-months and 1,671,207 defaults
+over 2.12x the cells. The selection chose the **same specification on both grids**, the same ten
+covariates and the same nine eliminations at the same steps for the same reasons. The
+log-likelihood improved 25,614 units on 19 more parameters. And actual over expected in the worst
+decile went **0.603 to 0.618** against a declared band of 0.80 to 1.25, with the spread between
+the extreme deciles 80x to 83x where the book realises 130x. They fit better and do not calibrate
+better; here the likelihood is not the criterion. 2.12x the table doubles every pass downstream --
+a selection 56 minutes against 20, the in-sample passes 86 against 40 -- so it was given back,
+and `cells_exclude.fine.parquet` is kept so the measurement is not paid twice.
+
+**What it sharpens is the diagnosis.** The compression is not resolution. In a Weibull AFT the
+hazard ratio between two loans is `exp(rho * delta)`, **constant in age**, because the Weibull is
+the only family that is both AFT and proportional-hazards -- so one shape parameter sets the whole
+risk spread. The observed hazard rises to a plateau near age 48 (0.00093, then 0.00090 at 60,
+0.00088 at 84, 0.00085 at 120) while the model's keeps climbing to 0.00099 at 120 and peaks at
+0.00187 at age 257. A shape fitted to that compromise is pulled down, and a smaller shape
+compresses every hazard ratio. **The two symptoms are one cause, and it is the shape.** Rule 2's
+long-age argument for the Weibull still stands, because beyond 180 months there are 489,000
+loan-months at risk and then 23,000: the data plateaus where there is exposure and says nothing
+where there is not.
+
 ## Open
 
 **The backtest fails its decile criterion.** Overall actual over expected 0.920 and Gini

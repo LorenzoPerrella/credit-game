@@ -509,6 +509,12 @@ CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
 #: was written: 45.67%, 43.00% and 35.70% of exposure. `term_years` is not here because two levels
 #: make a factor and a line the same model.
 #:
+#: They were re-measured once on the finer 8 / 8 / 6 grid of 10 October 2026, by the same rule
+#: rather than carried over -- 790.0 again at 45.67%, 45.0 at 27.58% where 50.0 had been 43.00%,
+#: and 32.0 at 22.18% where 19.0 had been 35.70%, the debt-to-income reference moving to a middle
+#: band because the rule asks for exposure and not for safety. That grid was given back when it
+#: proved to buy 0.015 on the worst in-sample decile; see `data.aggregate.DEFAULT_SPEC`.
+#:
 #: The levels are numbers, not strings, and the formula must say so: `Treatment('790.0')` is not a
 #: level of a float column and formulaic refuses it.
 BANDED_REFERENCE: Final[dict[str, float]] = {
