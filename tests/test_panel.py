@@ -424,3 +424,40 @@ def test_a_month_ordinal_is_the_inverse_of_reading_one_back() -> None:
     pd.testing.assert_series_equal(
         _month_ordinal(pd.Series(periods)), ordinals, check_names=False, check_dtype=False
     )
+
+
+def test_a_column_arrives_on_the_tables_levels_whether_it_is_text_or_already_a_category() -> None:
+    """Parquet hands text over dictionary-encoded, and rebuilding that threw it away.
+
+    The levels have to be the **whole table's** and not the batch's: a level absent from one
+    batch would shift every code after it, and two different combinations would be handed the
+    same index in the encoding. The obvious way to guarantee that --
+    `pd.Categorical(values.astype(str), categories=...)` -- materialised 250,000 Python strings
+    a column a batch, which measured **4.30 s of an 11.21 s reading**. Re-pointing the
+    categories a parquet batch already carries is 0.03 s.
+
+    So this holds the two to the same answer, including the cases that make the guarantee
+    necessary: a level the batch does not contain, and a value the table does not declare.
+    """
+    from creditsurv.data.panel import _on_the_declared_levels
+
+    declared = pd.Index(["harp", "standard"])
+    as_text = pd.Series(["standard", "standard", "harp"])
+    # A batch carrying only one of the two levels, which is the case the declaration is for.
+    narrow = pd.Series(pd.Categorical(["standard", "standard"], categories=["standard"]))
+
+    for values in (as_text, narrow):
+        on_the_levels = _on_the_declared_levels(values, declared)
+        rebuilt = pd.Categorical(values.astype(str), categories=declared)
+        assert list(on_the_levels.categories) == list(declared)
+        assert list(on_the_levels) == list(rebuilt)
+        np.testing.assert_array_equal(on_the_levels.codes, rebuilt.codes)
+
+    # And a value the table never declared is dropped rather than given a code of its own,
+    # which is what the long way round did too.
+    stray = pd.Series(pd.Categorical(["standard", "elsewhere"]))
+    dropped = _on_the_declared_levels(stray, declared)
+    # A level the table never declared is missing rather than given a code of its own, which
+    # the encoding then drops: `-1` is what `_stable_codes` reads and no combination carries it.
+    assert list(dropped.codes) == [1, -1]
+    assert list(pd.Series(dropped).isna()) == [False, True]

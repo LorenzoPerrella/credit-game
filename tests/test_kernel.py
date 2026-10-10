@@ -1240,3 +1240,60 @@ def test_more_threads_than_rows_is_not_an_error() -> None:
 
     assert np.isfinite(totals.value)
     assert np.isfinite(totals.gradient).all()
+
+
+@pytest.mark.parametrize(
+    ("rows", "columns", "levels"),
+    [(50, 3, 4), (5_000, 16, 7), (20_000, 9, 3), (1, 2, 1), (300, 1, 300), (4_000, 20, 2)],
+)
+def test_the_distinct_combinations_are_the_ones_numpy_would_have_sorted_out(
+    rows: int, columns: int, levels: int
+) -> None:
+    """Element for element what `np.unique(axis=0, return_inverse=True)` returns, found faster.
+
+    The order is the whole of it. `_Growing.of` registers new combinations in the order they
+    come back, so the order **is** which index each one gets -- and the indices are in 72.7
+    million encoded rows. A faster way to find the distinct rows that returned them in another
+    order would be a different encoding, silently.
+
+    What changed is that `np.unique(axis=0)` views each row as a composite scalar and
+    lexicographically sorts **all** of them, which was 9.5 of the encoding's 12.1 seconds on
+    the production table and two thirds of a whole reading. A block carries about 230,000 rows
+    and at most 24,000 distinct combinations, so only those are sorted now and the rest are
+    found by hashing.
+
+    The shapes include one row, one column, almost-all-distinct and twenty columns, because an
+    integer fold has a radix that can overflow and a hash has a path for every degenerate case.
+    """
+    from creditsurv.models.kernel.factorisation import _distinct
+
+    values = np.random.default_rng(7).integers(0, levels, size=(rows, columns)).astype(float)
+
+    sorted_out, by_sorting = np.unique(values, axis=0, return_inverse=True)
+    hashed, by_hashing = _distinct(values)
+
+    np.testing.assert_array_equal(hashed, sorted_out)
+    np.testing.assert_array_equal(by_hashing, np.asarray(by_sorting).ravel())
+    # And every row maps back to itself, which is what the two arrays are for.
+    np.testing.assert_array_equal(hashed[by_hashing], values)
+
+
+def test_a_continuous_column_folds_without_overflowing_the_radix() -> None:
+    """The fold is an integer, so it is re-factorised before its radix can overflow.
+
+    A macro covariate takes tens of thousands of values and there are fifteen of them in the
+    calendar key, so the product of the cardinalities passes 2**62 long before the columns run
+    out. The guard is a re-factorisation of the partial fold, which keeps it bounded by the
+    number of distinct partial keys rather than by the product.
+    """
+    from creditsurv.models.kernel.factorisation import _distinct
+
+    rng = np.random.default_rng(3)
+    values = np.column_stack([rng.normal(size=20_000) for _ in range(8)])
+
+    hashed, inverse = _distinct(values)
+
+    sorted_out, by_sorting = np.unique(values, axis=0, return_inverse=True)
+    np.testing.assert_array_equal(hashed, sorted_out)
+    np.testing.assert_array_equal(inverse, np.asarray(by_sorting).ravel())
+    assert len(hashed) == 20_000, "continuous columns make every row its own combination"

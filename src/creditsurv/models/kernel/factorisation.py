@@ -105,6 +105,45 @@ def _stable_codes(frame: pd.DataFrame, names: Sequence[str]) -> np.ndarray:
     return np.column_stack(columns) if columns else np.zeros((len(frame), 1))
 
 
+def _distinct(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``np.unique(values, axis=0, return_inverse=True)``, found by hashing instead of sorting.
+
+    The same two arrays, to the element: the distinct rows in lexicographic order and each row's
+    index into them. What changes is how they are found. `np.unique(axis=0)` views each row as a
+    composite scalar and **lexicographically sorts all of them**, which on the production table
+    was 9.5 of the encoding's 12.1 seconds and two thirds of a whole reading -- and a block
+    carries about 230,000 rows and at most 24,000 distinct combinations, so that sort does ten
+    to fifty times the work it needs to.
+
+    Hashed instead: each column is factorised on its own (a hash, not a sort), the codes are
+    folded into one integer, and the fold is re-factorised whenever the radix would overflow.
+    Only the **distinct** rows are then sorted, which is the k the caller actually needs
+    ordered. The order has to be preserved exactly, because it is the order new combinations are
+    registered in and therefore which index each one gets.
+    """
+    if len(values) == 0:
+        return values[:0], np.zeros(0, dtype=np.intp)
+    folded = np.zeros(len(values), dtype=np.int64)
+    radix = 1
+    for column in range(values.shape[1]):
+        codes, _ = pd.factorize(values[:, column], use_na_sentinel=False)
+        width = int(codes.max()) + 1 if len(codes) else 1
+        if radix * width > 2**62:
+            folded, _ = pd.factorize(folded, use_na_sentinel=False)
+            folded = folded.astype(np.int64)
+            radix = int(folded.max()) + 1 if len(folded) else 1
+        folded = folded * width + codes.astype(np.int64)
+        radix *= width
+    # One pass over the folded key: the groups, a representative row of each, and which group
+    # every row belongs to. All three come off a single 1-D unique.
+    _, first, by_group = np.unique(folded, return_index=True, return_inverse=True)
+    distinct = values[first]
+    order = np.lexsort(distinct.T[::-1])
+    rank = np.empty(len(order), dtype=np.intp)
+    rank[order] = np.arange(len(order))
+    return distinct[order], rank[np.asarray(by_group).ravel()]
+
+
 def _counts(weight: np.ndarray) -> np.ndarray:
     """The weight as the count of loan-months it is, in four bytes rather than eight.
 
@@ -541,7 +580,7 @@ class _Growing:
         self._rows = len(values)
 
     def of(self, values: np.ndarray) -> np.ndarray:
-        distinct, inverse = np.unique(values, axis=0, return_inverse=True)
+        distinct, inverse = _distinct(values)
         mapped = np.empty(len(distinct), dtype=np.int64)
         for position, row in enumerate(distinct):
             key = np.ascontiguousarray(row).tobytes()
@@ -551,7 +590,7 @@ class _Growing:
                 self._seen[key] = index
                 self._rows += 1
             mapped[position] = index
-        return mapped[np.asarray(inverse).ravel()]
+        return np.asarray(mapped[inverse])
 
     def __len__(self) -> int:
         return self._rows

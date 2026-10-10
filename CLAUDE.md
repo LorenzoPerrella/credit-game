@@ -78,7 +78,22 @@ carries the exact origination month, *mortgage insurance* (`mortgage_insurance`)
   backtest windows. A whole selection was measured at **2.75 GB** across its parent and three
   workers, where one fit holding the half had been 15 GB. `split_cells` remains for a caller
   that genuinely needs both halves as frames; on this table that is nobody.
-- **The compiled kernel runs on four threads, and the count is declared rather than discovered.**
+- **A reading is 3.58 minutes, not 11.6, and parquet was never the cost.** It was the largest item
+left in a campaign -- six readings, 70 minutes, once per table -- and had never been profiled
+from the inside, only described. Measured: **parquet is 0.2%**, the macro family 7%, and 88% was
+two things nobody had looked at. `_Growing.of` found a block's distinct combinations with
+`np.unique(values, axis=0)`, which lexicographically sorts **every** row: 9.5 of the encoding's
+12.1 seconds was one `argsort`, where a block carries ~230,000 rows and **1,500 loan combinations
+and 4,600 to 24,000 calendar keys**. And the reader rebuilt every text column with
+`pd.Categorical(column.astype(str), ...)`, materialising 250,000 Python strings a column a batch
+to replace what parquet had already handed over dictionary-encoded -- 4.30 s of an 11.21 s
+reading, now 0.03. **Verified by re-reading the production table against a reading the old code
+wrote: 214.8 s against 693.9, and identical in every respect** -- the same cells, defaults, block
+lengths, every row array, both key frames, both count arrays, the bounds. The order of the
+distinct rows is preserved exactly, because that order is which index each combination gets and
+the indices are in 72.7 million encoded rows.
+
+**The compiled kernel runs on four threads, and the count is declared rather than discovered.**
 Rule 13's gate for them, written first: twice the single-threaded 9.74 s or abandoned. Measured on
 the whole half, a Hessian at 1, 2, 4, 6 and 8 threads reads **11.34, 6.81, 4.22, 3.77 and 3.53
 s** -- so four passes both readings of the gate, 4.22 inside the declared 4.87 and 2.69x within

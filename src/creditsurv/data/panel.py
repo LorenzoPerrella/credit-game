@@ -220,6 +220,28 @@ def cell_shape(source: Path | str) -> tuple[int, dict[str, pd.Index]]:
     return step, levels
 
 
+def _on_the_declared_levels(values: pd.Series, categories: pd.Index) -> pd.Categorical:
+    """A column on the levels the whole table declares, which every block has to agree on.
+
+    **The levels have to be the table's and not the batch's**: a level absent from one batch
+    would otherwise shift every code after it, and two different combinations would be handed
+    the same index. `cell_shape` reads them once from the file for that reason.
+
+    Parquet already hands text columns over as a `category`, because it stores them
+    dictionary-encoded, so the obvious way to do this -- `pd.Categorical(values.astype(str),
+    categories=...)` -- threw that away and built it again, materialising 250,000 Python
+    strings a column a batch. Measured on the production table it was **4.30 s of an 11.21 s
+    reading, 38%**. Re-pointing the existing categories at the declared ones is a change to a
+    few dozen labels and leaves the codes to be remapped, which pandas does in one pass; the
+    values that come out are the same values.
+
+    A column that arrives as something other than a category still goes the long way round.
+    """
+    if isinstance(values.dtype, pd.CategoricalDtype):
+        return pd.Categorical(values).set_categories(categories)
+    return pd.Categorical(values.astype(str), categories=categories)
+
+
 @dataclass(frozen=True)
 class CellBlocks:
     """Where a share of the model's rows comes from, in a form a worker can be sent.
@@ -272,7 +294,7 @@ class CellBlocks:
             cells = batch.to_pandas()
             for name, categories in levels.items():
                 if name in cells.columns:
-                    cells[name] = pd.Categorical(cells[name].astype(str), categories=categories)
+                    cells[name] = _on_the_declared_levels(cells[name], categories)
             cells = self._selected(cells)
             if cells.empty:
                 continue
