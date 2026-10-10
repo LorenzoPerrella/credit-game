@@ -629,6 +629,61 @@ and this rule is answered in the negative.
 reported and not decisive, the age calibration published beside it, and the test window read once
 at the end or not at all.
 
+### What the reopening found, and the one cell of the grid still unmeasured
+
+Measured 10 October 2026. The log-logistic went through its own selection -- 35.2 minutes, and it
+chose the Weibull's set **less `yield_curve_slope`**, five macro covariates against six -- and its
+selected set was then fitted under rule 12's band factors exactly as `default_formula` applies
+them to the Weibull's, with a **scalar** shape, because this rule compares selected models.
+
+| specification | deciles in 0.80 to 1.25 | predicted spread | realised | direction |
+|---|---|---|---|---|
+| Weibull, scalar shape | 5 of 10 | 79.6x | 125.4x | compresses |
+| **log-logistic, scalar shape** | **6 of 10** | **105.3x** | 134.3x | compresses |
+| Weibull + shape on `credit_score` | 9 of 10 | 181.1x | 138.8x | over-disperses |
+| Weibull + shape on all nine | 9 of 10 | 214.0x | 139.0x | over-disperses |
+
+**Neither family enters the band on its own, so by this rule as written the family is not the
+answer and the finding is published.** The log-logistic's misses are deciles 1 to 4 against the
+Weibull's 1 to 5, and both miss low.
+
+**What it did do is worth more than the verdict.** The log-logistic gains **36,374 log-likelihood
+units** over the Weibull with **no extra parameters** -- one covariate fewer, in fact -- where
+putting `credit_score` in the Weibull's shape gained 38,804 and cost four. Its own curve does
+nearly all of what the Weibull needed a shape-on-risk for, free. Its shape comes out **1.5143**,
+and the algebra written into this rule before any of it predicted that a log-logistic would need
+about 1.55 at age 60 to match the Weibull's spread, because its ratios fall with age -- 3.63 at
+age 6 to 1.37 at 600 at a gap of one in log scale. It fitted in **2.04 minutes** through the
+compiled kernel, against 44.4 and 72.9 for the shape fits, which run on autograd.
+
+**The two levers have opposite signs on the same error, and that is measured rather than argued.**
+The family takes the predicted spread from 79.6x to 105.3x, toward a realised 134x and short of
+it. The shape takes it from 79.6x to 181.1x and then 214.0x, past it. One under-corrects, the
+other over-corrects.
+
+**So the last cell of the grid is fitted, and that is a completion rather than a search.** The
+family set is {Weibull, log-logistic} and the shape set is {scalar, the whole origination side
+rule 14 declares}: **four cells, three measured, and the fourth is the only one left.** An
+exhaustive two-by-two has nothing to stop early and nothing to choose -- which is the property
+that separates it from the search this document's last section forbids. All four are published
+whatever the fourth says.
+
+**Declared before that fit:**
+
+- The criterion is unchanged: every in-sample decile inside 0.80 to 1.25, the age calibration
+  published beside it, the likelihood reported and not decisive.
+- **If the fourth cell enters the band**, the family changes to the log-logistic -- and rule 2's
+  *own* criterion is then owed under the band form, because the 0.1027 against 0.1498 that chose
+  the Weibull was measured on the **linear** form. A family may not be switched on a criterion
+  this rule does not use. The Aalen-Johansen comparison is re-run and published before anything
+  is called selected.
+- **If it does not**, no combination of these two levers meets a criterion fixed before any of
+  them, that is what the model's record says, and the next question -- a hazard that does not
+  leave the origin at zero, which is neither of these two families -- needs its own rule and its
+  own motive, written then and not now.
+- The grid stops at four. A fifth variation fitted because the fourth missed would be the search,
+  and the honest report of a declared criterion unmet is the alternative to it.
+
 ### What the criterion answered: the shape fixes the compression and then overshoots it
 
 Measured 10 October 2026. Both fits on the whole training half, 72,671,500 cells, and both
