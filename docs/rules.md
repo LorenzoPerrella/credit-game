@@ -480,6 +480,58 @@ the last digits of a sum over 72.7 million terms, and the count is recorded with
 than taken from whatever machine happened to run it. No work-stealing, no unordered reduction, no
 atomic accumulation.
 
+## 14. The shape may read the risk, and what would make that worth keeping
+
+Declared 10 October 2026, before the fit, because a model whose shape takes covariates is a
+different model and not a tuning of this one.
+
+**The failure.** The backtest's decile criterion -- actual over expected inside 0.80 to 1.25 in
+every decile, fixed before the run -- fails, and it fails in sample too: 0.63, 0.60, 0.63, 0.70,
+0.79, 0.88, 0.98, 1.09, 1.19, 1.00. The model's predicted risk is compressed, 80x between the
+extreme deciles where the book realises 130x, while its ranking is sound at a Gini of 0.561.
+
+**Why the shape is implicated, and the bands were not.** In a Weibull AFT the hazard ratio
+between two loans is `exp(rho * delta)`, **constant in age**: the Weibull is the only family that
+is both accelerated-failure-time and proportional-hazards, so a single shape parameter sets the
+entire risk spread. And `rho` is not free to serve the spread, because it is also what fits the
+age profile -- and the age profile asks for two different numbers. From the observed hazard's own
+slopes, it wants about **1.47 up to age 48 and 0.90 after**: 0.00025 at age 3 to 0.00093 at 48 is
+a factor 3.7 over 16 of log-time, and 0.00093 to 0.00085 at 120 is 0.91 over 2.5. One shape
+compromises, the compromise pulls it down, and a smaller shape compresses every hazard ratio. The
+finer bands were built to test resolution instead and bought 0.015 on the worst decile.
+
+**What is not done, and why.** Letting the shape depend on the **age** would bend the baseline
+where the data asks for it, and it is refused: the hazard would no longer integrate to a coherent
+survival function, and a lifetime PD is that integral. Letting it depend on a **loan's** risk
+keeps every loan's own (`lambda`, `rho`) and therefore its own survival curve, so the lifetime
+quantity stays defined. That is the whole of the distinction.
+
+**The specification, fixed here.** The shape reads `credit_score` as the bands rule 12 declares,
+and nothing else. It is the primary risk dimension, it is the one whose grid rule 12 already
+singled out, and one covariate is the smallest change that can answer the question. Not a search
+over what else might enter: a model chosen by what improved the decile it was being judged on
+would be the thing this document exists to prevent.
+
+**The criterion, fixed here.**
+
+* It is kept only if **every in-sample decile enters 0.80 to 1.25**, which is the band the
+  backtest declares and the band the current model misses in six deciles of ten. Narrowing the
+  spread of misses without entering the band is not a pass.
+* The likelihood ratio against the scale-only model is reported and is **not** the criterion, for
+  the reason rule 2 gives: on 72 million episodes a likelihood measures fit where the data is
+  dense rather than where a lifetime PD spends its time.
+* The age calibration is reported beside it, because a specification that fixed the deciles by
+  making the age profile worse would have moved the problem rather than solved it.
+* And it is judged **in sample**. The test window is read once, at the end, against the criteria
+  already recorded -- and if the in-sample deciles do not enter the band, the test window is not
+  read at all.
+
+**What it costs, so that the cost is not an argument later.** The written-out kernel fits a shape
+with one constant column and refuses more, by design: a row's likelihood depends on two scalars
+and that is where its economy comes from. So this fit runs on the autograd path, which is the
+slow one -- an hour or two against four minutes. That is a reason to make one declared attempt,
+not a reason to make none.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.
@@ -494,3 +546,6 @@ atomic accumulation.
 - Reading a banded covariate as a line through its midpoints.
 - Letting a compiled kernel read a declared constant, touch a file, or be the only
   implementation of the likelihood.
+- Letting the hazard's shape depend on the loan **age**, which would leave a hazard that does not
+  integrate to a survival function, when the quantity being estimated is that integral.
+- Searching for what to put in the shape by what improves the decile the model is judged on.
