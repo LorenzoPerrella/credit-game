@@ -670,9 +670,11 @@ against a realised 125 to 139, so the Weibull cannot land in the band from eithe
 
 `rho` comes out between **0.840 and 2.017** across loan types where 125 whole-model refits had put
 a single number between 1.07 and 1.62 -- below one for the worst combinations, which is adverse
-selection burning off, and 2.02 for the best. That last is the failure: a Weibull with `rho = 2`
-has `h(0) = 0`, and the safest tenth of this book defaults at 2.6 per 100,000 loan-months from its
-first month. **More shape is a better likelihood and a worse calibration** -- the nine gain 7,540
+selection burning off, and 2.02 for the best. A Weibull with `rho = 2` has `h(0) = 0`, and the
+safest tenth defaults at 2.6 per 100,000 loan-months where the model predicts 1.7, so **a missing
+hazard floor** is what those two numbers suggest. **It is an inference, not a measurement**: every
+view is a sum over one dimension, so the deciles and the ages are never crossed and nothing says
+the failing decile is young loans. A decile-by-age table is one pass and would settle it. **More shape is a better likelihood and a worse calibration** -- the nine gain 7,540
 units over `credit_score` alone on 14 further parameters and move the failing decile 0.23 the
 wrong way -- and `credit_score` carries 84% of the whole shape gain on 22% of the parameters, with
 five of the other eight moving `rho` under 4%. The fits are 44.4 and 72.9 minutes on the autograd

@@ -678,11 +678,19 @@ converge never fired. What failed is the criterion, in the one decile where it h
 2.017** across loan types, where 125 whole-model refits of this book had put a single number
 between 1.07 and 1.62. The worst combinations get a shape **below one** -- a hazard that falls
 with age, which is adverse selection burning off -- and the best get 2.02, a hazard that leaves
-the origin steeply from nothing. That second number is the failing decile. A Weibull with
-`rho = 2` has `h(0) = 0`, and the safest tenth of this book defaults at **2.6 per 100,000
-loan-months from its first month**: the model has no hazard floor, and giving the shape its
-freedom drives the floor further down. The magnitude, as this document requires beside every
-in-or-out verdict: **1,938 defaults against 3,552 expected, 0.135%** of the 1,440,771 in sample.
+the origin from nothing, since a Weibull with `rho = 2` has `h(0) = 0`. The safest tenth of this
+book defaults at **2.6 per 100,000 loan-months** and the model predicts 1.7, so **a missing hazard
+floor is the reading these two numbers suggest** -- a shape given its freedom drives the floor
+down, and the decile that fails is the one a floor would lift.
+
+**That reading is an inference and not a measurement, and the difference is the next thing to
+settle.** Every view here is a sum over one dimension at a time -- the deciles and the ages are
+each accumulated separately and **never crossed** -- so nothing measured says the failing decile
+is young loans rather than old ones in benign conditions. A decile-by-age table would say, and it
+is one pass. Until it is run, the floor is a hypothesis with two consistent numbers behind it.
+
+The magnitude, as this document requires beside every in-or-out verdict: **1,938 defaults against
+3,552 expected, 0.135%** of the 1,440,771 in sample.
 
 ## What these rules forbid
 
