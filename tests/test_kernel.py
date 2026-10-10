@@ -866,9 +866,20 @@ def test_a_macro_month_the_window_cannot_reach_does_not_rename_a_reading() -> No
     )
     assert named(extended, cut) == named(macro, cut)
 
+    # **And a revision inside the last three months is a revision of a month no row can read.**
+    # Every series is lagged three months, so a cell observed in month `m` reads the panel at
+    # `m - 3`: the last row a window ending at the cut can touch is the cut less the lag. This
+    # clip stopped at the cut, a revision landed in those three months, and a second 1.02 GB
+    # reading of the same 72,671,500 cells was taken -- identical in every row array to the
+    # first, which is how the three months were found.
+    for month in ("2021-12", "2021-11", "2021-10"):
+        unreadable = macro.copy()
+        unreadable.loc[pd.Period(month, freq="M"), "unemployment_rate"] = 9.1
+        assert named(unreadable, cut) == named(macro, cut), month
+
     revised = macro.copy()
-    revised.iloc[-1, 0] = 6.1  # the last readable month, restated
-    assert named(revised, cut) != named(macro, cut)
+    revised.loc[pd.Period("2021-09", freq="M"), "unemployment_rate"] = 6.1
+    assert named(revised, cut) != named(macro, cut), "the last month a reading does reach"
 
     # And with no cut -- `creditsurv fit` without an `--as-of` -- the whole table is read, so the
     # month that could not reach the window above is a month the reading does see.

@@ -97,29 +97,39 @@ def encoding_fingerprint(
         parity=parity,
         months=months,
         block_rows=block_rows,
-        macro=hashlib.sha256(_readable(macro, months).to_csv().encode()).hexdigest(),
+        macro=hashlib.sha256(_readable(macro, months, lag_months).to_csv().encode()).hexdigest(),
         lag_months=lag_months,
     )
 
 
-def _readable(macro: pd.DataFrame, months: tuple[int | None, int | None] | None) -> pd.DataFrame:
+def _readable(
+    macro: pd.DataFrame, months: tuple[int | None, int | None] | None, lag_months: int
+) -> pd.DataFrame:
     """The macro rows a reading of this window can actually reach.
 
-    The window cuts on the **observation** month, and a cell's covariates read the panel at the
-    observation month less the lag or at the origination month less the lag -- both earlier. So
-    no row above the cut can enter a reading, and the readings this project makes stop at the
-    reporting date precisely to keep the test window out.
+    The window cuts on the **observation** month and every series is lagged, so a cell observed
+    in month `m` reads the panel at `m - lag` and at its origination month less the lag, both
+    earlier still. The last row any reading of a window ending at `cut` can touch is therefore
+    **`cut - lag`**, and rule "every macro series is lagged three months" is what makes that
+    exact rather than approximate.
 
-    Hashing the rows above the cut would therefore retire a correct 11.6-minute reading every
-    time FRED publishes a month it could not have read, which on a selection is three readings
-    and on rule 2's four runs six. There is no full-sample normalisation anywhere in the macro
-    path -- `fred.py` averages within a month and nothing standardises over the series -- so a
-    later month cannot reach back and change an earlier value either.
+    Hashing a row above that would retire a correct 3.6-minute reading every time FRED publishes
+    or revises a month the reading could not have read -- which is three readings on a selection
+    and six on rule 2's four runs. **It happened**: the clip stopped at the cut rather than at
+    the cut less the lag, a revision landed in those three months, and a second 1.02 GB reading
+    of the same 72,671,500 cells was taken and written beside the first. The two were compared
+    and are identical in every row array and both key frames, which is how the three months were
+    found.
+
+    There is no full-sample normalisation anywhere in the macro path -- `fred.py` averages within
+    a month and nothing standardises over a series -- so a later month cannot reach back and
+    change an earlier value either.
     """
     last = None if months is None else months[1]
     if last is None:
         return macro
-    return macro.loc[[month_ordinal(period) <= last for period in macro.index]]
+    reachable = last - lag_months
+    return macro.loc[[month_ordinal(period) <= reachable for period in macro.index]]
 
 
 def save_encoding(encoding: Encoding, name: str, description: dict[str, object]) -> Path:
