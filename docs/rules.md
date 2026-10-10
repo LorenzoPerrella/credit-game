@@ -629,6 +629,61 @@ and this rule is answered in the negative.
 reported and not decisive, the age calibration published beside it, and the test window read once
 at the end or not at all.
 
+### What the criterion answered: the shape fixes the compression and then overshoots it
+
+Measured 10 October 2026. Both fits on the whole training half, 72,671,500 cells, and both
+judged by the band this rule fixed before either existed.
+
+| decile | scale-only | shape on `credit_score` | shape on all nine |
+|---|---|---|---|
+| 1 | 0.632 | **1.318** | **1.546** |
+| 2 | 0.603 | 0.938 | 1.000 |
+| 3 | 0.629 | 0.863 | 0.920 |
+| 4 | 0.699 | 0.860 | 0.879 |
+| 5 | 0.789 | 0.913 | 0.915 |
+| 6 | 0.885 | 0.956 | 0.960 |
+| 7 | 0.976 | 0.993 | 0.993 |
+| 8 | 1.086 | 1.030 | 1.025 |
+| 9 | 1.188 | 1.042 | 1.038 |
+| 10 | 0.995 | 0.997 | 0.994 |
+| **in 0.80 to 1.25** | **5 of 10** | **9 of 10** | **9 of 10** |
+
+**The compression was the shape.** The scale-only model predicts **79.6x** between the extreme
+deciles where the book realises 125.4x, and the shape removes that under-dispersion entirely. The
+age profile is **unchanged** at 5 of 7 bands in band, so the deciles were not bought by spending
+the ages -- which is what this rule asked to be published beside. On the way, section 5's cycle
+criterion flips from fail to pass: calendar years inside the band go from **69.6% to 73.9%**
+against a 70% threshold, and that was not the target.
+
+**And it overshoots.** The failure moves from the whole safe half to the safest tenth alone, and
+it changes sign -- the model now predicts **less** risk there than the book realises. Predicted
+spread 181.1x against 138.8x realised with `credit_score` in the shape, and **214.0x against
+139.0x** with all nine.
+
+**More shape is a better likelihood and a worse calibration**, which is what rule 2 says about the
+likelihood and what this rule repeated. The nine covariates gain **7,540** log-likelihood units
+over `credit_score` alone, on 14 further parameters, and take the failing decile from 1.318 to
+1.546. `credit_score` carries **84% of the whole shape gain** -- 38,804 units of 46,344 -- on 22%
+of the parameters; five of the other eight move `rho` by under 4% and are inert. The procedure
+declared above reached the same covariate the hand-pick had named, together with the measurement
+that it is the right one, and with two the hand-pick had not considered -- `original_ltv` at
+-0.179 and `occupancy` at -0.108 on the log shape.
+
+**So the criterion is not met and neither specification is published.** Both converged properly --
+the nine took seven damped Newton steps from 621 standard errors to **0.000834**, at 19 shape
+parameters with neither bound binding -- so the fallback declared above for a fit that cannot
+converge never fired. What failed is the criterion, in the one decile where it had always failed.
+
+**What the shape does say, and where the next question comes from.** `rho` runs from **0.840 to
+2.017** across loan types, where 125 whole-model refits of this book had put a single number
+between 1.07 and 1.62. The worst combinations get a shape **below one** -- a hazard that falls
+with age, which is adverse selection burning off -- and the best get 2.02, a hazard that leaves
+the origin steeply from nothing. That second number is the failing decile. A Weibull with
+`rho = 2` has `h(0) = 0`, and the safest tenth of this book defaults at **2.6 per 100,000
+loan-months from its first month**: the model has no hazard floor, and giving the shape its
+freedom drives the floor further down. The magnitude, as this document requires beside every
+in-or-out verdict: **1,938 defaults against 3,552 expected, 0.135%** of the 1,440,771 in sample.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.

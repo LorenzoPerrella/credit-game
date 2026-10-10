@@ -657,6 +657,27 @@ where there is not.
 of cell hazards rather than weighted by loan-months. The criteria were fixed before the run,
 so the model is not to be tuned to them on the test window.
 
+**The shape on the risk removes the compression and overshoots it, and the model has no hazard
+floor.** Rule 14 let the Weibull's shape read the covariates fixed at origination -- all nine of
+them, because `period = cohort + age` means a covariate recomputed every loan-month moves with the
+age, which the rule already forbade, and because a subset would have been a hand-pick. Both the
+declared set and the `credit_score`-only attempt that preceded it take the in-sample deciles from
+**5 of 10 inside 0.80 to 1.25 to 9 of 10**, with the age profile unchanged at 5 of 7 and rule 5's
+cycle criterion flipping from 69.6% of calendar years in band to 73.9% against a 70% threshold.
+Both **fail**: the safest decile goes from 0.632 to 1.318 and then **1.546**, because the error
+changes sign. The predicted spread between the extreme deciles runs 79.6x, 181.1x and 214.0x
+against a realised 125 to 139, so the Weibull cannot land in the band from either side.
+
+`rho` comes out between **0.840 and 2.017** across loan types where 125 whole-model refits had put
+a single number between 1.07 and 1.62 -- below one for the worst combinations, which is adverse
+selection burning off, and 2.02 for the best. That last is the failure: a Weibull with `rho = 2`
+has `h(0) = 0`, and the safest tenth of this book defaults at 2.6 per 100,000 loan-months from its
+first month. **More shape is a better likelihood and a worse calibration** -- the nine gain 7,540
+units over `credit_score` alone on 14 further parameters and move the failing decile 0.23 the
+wrong way -- and `credit_score` carries 84% of the whole shape gain on 22% of the parameters, with
+five of the other eight moving `rho` under 4%. The fits are 44.4 and 72.9 minutes on the autograd
+path, because the compiled kernel takes a shape of one constant column by design.
+
 ***Occupancy* (`occupancy`) changes the hazard's shape, a little.** Its curves cross at 90
 months, which no scale factor reconciles, and letting occupancy into the shape parameter is
 significant -- likelihood ratio 220.6 on two parameters, p = 1e-48 -- and small: a third of
