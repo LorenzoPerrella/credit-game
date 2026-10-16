@@ -122,9 +122,10 @@ clean removal.
 and before the fit that answered it, which is the only order that makes it a rule rather than a
 preference: the in-sample deciles said the risk spread was compressed by 40%, three covariates
 that are already bands in the key were entering as a straight line through their midpoints, and
-reading them as bands recovered 10.2% of the gap. What it did **not** do is close it, and the
-measurement of why -- resolution inside the bands, which costs cells against a declared ceiling --
-is what the next two stages are for.
+reading them as bands recovered 10.2% of the gap. What it did **not** do is close it. The reason
+offered then was resolution inside the bands, and the section below records that this was measured
+and is wrong: the finer grid bought 0.015 on the worst decile, and the cause was the hazard's
+shape.
 
 ## What the shape stage found, and where this goes next
 

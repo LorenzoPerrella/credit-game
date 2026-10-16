@@ -345,8 +345,9 @@ AIC points, with the log-logistic turning three priors. The ranking follows the 
 which is the age-period-cohort point made in the methodology report: which family fits cannot
 be separated from which covariates are in the model.
 
-The Weibull is kept, for now, for three reasons, none of which is that the likelihood does
-not matter.
+The Weibull is kept for three reasons, none of which is that the likelihood does not matter.
+**The argument below is the one made before rule 2 existed, kept as it was written**; what
+settled the question, and the reopening that followed it, are the two subsections after it.
 
 * **Changing the family is a new selection, not a swap.** Every rule in steps 8 and 9 reads
   coefficients, and the coefficients are the family's. Under the log-logistic *financial conditions*
@@ -361,9 +362,49 @@ not matter.
   That can be right, and it should be chosen for that reason rather than inherited from an
   AIC on the observed ages.
 
-What would settle it is `creditsurv select` run with log-logistic fits, and the two selected
-models read the same three ways. That is roughly fifteen hours on this machine, and it is
-listed as open in `CLAUDE.md`.
+#### What settled it: rule 2, and each family's own selection
+
+**Run, and no longer open.** Rule 2 was written before either fit and is applied by
+`creditsurv family`: both families go through **their own** selection, and the winner is whichever
+selected model sits closest to the Aalen-Johansen cumulative incidence of default -- which accounts
+for prepayment as a competing risk -- in mean absolute percentage points over the loan ages above
+the exposure floor. A family whose selected model turns a declared sign is excluded whatever its
+fit, and inside a tenth of a percentage point the Weibull is kept, for the long-age reason the
+third bullet above gives.
+
+The Weibull sits **0.1027 pp** from the observed incidence and the log-logistic **0.1498**, over
+222 ages. Neither turns a declared sign, the 0.047 pp between them is inside the declared tie, and
+the Weibull is also the closer of the two on the criterion itself. The fifteen hours this section
+estimated became **20.7 minutes** a selection after the engine work of October 2026, and the
+log-logistic's own selection ran in **35.2**.
+
+The AIC is the reason the rule is not the AIC. It changed its mind between two specifications of
+the same model -- 623,126 points one way and 83,961 the other -- and a criterion that follows the
+specification is not a criterion.
+
+#### The family was reopened in October 2026, and the answer did not change
+
+Rule 2 chose on the distance from the observed incidence. It never asked whether the selected
+model **calibrates by decile**, which is a criterion the acceptance rules declared before any of
+this and which the Weibull fails in sample. The reopening is recorded in `docs/rules.md` with the
+motive stated first, and the log-logistic was taken through its own selection again **under rule
+12's band factors** -- where it chose the Weibull's set less `yield_curve_slope`, five macro
+covariates against six.
+
+It reads **6 of 10** deciles inside 0.80 to 1.25 against the Weibull's 5, so neither family reads
+the band on its own and **the family is not the answer**. What it did do is worth recording: with a
+scalar shape it gains **36,374 log-likelihood units** over the Weibull on one covariate fewer,
+which is almost what putting `credit_score` into the Weibull's shape earns for four extra
+parameters. Its own curve bends, so it needs **22% less shape** when the shape is let in.
+
+And one claim in the argument above was wrong in a way worth naming, because it was used to
+dismiss the family question: that in an accelerated-failure-time model the hazard ratio between two
+loans is `exp(rho * delta)`, constant in age, so no change of family can widen a compressed risk
+spread. **That holds only for the Weibull**, which is the only family that is both
+accelerated-failure-time and proportional-hazards. For the log-logistic the ratio is
+`exp(rho * delta)` at young ages and tends to **one** as age grows -- 3.63 at age 6 falling to 1.37
+at 600, at a gap of one in log scale. The family does bear on the spread; it simply does not bear
+on it enough.
 
 ## Results of the first run
 

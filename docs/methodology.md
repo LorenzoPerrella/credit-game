@@ -131,6 +131,16 @@ the 0.1 pp tie the rule declared -- where the Weibull is kept because its hazard
 at long ages, which is where the data ends and the extrapolation begins. It is also the closer
 of the two, so the tie-break decides nothing here.
 
+**The question was reopened in October 2026 and the answer held.** Rule 2 chose on the distance
+from the observed incidence and had never asked whether the selected model **calibrates by
+decile**, which the acceptance criteria declared before any of it and which the Weibull fails in
+sample. The log-logistic was taken through its own selection again under rule 12's band factors --
+it chose the Weibull's set less `yield_curve_slope` -- and reads **6 of 10** deciles inside 0.80 to
+1.25 against the Weibull's 5. Neither family reads the band alone, so the family is not what that
+criterion is failing on; the reopening, the grid of family by shape that followed it and what the
+one remaining decile is made of are in [the rules](rules.md) and the
+[decision log](decisions.md#what-the-shape-stage-found-and-where-this-goes-next).
+
 The likelihood is deliberately not the criterion, and not because it was inconvenient: it
 changed its mind between two specifications of this same model, by 623,126 AIC points one way
 and 83,961 the other. AIC on 72 million episodes measures fit where the data is dense -- the
