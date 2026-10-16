@@ -91,11 +91,15 @@ and nothing else.
 
 | | Why it is open |
 |---|---|
-| **Decile calibration** | Still failing, and now diagnosed rather than merely reported. The model's **risk spread is compressed**: in sample it predicts 74.4x between the riskiest tenth of exposure and the safest where the book realises 125.3x, so actual over expected rises monotonically from 0.59 to 1.20 across the deciles. A multiplier cannot mend it, because the error is a slope. Rule 12 found the first cause -- three banded covariates read as a straight line through their midpoints -- and reading them as bands recovered **10.2%** of the gap. The rest is resolution: the key carries five score bands with 45.67% of the exposure in the top one, finer bands cost 2.276x the base key, and with the HARP level that rule 8 makes obligatory that is 154 million cells against the 150 million ceiling rule 7 declared |
+| **Decile calibration** | Still failing, and now **explained**. The compression was the hazard's **shape**, not the resolution of the bands: letting it read the covariates fixed at origination takes the in-sample deciles from **5 of 10 inside 0.80 to 1.25 to 9 of 10** and flips the cycle criterion from 69.6% of calendar years in band to 73.9%. What remains is decile 1 alone, missing **high** at 1.415, and **83% of that miss is the 2019, 2020 and 2021 originations** -- 17% of the decile's exposure, 34% of its defaults, an actual over expected of 3.413, where every vintage to 2018 reads **1.082**. The cause is structural: those loans stack every favourable reading the model has at once and a **multiplicative hazard has no floor**, so the prediction reaches 1.5 defaults per 100,000 loan-months a month where the book does not go below about 5. A floor takes an additive baseline, which is another family. The exception is bounded at **0.11%** of the in-sample defaults. The resolution hypothesis was tested and is withdrawn: the finer 8 / 8 / 6 grid bought **0.015** on the worst decile for 2.12x the table |
 | **The level across regimes** | Actual over expected runs 0.458, 0.823 and 1.420 across the three declared cuts, in opposite directions. This is the identification restriction, not a fit: `period = cohort + age` holds identically, so calendar time enters only through six macro covariates, and a regime driven by another channel -- a moratorium suppressing the event in 2019-20, affordability in 2023-24 -- mis-levels the model. The anchoring is the declared remedy and it works on the window it is estimated on; by construction it cannot cover a regime it has not seen |
 | **Point-in-time macro** | FRED serves revised series. ALFRED's vintages were attempted and need an API key, so the limit is documented rather than closed |
 
-The two calibration items are what the next two branches are for: a compiled numerical core, so
-that a larger key can be fitted at all, and then the finer bands and a re-selection under them.
-The ceiling itself will be re-declared from the measured capacity of that engine, before the
-table is rebuilt, rather than raised to fit what it needs to admit.
+Both of those branches have been run and the plan they carried was wrong in its second half. The
+compiled core landed, a selection fell from the 10.5 hours four recorded runs averaged to **20.7
+minutes**, and rule 7's ceiling was re-declared at 250 million cells from the measured capacity --
+before the table was rebuilt, which is what separates that from raising a limit to admit what it
+needs to admit. The finer bands were then built, selected under and measured, and they **bought
+0.015** on the worst decile. Resolution was never the constraint, and the grid of family by shape
+that replaced it is in `docs/rules.md` with all four cells published. What is left is one decile,
+one cause, and a remediation that belongs to a family this project has not declared.
