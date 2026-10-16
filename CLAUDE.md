@@ -698,17 +698,35 @@ leaves the shape less to do. The log-logistic's own selection chose the Weibull'
 `yield_curve_slope`** and fitted scalar in **2.04 minutes** through the compiled kernel against 87.0
 for the shape on autograd.
 
-**And the age profile is 5 of 7 in every cell, which retracts the hazard-floor reading.** The two
-failing bands are the same two throughout -- 0 to 11 months at 0.717 to 0.769 and 240 to 399 at
-0.622 to 0.702 -- and both **over**-predict. A model with no floor would predict too little at
-young ages, and this one predicts 0.000285 against 0.000215 realised over the first year. So the
-safest decile under-predicting is not young-age behaviour showing through, and what `rho = 2` with
-`h(0) = 0` suggested does not survive its first check against another view. **The decile-by-age
-cross is the owed measurement** -- one pass, and the only table that can say what that decile is
-made of. No further fit is warranted by a guess about it, and the grid stops at four: the smallest
-miss in the series, 1.318, belongs to the `credit_score`-only hand-pick the rule superseded, and
-picking it for being closest on the decile it is judged on is the one thing `docs/rules.md`
-forbids outright.
+**And the one failing decile is three vintages: 83% of its miss is 2019, 2020 and 2021.** The
+crossed table -- `exposure_totals` already takes a mapping of dimensions, so it is a Recipe and not
+new code -- says decile 1 holds 5,382 defaults against 3,804 expected, that those three
+originations are 17% of its exposure and **34% of its defaults at an A/E of 3.413**, and that
+**every vintage to 2018 reads 1.082**, inside the band. The same fact by age, because those
+vintages are the young loans: within decile 1 the first year is 64% of the exposure and the only
+band that misses, at **1.698**, with the realised hazard **flat at about 2.5 per 100,000
+loan-months across the whole life** where a shape above one forces the model's to start near zero.
+The decile is **89.2% the top credit-score band**, not a mixture.
+
+**The cause is structural: a multiplicative hazard has no floor.** Those originations stack every
+favourable reading at once -- top credit band, policy rate at zero, house prices rising so
+`ltv_change` is strongly negative, housing starts up -- and the predicted hazard reaches the lowest
+value the model produces anywhere, about 1.5 per 100,000 a month, where the book does not go below
+about 5. No covariate and no shape can put a floor under a product; that takes an additive
+baseline, which is another family.
+
+**And the retraction of the hazard-floor reading was itself wrong.** It was retracted because the
+*aggregate* 0-to-11 band over-predicts at 0.755 -- but the aggregate mixes all ten deciles, and
+that over-prediction belongs to the risky ones, whose shape is below one and whose hazard starts
+high and falls. **A sum over one dimension cannot refute a claim about an interaction.** The
+original inference was right and cost a day.
+
+The grid stops at four. The smallest miss in the series, 1.318, belongs to the
+`credit_score`-only hand-pick the rule superseded, and picking it for being closest on the decile
+it is judged on is the one thing `docs/rules.md` forbids outright. **The residual is now a
+documentable exception** -- cause, scope, 0.11% of the in-sample defaults, and a named remediation
+-- and it **predicts that an out-of-time decile 1 will under-predict too**, since the test window's
+young loans are the 2022 to 2024 originations.
 
 ***Occupancy* (`occupancy`) changes the hazard's shape, a little.** Its curves cross at 90
 months, which no scale factor reconciles, and letting occupancy into the shape parameter is

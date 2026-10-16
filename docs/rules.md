@@ -684,6 +684,65 @@ whatever the fourth says.
 - The grid stops at four. A fifth variation fitted because the fourth missed would be the search,
   and the honest report of a declared criterion unmet is the alternative to it.
 
+### What the failing decile is made of, and the retraction that was itself wrong
+
+Measured 17 October 2026, on the best cell of the grid, in the one pass the record above said was
+owed. `exposure_totals` already takes a mapping of dimensions, so the cross is a Recipe and not new
+code in the package.
+
+**83% of the miss is three vintages.** Decile 1 reads 5,382 defaults against 3,804 expected, an
+excess of 1,578. The **2019, 2020 and 2021** originations are 17% of its exposure and **34% of its
+defaults**, at an actual over expected of **3.413** -- 1,311 of the 1,578. Everything else in the
+decile, every vintage to 2018, reads **1.082**: inside the band, with room.
+
+| decile 1, by vintage | A/E |
+|---|---|
+| 1999 to 2018 | **1.082** |
+| 2019 | 3.330 |
+| 2020 | 3.457 |
+| 2021 | 3.377 |
+
+**The same fact by age, because those vintages are the young loans.** Within decile 1 the first
+year is 64% of the exposure and the only band that misses: **1.698**, where the book realises 2.6
+defaults per 100,000 loan-months a month and the model predicts 1.5. From age 24 the model is
+right -- 1.351, 0.995, 1.114 -- and the realised hazard of these loans is **flat at about 2.5 per
+100,000 across their whole life**, where a shape above one forces the model's to start near zero
+and climb.
+
+**And the decile is not a mixture.** It is **89.2%** the top credit-score band, which reads 1.453,
+with 8.0% in the 750 band at 1.327.
+
+**So the cause is structural and it is nameable.** In a multiplicative hazard a favourable
+covariate multiplies the hazard *down without limit*. The 2019 to 2021 originations stack every
+favourable reading the model has at once -- the top credit band, the policy rate at zero, house
+prices rising sharply so `ltv_change` is strongly negative, housing starts up -- and the predicted
+hazard goes to the lowest value the model produces anywhere, about 1.5 per 100,000 a month. The
+book does not go below about 5. **No covariate and no shape can put a floor under a multiplicative
+hazard**; that takes an additive baseline, which is a different family and the grid stopped at
+four.
+
+**The retraction recorded above was wrong, and the inference it retracted was right.** The missing
+floor was inferred from `rho = 2` and `h(0) = 0`, correctly labelled an inference; it was then
+retracted because the **aggregate** 0-to-11 age band over-predicts at 0.755. That reasoning does
+not hold: the aggregate mixes all ten deciles, and the young-age over-prediction belongs to the
+*risky* ones, whose fitted shape is below one and whose hazard starts high and falls. Inside decile
+1 the first year under-predicts at 1.698, which is the signature the original inference named. The
+lesson is the one this document already carries about crossed dimensions -- a sum over one
+dimension cannot refute a claim about an interaction -- and it cost a correct finding for a day.
+
+**What this does and does not license.** It makes the residual a **documentable exception**: a
+cause, a scope (three vintages; without them 1.082), a magnitude (1,578 defaults, **0.11%** of the
+1,440,771 in sample), and a remediation that is named rather than searched for. It does **not**
+license a fifth cell of the grid, and it does not license dropping those vintages from estimation
+-- rule 1 keeps 2020 and 2021 deliberately, because they are the one episode where a policy
+intervention broke the link between unemployment and default.
+
+**And it carries a warning about the test window that is not good news.** The pattern is *young
+loans in the safest band, under the most benign macro readings in the record*. The test window
+scores 2025 onwards, where the young loans are the 2022 to 2024 originations. This diagnosis
+therefore **predicts** that an out-of-time decile 1 will under-predict too, and says so before the
+window is read rather than after.
+
 ### The grid is complete, and no cell of it enters the band
 
 Measured 16 October 2026, the fourth cell fitted in 87.0 minutes and 8 damped Newton steps from
