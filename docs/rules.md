@@ -684,6 +684,58 @@ whatever the fourth says.
 - The grid stops at four. A fifth variation fitted because the fourth missed would be the search,
   and the honest report of a declared criterion unmet is the alternative to it.
 
+### The grid is complete, and no cell of it enters the band
+
+Measured 16 October 2026, the fourth cell fitted in 87.0 minutes and 8 damped Newton steps from
+707 standard errors to **1.56e-08**. All four published, as declared.
+
+| cell | deciles | the miss | age bands | years | predicted spread | realised |
+|---|---|---|---|---|---|---|
+| Weibull, scalar shape | 5 of 10 | 0.603 | 5 of 7 | 16 of 23 | 79.6x | 125.4x |
+| log-logistic, scalar shape | 6 of 10 | 0.677 | 5 of 7 | - | 105.3x | 134.3x |
+| Weibull + shape on nine | **9 of 10** | 1.546 | 5 of 7 | 17 of 23 | 214.0x | 139.0x |
+| **log-logistic + shape on nine** | **9 of 10** | **1.415** | 5 of 7 | 17 of 23 | 206.3x | 145.5x |
+
+**Neither lever, nor both together, reads the band.** The two scalar cells fail low -- deciles 1
+to 5 and 1 to 4, the compression -- and the two shape cells fail in decile 1 alone and high. The
+best of the four misses a ceiling of 1.25 by **0.165**.
+
+**The levers do not cannibalise, and the log-logistic needs less shape.** The fourth cell is the
+best likelihood of the four by 16,879 units over the Weibull with the same shape, on one parameter
+fewer: -10,624,865.38 against -10,641,744.53, where the two scalar cells sit at -10,651,714.59 and
+-10,688,088.43. And the shape it asks for is **22% smaller** -- `credit_score`'s 620 band reads
+-0.324 against the Weibull's -0.413, and `rho` spans 0.920 to 2.038 against 0.840 to 2.017, the
+low tail lifting. That is the algebra written into this rule before any of it was fitted: a family
+whose own curve bends leaves the shape less to do.
+
+**The age profile is 5 of 7 in all four cells, to the band.** Nothing either lever did touched it.
+The two that fail are the same two every time -- **0 to 11 months** at 0.717 to 0.769 and **240 to
+399** at 0.622 to 0.702 -- and both **over**-predict.
+
+**That last number retracts the hazard-floor reading recorded above.** A model with no floor would
+predict too *little* at young ages, and this one predicts too much: 0.000285 expected against
+0.000215 realised over the first year, in every cell of the grid. So the safest decile
+under-predicting is not the young-age behaviour showing through, and the inference drawn from
+`rho = 2` and `h(0) = 0` does not survive its first check against another view. What is owed is
+the same thing as before and now more clearly: **the decile-by-age cross**, one pass, which is the
+only table that can say what the failing decile is made of. Until it is run the cause of that one
+decile is unknown, and no further fit is warranted by a guess about it.
+
+**Two things the grid did settle, which are worth keeping.** The compression the backtest found is
+the shape, not the resolution and not the family: 5 of 10 deciles to 9 of 10, and rule 5's cycle
+criterion from 69.6% of calendar years in band to **73.9%** against a 70% threshold, in both shape
+cells. And the family is not a tie any more on the likelihood -- 36,374 units for one covariate
+fewer -- though this rule says the likelihood is not the criterion, and the decile band it is
+judged on separates the two families by one decile out of ten in the scalar cells and by 0.131 on
+the miss in the shape cells.
+
+**The grid stops at four, as declared.** The smallest miss of anything measured in this series --
+**1.318** -- belongs to the `credit_score`-only shape that rule 14's amendment superseded as a
+hand-pick. That is not a reason to adopt it. Choosing a specification by which one came closest on
+the decile it is judged on is the thing the last section of this document forbids, and that
+specification fails the criterion too. **A declared criterion is unmet by every cell of a declared
+exhaustive grid, and that is what the model's record says.**
+
 ### What the criterion answered: the shape fixes the compression and then overshoots it
 
 Measured 10 October 2026. Both fits on the whole training half, 72,671,500 cells, and both

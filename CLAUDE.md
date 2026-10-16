@@ -670,15 +670,45 @@ against a realised 125 to 139, so the Weibull cannot land in the band from eithe
 
 `rho` comes out between **0.840 and 2.017** across loan types where 125 whole-model refits had put
 a single number between 1.07 and 1.62 -- below one for the worst combinations, which is adverse
-selection burning off, and 2.02 for the best. A Weibull with `rho = 2` has `h(0) = 0`, and the
-safest tenth defaults at 2.6 per 100,000 loan-months where the model predicts 1.7, so **a missing
-hazard floor** is what those two numbers suggest. **It is an inference, not a measurement**: every
-view is a sum over one dimension, so the deciles and the ages are never crossed and nothing says
-the failing decile is young loans. A decile-by-age table is one pass and would settle it. **More shape is a better likelihood and a worse calibration** -- the nine gain 7,540
+selection burning off, and 2.02 for the best. **More shape is a better likelihood and a worse calibration** -- the nine gain 7,540
 units over `credit_score` alone on 14 further parameters and move the failing decile 0.23 the
 wrong way -- and `credit_score` carries 84% of the whole shape gain on 22% of the parameters, with
 five of the other eight moving `rho` under 4%. The fits are 44.4 and 72.9 minutes on the autograd
 path, because the compiled kernel takes a shape of one constant column by design.
+
+**The grid of family by shape is complete, and no cell of it reads the decile band.** Rule 2 was
+reopened against rule 5's decile criterion -- which it had never considered and the Weibull fails
+in sample -- and the question was answered as an exhaustive two-by-two, {Weibull, log-logistic} x
+{scalar shape, the nine covariates fixed at origination}, declared before the last cell was fitted
+and all four published:
+
+| cell | deciles in 0.80 to 1.25 | the miss | age bands | predicted spread | realised |
+|---|---|---|---|---|---|
+| Weibull, scalar | 5 of 10 | 0.603 | 5 of 7 | 79.6x | 125.4x |
+| log-logistic, scalar | 6 of 10 | 0.677 | 5 of 7 | 105.3x | 134.3x |
+| Weibull + shape | 9 of 10 | 1.546 | 5 of 7 | 214.0x | 139.0x |
+| log-logistic + shape | 9 of 10 | **1.415** | 5 of 7 | 206.3x | 145.5x |
+
+The scalar cells fail low and the shape cells fail in decile 1 alone and high; the best of the four
+misses the 1.25 ceiling by 0.165. **The levers do not cannibalise and the log-logistic needs less
+shape**: the fourth cell is the best likelihood by 16,879 units on one parameter fewer
+(-10,624,865.38), its `credit_score` shape coefficient is 22% smaller (-0.324 against -0.413) and
+its `rho` spans 0.920 to 2.038 -- the low tail lifting, because a family whose own curve bends
+leaves the shape less to do. The log-logistic's own selection chose the Weibull's set **less
+`yield_curve_slope`** and fitted scalar in **2.04 minutes** through the compiled kernel against 87.0
+for the shape on autograd.
+
+**And the age profile is 5 of 7 in every cell, which retracts the hazard-floor reading.** The two
+failing bands are the same two throughout -- 0 to 11 months at 0.717 to 0.769 and 240 to 399 at
+0.622 to 0.702 -- and both **over**-predict. A model with no floor would predict too little at
+young ages, and this one predicts 0.000285 against 0.000215 realised over the first year. So the
+safest decile under-predicting is not young-age behaviour showing through, and what `rho = 2` with
+`h(0) = 0` suggested does not survive its first check against another view. **The decile-by-age
+cross is the owed measurement** -- one pass, and the only table that can say what that decile is
+made of. No further fit is warranted by a guess about it, and the grid stops at four: the smallest
+miss in the series, 1.318, belongs to the `credit_score`-only hand-pick the rule superseded, and
+picking it for being closest on the decile it is judged on is the one thing `docs/rules.md`
+forbids outright.
 
 ***Occupancy* (`occupancy`) changes the hazard's shape, a little.** Its curves cross at 90
 months, which no scale factor reconciles, and letting occupancy into the shape parameter is
