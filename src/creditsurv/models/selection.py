@@ -448,19 +448,34 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
     "unemployment_change": -1,  # unemployment above origination fails sooner
     "financial_conditions": -1,  # tighter financial conditions fail sooner
     "insurance_coverage": +1,  # insured loans are underwritten against a stricter standard
-    # Macro candidates. Only where theory actually commits to a direction: a
-    # covariate listed here with no clear prior would be eliminated for disagreeing
-    # with a guess, which is worse than not testing it.
+    # Macro candidates. A sign only where theory actually commits to a direction: a covariate
+    # listed here with no clear prior would be eliminated for disagreeing with a guess.
+    #
+    # **That policy is replaced by rule 15 of ``docs/rules.md``**, declared 17 October 2026: every
+    # candidate carries a sign, and the honest form of "theory commits to no direction" is not a
+    # candidate rather than an unsigned one. The second validation measured what the old policy
+    # cost -- four of the six macro covariates in the published model carried no sign, so the
+    # selection's strongest filter never fired on them, and one of the four explains about 80% of
+    # the level drift between 2021 and 2024.
+    #
+    # Rule 15 names the four signs to add and the five candidates to withdraw. They are **not
+    # applied here**, because ``TIME_VARYING_CONTINUOUS <= MACRO_CANDIDATES`` is an invariant
+    # ``tests/test_procedure.py`` holds, and two of the five are in the published model: the
+    # withdrawal and the selection that re-derives the specification have to land together.
     "equity_volatility": -1,  # high implied volatility is a stressed economy
     # Volatility risen since origination is stress the loan was not written in.
     "volatility_change": -1,
     "house_price_growth": +1,  # rising house prices build equity
     #
     # ``mortgage_rate_decline`` and ``policy_rate_change`` were briefly given revised signs here, on
-    # the strength of their marginal orderings and a mechanism about fixed-rate books.
-    # That revision is **retracted**: conditional on the rest of the specification both
-    # effects are inside the noise, and the marginal ordering that justified it was the
-    # macro cycle. They are eliminated rather than re-signed -- see ``config.ELIMINATED``.
+    # the strength of their marginal orderings and a mechanism about fixed-rate books. That
+    # revision is **retracted**: the marginal ordering that justified it was the macro cycle.
+    #
+    # What this comment used to add was that both were "eliminated rather than re-signed -- see
+    # ``config.ELIMINATED``". **Only ``mortgage_rate_decline`` was.** ``policy_rate_change``
+    # survived into the published model and is its second-largest macro effect, which is the
+    # error rule 15 exists to stop: a comment asserting a covariate is gone, in the file whose
+    # dict decides whether anything would notice.
 }
 
 #: The signs the **prepayment** model's coefficients must take, on the same scale: positive

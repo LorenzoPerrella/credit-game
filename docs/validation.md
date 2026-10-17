@@ -1,17 +1,21 @@
 # Validation response
 
 An independent validation of the model at commit `ae582e5` (12 September 2026) raised
-thirteen findings: six on the data (D), three on the model design (M), seven on selection and
-calibration (S) and one on reproducibility (F). Three were rated high: **D1/D2**, forbearance
-counted as default; **M1**, a two-month calendar misattribution; and **S2**, a stress scenario
-that did not move the covariates the model reads.
+**seventeen** findings: six on the data (D), three on the model design (M), seven on selection and
+calibration (S) and one on reproducibility (F). **Five** were rated high: **D1**, forbearance
+counted as default; **D2**, the moratorium fields discarded at ingest; **M1**, a two-month calendar
+misattribution; **S1**, a backtest with no criterion; and **S2**, a stress scenario that did not
+move the covariates the model reads.
 
-All thirteen were addressed in one change, and every model was re-estimated on the whole
+This page said thirteen findings and three high until 17 October 2026, when the second validation
+round pointed out that its own first-round summary had miscounted and that this page had inherited
+the number. The arithmetic in the sentence above gives it away: six and three and seven and one
+are seventeen. All seventeen were addressed, and every model was re-estimated on the whole
 training half, without sampling.
 
 ```mermaid
 flowchart LR
-    V["13 findings"] --> D["data: D1 to D6"]
+    V["17 findings"] --> D["data: D1 to D6"]
     V --> M["design: M1 to M3"]
     V --> S["selection and calibration: S1 to S7"]
     V --> F["reproducibility: F1"]
