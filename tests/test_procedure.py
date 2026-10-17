@@ -60,6 +60,10 @@ def _run(train: pd.DataFrame, *, identity: str = "fixture") -> tuple[SelectionRe
         fits,
         static=["credit_score", "debt_to_income"],
         ordinal=[],
+        # No moratorium in a fixture of a handful of covariates. Rule 1's
+        # indicator is a production default, and the candidate lists are
+        # parameters precisely so a test can say so.
+        protected_macro=(),
         macro=["ltv_change", "unemployment_change", "equity_volatility"],
         base_categorical={"purpose": reference},
         candidate_categorical=candidates,
@@ -770,6 +774,10 @@ def test_a_selection_streamed_from_the_cells_chooses_what_the_held_panel_chose(
         Fits(held, identity="held", as_of="2014-12", moratorium="exclude"),
         static=["credit_score", "original_ltv"],
         ordinal=[],
+        # No moratorium in a fixture of a handful of covariates. Rule 1's
+        # indicator is a production default, and the candidate lists are
+        # parameters precisely so a test can say so.
+        protected_macro=(),
         macro=["ltv_change", "unemployment_change"],
         base_categorical={"purpose": "purchase"},
         candidate_categorical={},
@@ -785,6 +793,10 @@ def test_a_selection_streamed_from_the_cells_chooses_what_the_held_panel_chose(
         Fits(None, identity="streamed", as_of="2014-12", moratorium="exclude", blocks=source),
         static=["credit_score", "original_ltv"],
         ordinal=[],
+        # No moratorium in a fixture of a handful of covariates. Rule 1's
+        # indicator is a production default, and the candidate lists are
+        # parameters precisely so a test can say so.
+        protected_macro=(),
         macro=["ltv_change", "unemployment_change"],
         base_categorical={"purpose": "purchase"},
         candidate_categorical={},
@@ -822,6 +834,10 @@ def test_moments_that_do_not_cover_the_candidates_are_refused_before_the_first_f
             Fits(None, identity="fixture", as_of="2008-12", moratorium="exclude"),
             static=["credit_score", "debt_to_income"],
             ordinal=[],
+            # No moratorium in a fixture of a handful of covariates. Rule 1's
+            # indicator is a production default, and the candidate lists are
+            # parameters precisely so a test can say so.
+            protected_macro=(),
             macro=[],
             moments=partial,
         )
@@ -913,6 +929,10 @@ def test_the_family_command_reads_both_records_and_applies_the_rule(
             ),
             static=["credit_score"],
             ordinal=[],
+            # No moratorium in a fixture of a handful of covariates. Rule 1's
+            # indicator is a production default, and the candidate lists are
+            # parameters precisely so a test can say so.
+            protected_macro=(),
             macro=["ltv_change"],
             base_categorical={},
             candidate_categorical={},
@@ -978,6 +998,10 @@ def test_a_candidate_that_cannot_be_fitted_is_a_finding_not_a_crash() -> None:
         Refuses(None, identity="fixture", as_of="2021-12", moratorium="exclude"),
         static=["credit_score"],
         ordinal=[],
+        # No moratorium in a fixture of a handful of covariates. Rule 1's
+        # indicator is a production default, and the candidate lists are
+        # parameters precisely so a test can say so.
+        protected_macro=(),
         macro=["ltv_change", "equity_volatility"],
         base_categorical={},
         candidate_categorical={},
@@ -1404,6 +1428,10 @@ def test_a_selection_from_one_encoding_chooses_what_a_re_reading_chooses(
             fits,
             static=["credit_score", "original_ltv"],
             ordinal=[],
+            # No moratorium in a fixture of a handful of covariates. Rule 1's
+            # indicator is a production default, and the candidate lists are
+            # parameters precisely so a test can say so.
+            protected_macro=(),
             macro=["ltv_change", "unemployment_change"],
             base_categorical={"purpose": "purchase"},
             candidate_categorical={},

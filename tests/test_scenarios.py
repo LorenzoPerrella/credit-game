@@ -81,9 +81,18 @@ def test_the_source_map_is_what_the_builder_actually_reads(
     With every series present the covariate is built; with its stated sources removed it
     is not. A covariate that still appears after its sources are gone reads something the
     map does not list, and a scenario checked against the map would miss it.
+
+    **An empty source tuple is a claim this construction cannot test**, and saying so is better
+    than giving the covariate a source it does not have. `moratorium_regime` is built from the
+    observation month alone, so there is nothing to remove and "it disappears without its
+    sources" is vacuous. What is still checked is that it is built at all, and the empty tuple
+    then carries the rest of the claim: it reads no series, so no scenario can shock it -- which
+    is correct, because a moratorium is a policy and not a macro path.
     """
     assert covariate in _build(macro), f"{covariate} is not built from the full panel"
-    assert covariate not in _build(_without(macro, MACRO_SOURCES[covariate])), (
-        f"{covariate} is still built without {MACRO_SOURCES[covariate]}, "
-        "so it reads a series the map does not state"
+    stated = MACRO_SOURCES[covariate]
+    if not stated:
+        return
+    assert covariate not in _build(_without(macro, stated)), (
+        f"{covariate} is still built without {stated}, so it reads a series the map does not state"
     )

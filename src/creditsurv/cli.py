@@ -1024,7 +1024,7 @@ def select(
 
     import pandas as pd
 
-    from creditsurv.config import MACRO_CANDIDATES
+    from creditsurv.config import MACRO_CANDIDATES, PROTECTED_MACRO, default_shape
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import month_ordinal
     from creditsurv.data.store import cells_identity
@@ -1045,6 +1045,9 @@ def select(
         *LOAN_CONTINUOUS,
         *LOAN_ORDINAL,
         *MACRO_CANDIDATES,
+        # Not a candidate -- rule 1 protects it from removal -- but the reading has to carry it,
+        # because every fit of the run reads it.
+        *PROTECTED_MACRO,
         *BASE_CATEGORICAL,
         *CANDIDATE_CATEGORICAL,
     ]
@@ -1085,7 +1088,15 @@ def select(
         # Declared in `config` before any fit, with its own argument: "a macro covariate is a
         # function of the vintage quarter and the loan age, both already in the aggregation
         # key". That is exactly the split the kernel needs.
-        calendar=None if traced else MACRO_CANDIDATES,
+        calendar=None if traced else (*MACRO_CANDIDATES, *PROTECTED_MACRO),
+        # Rule 14's shape is part of the specification, not a candidate, so every fit of the run
+        # reads it: a scale-only candidate measured against a shaped parent would be two models
+        # with one called a removal. The same string everywhere, from `config`.
+        #
+        # The **default** model only. Rule 14 was declared against the default model's decile
+        # calibration and says nothing about the other exit, so the prepayment model keeps its
+        # scalar shape until a rule says otherwise.
+        ancillary=default_shape() if cause == DEFAULT_CAUSE else None,
     )
     record = run_selection(
         None,
@@ -1095,7 +1106,11 @@ def select(
     )
     written = selection.generate(record, reports_dir=reports_dir())
 
-    time_varying = tuple(name for name in record.selected.continuous if name in MACRO_CANDIDATES)
+    time_varying = tuple(
+        name
+        for name in record.selected.continuous
+        if name in MACRO_CANDIDATES or name in PROTECTED_MACRO
+    )
     typer.echo(f"\nFormula: {record.selected.formula}")
     typer.echo(f"TIME_VARYING_CONTINUOUS = {time_varying}")
     typer.echo(f"Written: {written}")

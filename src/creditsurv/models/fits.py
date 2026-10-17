@@ -130,6 +130,15 @@ class Fits:
     #: own covariates are all that is assumed, and a formula naming anything else fails where
     #: it is expanded rather than silently.
     covering: tuple[str, ...] | None = None
+    #: The shape's own formula, when rule 14's shape is part of the specification rather than a
+    #: candidate. Every fit of the run reads it -- a selection comparing a scale-only candidate
+    #: against a shaped parent would be comparing two models and calling one a removal.
+    #:
+    #: It is the **same** formula for every candidate, because rule 14 fixes it: the nine
+    #: covariates fixed at origination, in rule 12's forms. Backward elimination removes from the
+    #: scale; the shape does not move. `None` is the scalar shape every run before October 2026
+    #: made, and that path is untouched down to its summation order.
+    ancillary: str | None = None
 
     def fit(
         self,
@@ -160,6 +169,7 @@ class Fits:
             sample=sample,
             distribution=self.distribution,
             cause=self.cause,
+            ancillary=self.ancillary,
         )
         fingerprint = fit_fingerprint(**described)
         cached = load_fit(fingerprint)
@@ -373,6 +383,7 @@ class Fits:
                 spec.covariates,
                 spec.formula,
                 distribution=self.distribution,
+                ancillary=self.ancillary,
                 initial_point=initial_point,
                 prefer=self.preferred,
                 floor=floor,
@@ -510,11 +521,17 @@ def selection_description(
     sample: str = "training half",
     distribution: str = DISTRIBUTION,
     cause: str = DEFAULT_CAUSE,
+    ancillary: str | None = None,
 ) -> dict[str, object]:
     """What a selection fit is saved under, and so how it is found again.
 
     The cause enters only when it is not ``default``, so every fit made before the
-    prepayment model existed keeps the name it has.
+    prepayment model existed keeps the name it has. **The shape's formula enters the same
+    way, and it has to**: with rule 14's shape part of the specification, a fit of one scale
+    formula with the shape and a fit of it without are two different models, and a fingerprint
+    that did not separate them would hand a selection the wrong one out of the cache and call
+    it a hit. `fit_description` already took it; this one did not, which is the half of the
+    pair that would have failed silently.
     """
     described: dict[str, object] = {
         "purpose": "selection",
@@ -528,6 +545,8 @@ def selection_description(
     }
     if cause != DEFAULT_CAUSE:
         described["cause"] = cause
+    if ancillary is not None:
+        described["ancillary"] = ancillary
     return described
 
 
@@ -539,6 +558,7 @@ def selected_fit(
     formula: str,
     distribution: str = DISTRIBUTION,
     cause: str = DEFAULT_CAUSE,
+    ancillary: str | None = None,
 ) -> FitResult | None:
     """The selection's own fit of ``formula`` on the training half, if it made one.
 
@@ -555,6 +575,7 @@ def selected_fit(
                 formula=formula,
                 distribution=distribution,
                 cause=cause,
+                ancillary=ancillary,
             )
         )
     )

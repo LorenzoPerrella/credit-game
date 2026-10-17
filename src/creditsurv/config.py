@@ -361,6 +361,29 @@ MACRO_CANDIDATES: Final[tuple[str, ...]] = (
     "inflation_change",
 )
 
+#: The months a payment moratorium suppressed the event, and the indicator that absorbs them.
+#:
+#: Rule 1 of `docs/rules.md`, amended 17 October 2026 before the selection it governs. Under
+#: `exclude` a moratorium month is not an event and the loan stays at risk, which is right for the
+#: dependent variable -- but the largest unemployment shock in the series, over eleven points in
+#: two months, arrives with defaults suspended by law, and the coefficient records it. Measured
+#: across the declared cuts, `unemployment_change` reads **-0.0920 at 2018-12** and **-0.0305 at
+#: 2021-12**: four points of unemployment multiply the hazard by 1.67 on the first and 1.18 on the
+#: second, a **threefold** attenuation of the one sensitivity a mortgage stress test turns on.
+#:
+#: CARES Act forbearance ran from March 2020; the window closes at September 2021, when the
+#: enrolment and the reporting of it had wound down. It is a function of the **observation month
+#: alone**, so it costs zero cells -- the same argument every macro covariate rests on.
+MORATORIUM_REGIME: Final[tuple[str, str]] = ("2020-03", "2021-09")
+
+#: Macro covariates the selection may not remove, because their purpose is to absorb rather than
+#: to be tested. `moratorium_regime` is here for the reason `harp` is in
+#: `procedure.BASE_CATEGORICAL`: a selection free to drop it would be free to read the macro
+#: coefficients off a book in which a policy intervention is still unmarked. Rule 15 asks a
+#: declared sign of every *candidate*, and a protected covariate is not one -- it is not screened,
+#: not eliminated, and carries no prior.
+PROTECTED_MACRO: Final[tuple[str, ...]] = ("moratorium_regime",)
+
 #: The economic dimension each candidate measures, fixed before any selection result.
 #:
 #: The stability rule of step 9 removes a covariate that is small, changes sign when the
@@ -590,6 +613,29 @@ def default_covariates() -> list[str]:
     model module reach up into the command line for the definition of its own design.
     """
     return [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL, *CATEGORICAL_REFERENCE]
+
+
+def default_shape() -> str:
+    """Rule 14's shape: every covariate fixed at origination, in rule 12's forms.
+
+    One source, for the reason `default_formula` is one: the shape is a property of the
+    specification rather than a model of its own, so the selection, the three regime cuts, the
+    report and the views all have to read the same string or they are fitting different models
+    and calling one a refit.
+
+    What is **not** here is any of the six covariates recomputed every loan-month. That is not a
+    judgement about them -- `ltv_change` is the strongest covariate in the model -- but an
+    identity: `period = cohort + age` holds, so a covariate that moves over a loan's life moves
+    with the age, and rule 14 refuses an age-dependent shape because the hazard would stop
+    integrating to a survival function. `Factorisation.expand` refuses it in code as well, so the
+    rule does not rest on this function being written correctly.
+    """
+    linear = [name for name in STATIC_CONTINUOUS + ORDINAL if name not in BANDED_REFERENCE]
+    banded = [f"C({name}, Treatment({band}))" for name, band in BANDED_REFERENCE.items()]
+    categorical = [
+        f"C({name}, Treatment('{reference}'))" for name, reference in CATEGORICAL_REFERENCE.items()
+    ]
+    return " + ".join([*linear, *banded, *categorical])
 
 
 def default_formula() -> str:

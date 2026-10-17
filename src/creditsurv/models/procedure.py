@@ -45,6 +45,7 @@ from lifelines import exceptions
 from creditsurv.config import (
     MACRO_CANDIDATES,
     MACRO_ELIMINATION_PRIORITY,
+    PROTECTED_MACRO,
 )
 from creditsurv.data.panel import (
     WEIGHT,
@@ -141,7 +142,9 @@ class SelectionRecord:
             "cause": self.cause,
             "static_continuous": [name for name in continuous if name in LOAN_CONTINUOUS],
             "ordinal": [name for name in continuous if name in LOAN_ORDINAL],
-            "time_varying_continuous": [name for name in continuous if name in MACRO_CANDIDATES],
+            "time_varying_continuous": [
+                name for name in continuous if name in MACRO_CANDIDATES or name in PROTECTED_MACRO
+            ],
             "categorical": dict(self.selected.categorical),
             "eliminated": self.eliminated,
             "formula": self.selected.formula,
@@ -155,6 +158,7 @@ def run_selection(
     static: Sequence[str] = LOAN_CONTINUOUS,
     ordinal: Sequence[str] = LOAN_ORDINAL,
     macro: Sequence[str] = MACRO_CANDIDATES,
+    protected_macro: Sequence[str] = PROTECTED_MACRO,
     base_categorical: Mapping[str, str] = BASE_CATEGORICAL,
     candidate_categorical: Mapping[str, str] = CANDIDATE_CATEGORICAL,
     stability: np.ndarray | bool | None = None,
@@ -182,7 +186,12 @@ def run_selection(
     read one map for both would eliminate every covariate of the second model for
     disagreeing with the first model's economics.
     """
-    loan = [*static, *ordinal]
+    # The protected block is not "the loan block" any more: rule 1's moratorium regime indicator
+    # is a macro covariate the selection may not remove, because its purpose is to absorb a policy
+    # intervention so the other macro coefficients are read off a book without one -- not to be
+    # tested. So it joins what steps 7 to 10 never consider, for the reason `harp` joins
+    # `BASE_CATEGORICAL`.
+    loan = [*static, *ordinal, *protected_macro]
     continuous = [*loan, *macro]
     eliminated: dict[str, str] = {}
     # What a reading has to cover, said before the first specification exists: a reading is
@@ -240,6 +249,11 @@ def run_selection(
         *(name for name in macro if name not in MACRO_ELIMINATION_PRIORITY),
         *ordinal,
         *static,
+        # Last, so it is the last thing variance inflation would reach: dropping it would leave
+        # the macro coefficients read through the moratorium, which is the whole reason it is in
+        # the model. If it ever does collide, something else goes first -- which is what
+        # protection means.
+        *protected_macro,
     ]
     inflation, surviving = stepwise_vif(
         None,
