@@ -34,7 +34,7 @@ responds to a macroeconomic scenario and gives a smooth term structure. A Cox mo
 of the three.
 
 **At this scale the problem is memory.** Episodes identical on every covariate and position in
-time collapse into 63.6 million weighted cells, and fits run block by block on lifelines' own
+time collapse into **91.6 million** weighted cells, and fits run block by block on lifelines' own
 likelihood, polished to the optimum its optimiser stops short of.
 
 ## Where to read

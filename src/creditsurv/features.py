@@ -5,12 +5,19 @@ never come from a difference in feature construction.
 
 Two decisions are encoded here and are worth stating explicitly.
 
-**Publication lag.** Series that are published in arrears and later revised are
-lagged before use: unemployment, the house price index and the financial
-conditions index. The 30-year mortgage rate is not, because it is a market
-quote published weekly and never revised, so a borrower and a lender both know
-it in real time. Applying a blanket lag to everything would be simpler but
-would misstate what was actually knowable.
+**Transmission lag, and it is every series.** Every macro series is lagged three
+months before use -- ``LAGGED_SERIES`` below is both lists, and
+``CONTEMPORANEOUS_SERIES`` is empty on purpose. A loan ninety days delinquent in
+month *t* missed its payments in *t-3* to *t-1*, so no reading from month *t* can
+be what caused it. The argument is about **transmission**, not publication.
+
+This docstring said the opposite until 17 October 2026: that the 30-year mortgage
+rate was *not* lagged, because it is a market quote published weekly and never
+revised, so a borrower and a lender both know it in real time. That reasoning
+answers the publication question, which is not the one that decides the lag --
+and the constants fifty lines below had already listed the two mortgage rates
+first among ``TRANSMISSION_LAGGED``. The second independent validation found the
+contradiction; the code was right and the prose was a year out of date.
 
 **Loan-to-value is decomposed rather than replaced.** ``original_ltv`` and
 ``indexed_cltv`` are equal at origination and remain strongly correlated

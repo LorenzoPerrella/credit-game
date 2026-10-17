@@ -80,6 +80,7 @@ nav:
   - Methodology:
       - In short: methodology.md
       - Rules written first: rules.md
+      - The register of amendments: rules_register.md
       - How the code is arranged: architecture.md
       - Variable selection: variable_selection.md
       - The selection record: reports/selection.md
@@ -87,15 +88,17 @@ nav:
       - The selection record, prepayment: reports/selection_weibull_prepayment.md
       - The distribution family: reports/family.md
       - Windows, anchoring and grades: reports/windows.md
-      - Methodology report: reports/methodology.md
-  - Model:
-      - In short: model.md
-      - Calibration report: reports/calibration.md
-  - Calibration & backtest:
-      - In short: calibration.md
-      - Backtest report: reports/backtesting.md
-  - Validation response: validation.md
+  - Model: model.md
+  - Calibration & backtest: calibration.md
+  - Validation:
+      - Response: validation.md
+      - Second round, the plan: second_round_plan.md
   - Decision log: decisions.md
   - Reproduce:
       - In short: reproduce.md
       - The fit engine's envelope: reports/engine.md
+  - Superseded reports:
+      - Why these are here: reports/superseded.md
+      - Methodology report (Sept 2026): reports/methodology.md
+      - Calibration report (Sept 2026): reports/calibration.md
+      - Backtest report (Sept 2026): reports/backtesting.md

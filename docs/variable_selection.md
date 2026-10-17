@@ -406,7 +406,35 @@ accelerated-failure-time and proportional-hazards. For the log-logistic the rati
 at 600, at a gap of one in log scale. The family does bear on the spread; it simply does not bear
 on it enough.
 
-## Results of the first run
+## Results of the first run — history, not the current specification
+
+!!! warning "Everything from here to *Would `nmds` have done the same?* is the first run"
+    Added 17 October 2026, after the second independent validation found that this section
+    argues against three covariates the published model carries and describes a selection the
+    repository has since replaced twice. It is **kept** because this project keeps superseded
+    reasoning on the record rather than deleting it — but it is history, and three things in it
+    are no longer true:
+
+    - **The numbers are from a different table.** 15.9 million cells and 2.52 billion
+      loan-months, against **91,575,827** cells over **2,773,640,182** today. Estimation ran to
+      2024-12, where [rule 1](rules.md) now puts it at 2021-12 with an anchoring window after it.
+    - **The covariates given up came back, and the arguments below were not withdrawn.**
+      *Consumer sentiment* is dismissed below as having no content — "if this document makes one
+      argument worth taking away, it is that one" — *housing starts growth* as "large,
+      significant and uninterpretable" in its linear form, and *yield curve slope* as
+      collinearity's textbook case. **All three are in the published model, linear.** They
+      returned because the selection was re-run on a different table under a different window and
+      chose differently; the arguments were not refuted, they were outvoted by a re-run, and
+      saying so is the honest version.
+    - **Two of the three are withdrawn again, and for a third reason.** [Rule 15](rules.md),
+      declared 17 October 2026, withdraws *yield curve slope* as a candidate because theory
+      commits to no direction for it — and the measurement that settled it is the one this section
+      never had: its coefficient reads +0.083 at the 2018 cut and −0.032, −0.039, −0.048 at the
+      three after it. *Consumer sentiment* and *housing starts growth* keep their candidacy and
+      gain declared signs.
+
+    **The current specification is in [the selection record](reports/selection.md)**, regenerated
+    by `creditsurv select` and held to `config` by a test. Read that, not this.
 
 On the whole population: **15,858,492 cells covering 2,515,340,009 loan-months, with
 1,938,519 defaults.** No sampling at any step.

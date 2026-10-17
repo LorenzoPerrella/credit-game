@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | Family | Weibull accelerated failure time, shape <!-- value: model.rho --> -- chosen by [rule 2](rules.md), not by likelihood |
-| Competing risk | Prepayment, modelled; lifetime PD is a cumulative incidence |
+| Competing risk | Prepayment, modelled as its own cause-specific hazard. **The published PD below is still `1 - S` on the default hazard alone** -- see the warning under the table |
 | Twelve-month PD, origination book today | **<!-- value: scenario.pd_12m -->** |
 | Lifetime PD over 36 months, baseline | <!-- value: scenario.baseline --> |
 | Lifetime PD over 36 months, adverse | <!-- value: scenario.adverse --> |
@@ -23,11 +23,25 @@ flowchart TD
     S --> R
 ```
 
-**Two hazards, not one, and the lifetime PD is a cumulative incidence.** A loan that repays
+!!! danger "The published figures are `1 - S`, not a cumulative incidence"
+    This page claimed the opposite until 17 October 2026, when the second independent validation
+    found that the competing-risk machinery is **written and tested but never called**:
+    `competing_paths`, `lifetime_incidence` and `incidence_term_structure` exist in
+    `models/lifetime_pd.py`, and nothing hands the projection views a second fit, so the numbers
+    in the table above come from `1 - S` on the default hazard alone.
+
+    What that costs is measurable without any model, by comparing Kaplan-Meier against
+    Aalen-Johansen on the development half: `1 - S` overstates cumulative default by **31% at
+    three years, 57% at five, 122% at ten and 201% at fifteen**. And 36 months is not the life of
+    a thirty-year mortgage. The wiring, the horizon and the maturity truncation are
+    [the second round's plan](second_round_plan.md); until they land, read the figures above as
+    what they are.
+
+**Two hazards, not one, and the lifetime PD should be a cumulative incidence.** A loan that repays
 cannot later default, so treating repayment as censoring assumes it is uninformative about
 default -- and on this book it is the opposite of uninformative: there are 33,797,300
 prepayments against 1,671,207 defaults, twenty times as many exits through the door the model
-used to ignore. The lifetime PD is therefore the Aalen-Johansen quantity, the share that has
+used to ignore. The lifetime PD ought therefore to be the Aalen-Johansen quantity, the share that has
 left through default by a given age with the competition accounted for, rather than `1 - S` from
 a single hazard, which overstates it at long horizons.
 
@@ -55,11 +69,17 @@ training half. The categorical ones are each level against its reference.
     <!-- table: coefficients -->
 
 ??? warning "Three readings to hold loosely"
-    - *Financial conditions* (`financial_conditions`) is right-signed and stable across samples, and nearly nothing: in a
-      stress scenario it contributes its sign and little else.
-    - *Policy rate change since origination* (`policy_rate_change`) has no declared prior. A policy rate below where the loan was written
-      shortens survival, which reads as the central bank cutting into recessions rather than
-      as a payment channel a fixed-rate mortgage does not have.
+    - *Financial conditions* (`financial_conditions`) is **no longer in this model**: step 10
+      removed it at -0.0155 per standard deviation, under the 0.02 of rule 3, which had named it
+      in advance. It survives in the prepayment block.
+    - *Policy rate change since origination* (`policy_rate_change`) has no declared prior, and
+      rule 15 **withdraws it as a candidate** for that reason: a policy rate above where the loan
+      was written lengthens survival here, which reads as the central bank cutting into recessions
+      rather than as a payment channel a fixed-rate mortgage does not have -- and the second
+      validation measured what that reading costs. The term lowered the predicted hazard 33% in
+      2023 and 36% in 2024, about **80% of the level drift** since 2021, and on the 2022 regime
+      cut it is the difference between 1.420 and 0.959. It is still in the published model until
+      the selection that removes it has run.
     - Housing carries two covariates, the position, *loan-to-value change since origination*
       (`ltv_change`), and the construction cycle, *housing starts growth* (`housing_starts_growth`). The stability step separates a pair only when the smaller one
       changes sign, and neither did.

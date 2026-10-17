@@ -650,12 +650,20 @@ where there is not.
 
 ## Open
 
-**The backtest fails its decile criterion.** Overall actual over expected 0.920 and Gini
-0.561 pass; the deciles run 0.598 to 1.064: over-prediction in the safer deciles, down to
-0.598 in the second, and a riskiest decile slightly under-predicted. The report first read
-0.597 to 0.995, every decile below one, because each decile's expected rate was a plain mean
-of cell hazards rather than weighted by loan-months. The criteria were fixed before the run,
-so the model is not to be tuned to them on the test window.
+**The backtest fails its decile criterion, and the figures to quote are the anchored ones on the
+declared test window.** 0.920 / 0.561 / 0.598-1.064 appeared here as the current state for a
+month and belonged to the **September** model -- a different table, a different window and
+prepayment as censoring. On the published model, anchored by rule 4's multiplier of 1.1831 and
+scored on 2025-01 onwards: overall actual over expected **0.959** and Gini **0.542** pass, and the
+deciles run **0.674 to 1.062** with **6 of 10** in band. The master scale reads **1 of 8**, with
+relative errors to **+89%** in the safest grade. The criteria were fixed before the run, so the
+model is not tuned to them on the test window -- and the candidate rule 14 produced reads
+**0.927 / 0.548 / 10 of 10** on the same window, which is the first time anything here has passed
+all three.
+
+Three out-of-time ratios exist and they are different quantities: **1.166** unanchored from 2022
+(the site's home), **0.959** anchored on the test window (the calibration page), and the 0.920
+above. The second independent validation found all three presented as one.
 
 **The shape on the risk removes the compression and overshoots it, and the model has no hazard
 floor.** Rule 14 let the Weibull's shape read the covariates fixed at origination -- all nine of
