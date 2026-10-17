@@ -506,23 +506,35 @@ def _kernel(
         raise ValueError(message)
     primary = _primary_columns(fitter, columns)
     ancillary = _column_slices(columns)[fitter._ancillary_parameter_name]
-    if not isinstance(ancillary, slice) or ancillary.stop - ancillary.start != 1:
+    if not isinstance(ancillary, slice):
         message = (
-            "The shape has more than one coefficient, so a row does not depend on two "
-            "scalars and this kernel cannot fit it. Fit a shape with covariates on the "
-            "autograd evaluator."
-        )
-        raise ValueError(message)
-    position = int(ancillary.start)
-    if not (scan.low[position] == scan.high[position] == 1.0 and scale[position] == 1.0):
-        message = (
-            f"The shape's column is not the constant 1.0 that lifelines builds for an "
-            f"intercept: it runs {scan.low[position]} to {scan.high[position]} at a scale of "
-            f"{scale[position]}. The kernel reads the shape's coefficient directly, so it "
-            "would be reading a different number."
+            "The shape's coefficients are not adjacent in the design, so they cannot be named "
+            "by a slice."
         )
         raise ValueError(message)
     expanded = scan.expanded
+    table = None if expanded is None else expanded.shape
+    position = int(ancillary.start)
+    if table is None:
+        # The scalar shape, which is every fit before October 2026. The kernel reads its
+        # coefficient straight out of the parameter vector, so the column it stands for has to
+        # be the constant 1.0 at a scale of 1.0 that lifelines builds for an intercept --
+        # otherwise the number reaching the likelihood is a different one.
+        if ancillary.stop - ancillary.start != 1:
+            message = (
+                "The shape has more than one coefficient but no table was expanded for it, so "
+                "a row would depend on more than two scalars. Pass `ancillary=` through to "
+                "`Factorisation.expand`, or fit on the autograd evaluator."
+            )
+            raise ValueError(message)
+        if not (scan.low[position] == scan.high[position] == 1.0 and scale[position] == 1.0):
+            message = (
+                f"The shape's column is not the constant 1.0 that lifelines builds for an "
+                f"intercept: it runs {scan.low[position]} to {scan.high[position]} at a scale "
+                f"of {scale[position]}. The kernel reads the shape's coefficient directly, so "
+                "it would be reading a different number."
+            )
+            raise ValueError(message)
     if expanded is None:
         loan, calendar, loan_positions, calendar_positions = scan.factorisation.tables()
     else:
@@ -530,6 +542,9 @@ def _kernel(
         loan_positions, calendar_positions = expanded.loan_positions, expanded.calendar_positions
     loan_index = primary.start + loan_positions
     calendar_index = primary.start + calendar_positions
+    shape_columns = (
+        None if table is None else np.arange(ancillary.start, ancillary.stop, dtype=np.intp)
+    )
     return Kernel(
         distribution=_family(fitter),
         # lifelines optimises each coefficient multiplied by its column's standard deviation,
@@ -540,6 +555,10 @@ def _kernel(
         loan_index=loan_index,
         calendar_index=calendar_index,
         shape_index=position,
+        # Scaled like the other two, for the same reason: lifelines optimises each coefficient
+        # multiplied by its column's standard deviation.
+        shape=None if table is None or shape_columns is None else table / scale[shape_columns],
+        shape_columns=shape_columns,
         blocks=tuple(scan.encoded),
         total_weight=total_weight,
         # Part of what determines the answer, so it arrives from the caller rather than from

@@ -1308,3 +1308,150 @@ def test_a_continuous_column_folds_without_overflowing_the_radix() -> None:
     np.testing.assert_array_equal(hashed, sorted_out)
     np.testing.assert_array_equal(inverse, np.asarray(by_sorting).ravel())
     assert len(hashed) == 20_000, "continuous columns make every row its own combination"
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+@pytest.mark.parametrize("distribution", ["weibull", "loglogistic"])
+def test_a_shape_reading_origination_covariates_is_the_objective_autograd_gives(
+    distribution: str,
+) -> None:
+    """Rule 14's shape, through the kernel, against the design it exists not to build.
+
+    The shape reads covariates **fixed at origination**, so `rho = exp(C[i])` is a function of
+    the loan combination -- the same index `i` the loan table uses -- and a row still depends on
+    two scalars, which is where this kernel's economy comes from. The jet does not widen; three
+    accumulators do, from floats to arrays indexed by `i`.
+
+    What this test is really for is the **shape-by-calendar block of the Hessian**, the only
+    genuinely new term: the shape's coefficients are indexed by `i` and the calendar's by `j`,
+    so neither scatter-add alone reaches it and it is accumulated the way `crossed` already is.
+    A sign error or a transpose there gives a fit that converges to a slightly wrong place and
+    reports a clean distance to it, which is the failure mode no other test here would see.
+
+    Not parametrised over the backends: the crate takes the shape as one `f64`, so a shape with
+    covariates stays on the written-out path, which rule 13 declares normative.
+    """
+    frame = _book(range(0, 5), range(0, 7))
+    design = _design(frame)
+    weight = frame["loan_months"].to_numpy(dtype=float)
+    event = frame["outcome"].to_numpy(dtype=bool)
+
+    factorisation = _factorisation()
+    rows = factorisation.add(frame, design, event=event, weight=weight)
+    loan, calendar, loan_positions, calendar_positions = factorisation.tables()
+
+    # The shape reads an intercept and the credit-score band -- both loan-side, which is what
+    # makes them admissible. The band comes out of the loan table rather than being rebuilt, so
+    # the two sides cannot disagree about which combination is which.
+    score = int(
+        np.flatnonzero(loan_positions == DESIGN_COLUMNS.index("C(credit_score)[T.680.0]"))[0]
+    )
+    shape_table = np.column_stack([np.ones(len(loan)), loan[:, score]])
+    scale_width = design.shape[1]
+    shape_columns = np.arange(scale_width, scale_width + shape_table.shape[1])
+
+    deviations = np.array([1.0, 0.4, 17.5, 0.5, 0.06, 2.3, 1.0, 0.4])
+    kernel = Kernel(
+        distribution=distribution,
+        loan=loan / deviations[loan_positions],
+        calendar=calendar / deviations[calendar_positions],
+        loan_index=loan_positions,
+        calendar_index=calendar_positions,
+        shape_index=int(shape_columns[0]),
+        shape=shape_table / deviations[shape_columns],
+        shape_columns=shape_columns,
+        blocks=(rows,),
+        total_weight=float(weight.sum()),
+    )
+
+    by_row = np.column_stack(
+        [design, np.ones(len(frame)), design[:, DESIGN_COLUMNS.index("C(credit_score)[T.680.0]")]]
+    )
+    full = by_row / deviations
+    entry, following, far = log_times(distribution, frame["age"].to_numpy())
+    times = (
+        entry,
+        np.where(event, entry, following),
+        np.where(event, following, np.full(len(frame), far)),
+    )
+    truncated = (frame["age"].to_numpy() > 0).astype(float)
+    reference = REFERENCE[distribution]
+
+    def objective(params: np.ndarray) -> Any:
+        eta = full[:, :scale_width] @ params[:scale_width]
+        shape = full[:, scale_width:] @ params[scale_width:]
+        return -anp.sum(weight * reference(anp.array([eta, shape]), *times, truncated)) / float(
+            weight.sum()
+        )
+
+    rng = np.random.default_rng(11)
+    for attempt in range(3):
+        x = np.concatenate([[7.0], rng.standard_normal(scale_width - 1) * 0.3, [0.35, -0.2]])
+        got = kernel(x, curvature=True)
+        where = f"{distribution} attempt {attempt}"
+
+        assert got.value == pytest.approx(float(objective(x)), rel=1e-12), where
+        np.testing.assert_allclose(
+            got.gradient, np.asarray(grad(objective)(x), dtype=float), rtol=1e-10, err_msg=where
+        )
+        assert got.curvature is not None
+        expected = np.asarray(hessian(objective)(x), dtype=float)
+        scale = max(1.0, float(np.max(np.abs(expected))))
+        np.testing.assert_allclose(
+            got.curvature, expected, rtol=1e-9, atol=1e-10 * scale, err_msg=where
+        )
+        # Symmetric, to the tolerance two orderings of one sum earn rather than exactly:
+        # `calendar.T @ (calendar * curved)` is a symmetric product whose two triangles are
+        # accumulated in different orders, and on this fixture they part at 1.2e-14 relative in
+        # the calendar block -- which predates the shape table and is not what this checks. What
+        # this checks is that the two new off-diagonal blocks are each other's transpose, which
+        # they are by assembly rather than by accident.
+        np.testing.assert_allclose(
+            got.curvature, got.curvature.T, rtol=1e-12, atol=0, err_msg=where
+        )
+
+
+def test_a_scalar_shape_reaches_the_same_numbers_through_the_table_path() -> None:
+    """A one-column table of ones is the scalar shape, and has to agree with it exactly.
+
+    This is the test that would catch the table path having drifted from the one every cached
+    fit was made on. The two are **not** expected to agree bit for bit -- the scalar path sums
+    the shape's derivative over rows and the table path sums it per loan combination first, and
+    floating-point addition is not associative -- so what is asserted is the tolerance this
+    project holds two orderings of the same sum to.
+    """
+    frame = _book(range(0, 5), range(0, 7))
+    design = _design(frame)
+    weight = frame["loan_months"].to_numpy(dtype=float)
+    event = frame["outcome"].to_numpy(dtype=bool)
+
+    factorisation = _factorisation()
+    rows = factorisation.add(frame, design, event=event, weight=weight)
+    loan, calendar, loan_positions, calendar_positions = factorisation.tables()
+    position = design.shape[1]
+    deviations = np.array([1.0, 0.4, 17.5, 0.5, 0.06, 2.3, 1.0])
+
+    common = {
+        "distribution": "weibull",
+        "loan": loan / deviations[loan_positions],
+        "calendar": calendar / deviations[calendar_positions],
+        "loan_index": loan_positions,
+        "calendar_index": calendar_positions,
+        "shape_index": position,
+        "blocks": (rows,),
+        "total_weight": float(weight.sum()),
+    }
+    scalar = Kernel(**common)
+    tabled = Kernel(
+        **common,
+        shape=np.ones((len(loan), 1)),
+        shape_columns=np.array([position], dtype=np.intp),
+    )
+
+    x = np.concatenate([[7.0], np.full(position - 1, 0.1), [0.35]])
+    one, other = scalar(x, curvature=True), tabled(x, curvature=True)
+    assert one.value == pytest.approx(other.value, rel=1e-14)
+    np.testing.assert_allclose(one.gradient, other.gradient, rtol=1e-13, atol=1e-15)
+    assert one.curvature is not None
+    assert other.curvature is not None
+    np.testing.assert_allclose(one.curvature, other.curvature, rtol=1e-13, atol=1e-15)

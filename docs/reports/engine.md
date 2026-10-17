@@ -10,6 +10,54 @@ This report exists because the next thing the model needs is finer bands, and fi
 cost a full re-selection for two families. At the costs below that cannot be paid, so the
 costs are the subject.
 
+## A shape reading the origination side, through the kernel
+
+Measured 17 October 2026 on the cached reading of the production training half -- 72,671,500
+cells, the log-logistic with rule 14's shape on the nine covariates fixed at origination.
+
+**The whole fit: 15.50 minutes against 87.0 on the autograd path, a 5.6x, and the same walk.**
+Ten evaluations against ten, eight damped Newton steps from 707 standard errors to **1.55e-08**
+where autograd left 1.56e-08, to the same log-likelihood of -10,624,865.3800. The two took the
+same path over the same surface and stopped in the same place, which is the comparison worth
+having: a faster kernel that found a different optimum would be a different estimator.
+
+**Per evaluation**, three ways on the same specification and the same rows:
+
+| | value and gradient | with the Hessian | parameters |
+|---|---|---|---|
+| scalar shape, compiled crate | 4.61 s | 5.67 s | 25 |
+| scalar shape, NumPy kernel | 20.10 s | 37.78 s | 25 |
+| **shape table of nine, NumPy kernel** | **21.48 s** | **78.33 s** | **43** |
+
+**The value-and-gradient costs 7% more for eighteen more parameters**, which is the structural
+point rather than a surprise: with the shape reading only covariates fixed at origination,
+`rho = exp(C[i])` is a function of the loan combination -- the same index `i` the loan table uses
+-- so a row still depends on **two scalars** and the second-order jet does not widen. `_Jet`, the
+Rust `Jet` and every family function are untouched. What widens is three accumulators, from
+floats to arrays indexed by `i`.
+
+The Hessian costs **2.07x** the scalar one. Eighteen parameters of it is the parameter count; the
+rest is the one genuinely new term, the **shape-by-calendar block**, whose coefficients are
+indexed by `i` on one side and `j` on the other, so neither scatter-add alone reaches it and it is
+accumulated the way `crossed` already is -- a scatter-add per shape column.
+
+**What was deliberately not done, with the arithmetic that says why.** The crate takes the shape
+as one `f64`, so this path is the NumPy kernel, which rule 13 declares normative. Widening the
+boundary to three design tables is about 300 to 400 lines across five files and two languages,
+and it would buy the Hessian back from 78.33 s to perhaps 12 -- a selection run with the shape in
+the specification from about **4.2 hours to about 45 minutes**, taking a fit as five Hessians and
+six values and a selection as twenty-nine fits. That is a real saving and it is **not** taken yet,
+because 5.6x already turns the fit this branch exists for from an hour and a half into a quarter
+of one, and because the next branch's compute can run unattended. The number is here so the
+decision can be made on it rather than on an impression, if a selection has to be run more than
+once.
+
+**And the scalar path is untouched, operation for operation.** `shape=None` is the old code
+literally: the same accumulators, the same summation order, and therefore the same last digits in
+every fit already in the cache. That was the property to protect, because the summation order is
+part of the answer.
+
+
 ## What a fit actually spends, before any change
 
 One block of the real table, the real formula, **26 parameters** -- 25 on the scale and an
