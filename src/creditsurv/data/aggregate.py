@@ -251,6 +251,26 @@ BASE_SPEC: Final = CellSpec(
 #: refinancing incentive. The market rate's fall since origination survives, free, and
 #: carries the first-order part of both: within a month the note rates of this book span a
 #: point, where the rate itself has moved several since 2021.
+#:
+#: **The finer bands were admitted on 10 October 2026, built, measured and given back.** Rule
+#: 7's ceiling went to 250 million cells on an argument that stands on its own -- the memory
+#: that bounded it was gone, because the aggregation writes a quarter at a time -- and the
+#: finer bands are first on the give-up order, so they were the first thing it admitted. The
+#: table was rebuilt at 8 / 8 / 6 bands: **194,340,956 cells**, 39.3 minutes of aggregation,
+#: the same 2,773,640,182 loan-months and 1,671,207 defaults partitioned over 2.12x the cells.
+#:
+#: The motive was the backtest's decile criterion, which fails on a model whose predicted risk
+#: is compressed, and rule 12 makes the band grid the resolution of that risk ordering. **It
+#: bought 0.015.** In-sample actual over expected in the worst decile went from 0.603 to 0.618
+#: against a declared band of 0.80 to 1.25, and the spread between the extreme deciles from 80x
+#: to 83x where the book realises 130x. The log-likelihood improved by 25,614 units on 19 more
+#: parameters -- they fit better and they do not calibrate better, and in this project the
+#: likelihood is not the criterion.
+#:
+#: So the key stays at 5 / 4 / 4, because 2.12x the table doubles every pass downstream -- a
+#: selection 56 minutes against 20, the views 86 against 40 -- for nothing on the criterion it
+#: was admitted to fix. The finer-banded table is kept at `cells_exclude.fine.parquet` so the
+#: measurement need not be paid twice, and switching back is this one line.
 DEFAULT_SPEC: Final = extended(BASE_SPEC, Extension.HARP, Extension.DELINQUENCY_STATE)
 
 

@@ -621,6 +621,33 @@ view the manifest lacks, or model views from more than one fit. `creditsurv view
 fits: it stops when the report's fit is not in the cache. Scoring the training half for it
 takes the footprint near 15 GB, so nothing else heavy runs beside it.
 
+## The finer bands were tried, and the diagnosis they leave behind
+
+**They buy 0.015 on the worst in-sample decile, and the key went back to 5 / 4 / 4.** Rule 7's
+ceiling was raised to 250 million cells on 10 October 2026 -- the memory that bounded it was
+gone, because the aggregation writes a quarter at a time, and the time had moved by an order of
+magnitude -- the table was rebuilt at **194,340,956 cells** in 39.3 minutes, and the invariants
+held exactly: a finer key partitions the same 2,773,640,182 loan-months and 1,671,207 defaults
+over 2.12x the cells. The selection chose the **same specification on both grids**, the same ten
+covariates and the same nine eliminations at the same steps for the same reasons. The
+log-likelihood improved 25,614 units on 19 more parameters. And actual over expected in the worst
+decile went **0.603 to 0.618** against a declared band of 0.80 to 1.25, with the spread between
+the extreme deciles 80x to 83x where the book realises 130x. They fit better and do not calibrate
+better; here the likelihood is not the criterion. 2.12x the table doubles every pass downstream --
+a selection 56 minutes against 20, the in-sample passes 86 against 40 -- so it was given back,
+and `cells_exclude.fine.parquet` is kept so the measurement is not paid twice.
+
+**What it sharpens is the diagnosis.** The compression is not resolution. In a Weibull AFT the
+hazard ratio between two loans is `exp(rho * delta)`, **constant in age**, because the Weibull is
+the only family that is both AFT and proportional-hazards -- so one shape parameter sets the whole
+risk spread. The observed hazard rises to a plateau near age 48 (0.00093, then 0.00090 at 60,
+0.00088 at 84, 0.00085 at 120) while the model's keeps climbing to 0.00099 at 120 and peaks at
+0.00187 at age 257. A shape fitted to that compromise is pulled down, and a smaller shape
+compresses every hazard ratio. **The two symptoms are one cause, and it is the shape.** Rule 2's
+long-age argument for the Weibull still stands, because beyond 180 months there are 489,000
+loan-months at risk and then 23,000: the data plateaus where there is exposure and says nothing
+where there is not.
+
 ## Open
 
 **The backtest fails its decile criterion.** Overall actual over expected 0.920 and Gini
@@ -629,6 +656,77 @@ takes the footprint near 15 GB, so nothing else heavy runs beside it.
 0.597 to 0.995, every decile below one, because each decile's expected rate was a plain mean
 of cell hazards rather than weighted by loan-months. The criteria were fixed before the run,
 so the model is not to be tuned to them on the test window.
+
+**The shape on the risk removes the compression and overshoots it, and the model has no hazard
+floor.** Rule 14 let the Weibull's shape read the covariates fixed at origination -- all nine of
+them, because `period = cohort + age` means a covariate recomputed every loan-month moves with the
+age, which the rule already forbade, and because a subset would have been a hand-pick. Both the
+declared set and the `credit_score`-only attempt that preceded it take the in-sample deciles from
+**5 of 10 inside 0.80 to 1.25 to 9 of 10**, with the age profile unchanged at 5 of 7 and rule 5's
+cycle criterion flipping from 69.6% of calendar years in band to 73.9% against a 70% threshold.
+Both **fail**: the safest decile goes from 0.632 to 1.318 and then **1.546**, because the error
+changes sign. The predicted spread between the extreme deciles runs 79.6x, 181.1x and 214.0x
+against a realised 125 to 139, so the Weibull cannot land in the band from either side.
+
+`rho` comes out between **0.840 and 2.017** across loan types where 125 whole-model refits had put
+a single number between 1.07 and 1.62 -- below one for the worst combinations, which is adverse
+selection burning off, and 2.02 for the best. **More shape is a better likelihood and a worse calibration** -- the nine gain 7,540
+units over `credit_score` alone on 14 further parameters and move the failing decile 0.23 the
+wrong way -- and `credit_score` carries 84% of the whole shape gain on 22% of the parameters, with
+five of the other eight moving `rho` under 4%. The fits are 44.4 and 72.9 minutes on the autograd
+path, because the compiled kernel takes a shape of one constant column by design.
+
+**The grid of family by shape is complete, and no cell of it reads the decile band.** Rule 2 was
+reopened against rule 5's decile criterion -- which it had never considered and the Weibull fails
+in sample -- and the question was answered as an exhaustive two-by-two, {Weibull, log-logistic} x
+{scalar shape, the nine covariates fixed at origination}, declared before the last cell was fitted
+and all four published:
+
+| cell | deciles in 0.80 to 1.25 | the miss | age bands | predicted spread | realised |
+|---|---|---|---|---|---|
+| Weibull, scalar | 5 of 10 | 0.603 | 5 of 7 | 79.6x | 125.4x |
+| log-logistic, scalar | 6 of 10 | 0.677 | 5 of 7 | 105.3x | 134.3x |
+| Weibull + shape | 9 of 10 | 1.546 | 5 of 7 | 214.0x | 139.0x |
+| log-logistic + shape | 9 of 10 | **1.415** | 5 of 7 | 206.3x | 145.5x |
+
+The scalar cells fail low and the shape cells fail in decile 1 alone and high; the best of the four
+misses the 1.25 ceiling by 0.165. **The levers do not cannibalise and the log-logistic needs less
+shape**: the fourth cell is the best likelihood by 16,879 units on one parameter fewer
+(-10,624,865.38), its `credit_score` shape coefficient is 22% smaller (-0.324 against -0.413) and
+its `rho` spans 0.920 to 2.038 -- the low tail lifting, because a family whose own curve bends
+leaves the shape less to do. The log-logistic's own selection chose the Weibull's set **less
+`yield_curve_slope`** and fitted scalar in **2.04 minutes** through the compiled kernel against 87.0
+for the shape on autograd.
+
+**And the one failing decile is three vintages: 83% of its miss is 2019, 2020 and 2021.** The
+crossed table -- `exposure_totals` already takes a mapping of dimensions, so it is a Recipe and not
+new code -- says decile 1 holds 5,382 defaults against 3,804 expected, that those three
+originations are 17% of its exposure and **34% of its defaults at an A/E of 3.413**, and that
+**every vintage to 2018 reads 1.082**, inside the band. The same fact by age, because those
+vintages are the young loans: within decile 1 the first year is 64% of the exposure and the only
+band that misses, at **1.698**, with the realised hazard **flat at about 2.5 per 100,000
+loan-months across the whole life** where a shape above one forces the model's to start near zero.
+The decile is **89.2% the top credit-score band**, not a mixture.
+
+**The cause is structural: a multiplicative hazard has no floor.** Those originations stack every
+favourable reading at once -- top credit band, policy rate at zero, house prices rising so
+`ltv_change` is strongly negative, housing starts up -- and the predicted hazard reaches the lowest
+value the model produces anywhere, about 1.5 per 100,000 a month, where the book does not go below
+about 5. No covariate and no shape can put a floor under a product; that takes an additive
+baseline, which is another family.
+
+**And the retraction of the hazard-floor reading was itself wrong.** It was retracted because the
+*aggregate* 0-to-11 band over-predicts at 0.755 -- but the aggregate mixes all ten deciles, and
+that over-prediction belongs to the risky ones, whose shape is below one and whose hazard starts
+high and falls. **A sum over one dimension cannot refute a claim about an interaction.** The
+original inference was right and cost a day.
+
+The grid stops at four. The smallest miss in the series, 1.318, belongs to the
+`credit_score`-only hand-pick the rule superseded, and picking it for being closest on the decile
+it is judged on is the one thing `docs/rules.md` forbids outright. **The residual is now a
+documentable exception** -- cause, scope, 0.11% of the in-sample defaults, and a named remediation
+-- and it **predicts that an out-of-time decile 1 will under-predict too**, since the test window's
+young loans are the 2022 to 2024 originations.
 
 ***Occupancy* (`occupancy`) changes the hazard's shape, a little.** Its curves cross at 90
 months, which no scale factor reconciles, and letting occupancy into the shape parameter is

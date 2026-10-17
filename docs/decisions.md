@@ -6,7 +6,7 @@ worked is not much use to the next person who has to decide the same things.
 
 ## Rules set before the results
 
-Twelve rules are written down before the fits they govern, so that no result can pick them --
+Fourteen rules are written down before the fits they govern, so that no result can pick them --
 `docs/rules.md` holds them all, with the measurement behind each. These four are the oldest:
 
 | Decided in advance | Why it had to be in advance |
@@ -25,7 +25,7 @@ Twelve rules are written down before the fits they govern, so that no result can
 | A parametric survival model | a classifier; a Cox model | lifetime PD needs the timing, the censored loans, extrapolation past the data, a response to scenarios and a smooth term structure | [Methodology](methodology.md) |
 | Interval-censored monthly episodes with left truncation | `CoxTimeVaryingFitter`; loan-level durations | it is exactly the discrete-time likelihood with time-varying covariates, in a fully parametric model | [Home](index.md#the-idea-in-one-table) |
 | Nested tests and comparisons against Kaplan-Meier | the generalised gamma, which nests five families | it does not converge on the episode panel under any remedy tried, and on data generated from a Weibull it estimated the shape at 4.04 where the truth is 1 | [Methodology report](reports/methodology.md) |
-| The Weibull, for now | the log-logistic, which has the better likelihood | changing family is a new selection; the gain against Kaplan-Meier is small; its falling long-age hazard is an extrapolation choice to be made on purpose | [Variable selection](variable_selection.md#the-distribution-family-and-why-the-weibull-was-kept-against-a-better-likelihood) |
+| The Weibull | the log-logistic, which has the better likelihood | rule 2 on the Aalen-Johansen incidence, 0.1027 pp against 0.1498. Reopened in October 2026 against the decile criterion rule 2 never considered, and the log-logistic taken through its own selection under the bands: it reads **6 of 10** deciles in band against the Weibull's 5, so neither family reads it alone and the family is not the answer | [Rules](rules.md), [Variable selection](variable_selection.md#the-distribution-family-and-why-the-weibull-was-kept-against-a-better-likelihood) |
 | One fit, scored out of time, never refitted | refitting at four dates under two macro assumptions | eight fits for one report, and a report on one model beside a backtest of another invites the reader to credit one with the other's performance | [Backtest report](reports/backtesting.md) |
 | A calendar cut | holding out random loans | random loans still train on the months they are judged on | [Calibration & backtest](calibration.md) |
 | Gini from the exposure-weighted Lorenz curve | a concordance index | the index needs pairs of subjects, and a cell is not a subject | [Backtest report](reports/backtesting.md#discrimination) |
@@ -122,20 +122,63 @@ clean removal.
 and before the fit that answered it, which is the only order that makes it a rule rather than a
 preference: the in-sample deciles said the risk spread was compressed by 40%, three covariates
 that are already bands in the key were entering as a straight line through their midpoints, and
-reading them as bands recovered 10.2% of the gap. What it did **not** do is close it, and the
-measurement of why -- resolution inside the bands, which costs cells against a declared ceiling --
-is what the next two stages are for.
+reading them as bands recovered 10.2% of the gap. What it did **not** do is close it. The reason
+offered then was resolution inside the bands, and the section below records that this was measured
+and is wrong: the finer grid bought 0.015 on the worst decile, and the cause was the hazard's
+shape.
 
-## Where this goes next
+## What the shape stage found, and where this goes next
 
-Two branches, in this order, and the order is the finding. A compiled numerical core comes
-first: not only because a fit is slow but because four worker processes each hold a batch, and
-one engine holding one copy is what makes a larger key fittable at all. Then the finer bands,
-a re-selection under them, and a re-calibration.
+**Resolution was not the constraint, and the measurement that says so cost a table.** Rule 7's
+ceiling was re-declared at 250 million cells from the engine's measured capacity *before* the
+rebuild, the finer 8 / 8 / 6 grid was built at 194,340,956 cells, and a selection under it chose
+the **same ten covariates with the same nine eliminations**. Actual over expected in the worst
+in-sample decile moved **0.603 to 0.618** against a band of 0.80 to 1.25. The key went back to
+5 / 4 / 4; the fine table is kept so the measurement is not paid twice.
 
-The cell ceiling will be **re-declared from the measured capacity of that engine, before the
-table is rebuilt**, rather than raised to admit what it needs to admit. It was set at 150
-million from what the machine could do in September 2026, when a fit held the panel at 15 GB;
-fits now stream at 4.7, and the aggregation no longer grows its peak with the table. Revising a
-capacity limit on new capacity measurements is a different act from moving a threshold to pass a
-test, and the difference is whether the number is written before or after the thing it decides.
+**The compression was the hazard's shape.** Rule 14, written before the fit: the shape reads the
+nine covariates **fixed at origination** and none of the six recomputed every loan-month, because
+`period = cohort + age` holds identically and a covariate that moves over a loan's life moves with
+the age -- which rule 14 already forbade the shape to read. All nine, because a subset would be a
+hand-pick, and the first attempt was one: it named `credit_score` on an unmeasured belief, and the
+declared procedure reached the same covariate **with the measurement that it is the right one**
+(84% of the shape gain on 22% of the parameters) plus two the pick had not considered.
+
+The shape takes the in-sample deciles from **5 of 10 in band to 9 of 10** and flips rule 5's cycle
+criterion from fail to pass. It also overshoots: the error changes sign, from a predicted spread
+of 79.6x against 125x realised to 214x against 139x.
+
+**Four cells, and none reads the band.** {Weibull, log-logistic} x {scalar shape, the origination
+side} was declared exhaustive before the last was fitted, so completing it is not a search, and
+all four are published. The best misses the 1.25 ceiling by 0.165.
+
+**And the residual has a cause.** Decile 1 is 89.2% the top credit-score band, and **83% of its
+miss is the 2019, 2020 and 2021 originations** at an actual over expected of 3.413, where every
+vintage to 2018 reads 1.082. Those loans stack every favourable reading at once -- top band,
+policy rate at zero, house prices rising, housing starts up -- and a **multiplicative hazard has
+no floor**: the prediction reaches 1.5 defaults per 100,000 loan-months a month where the book
+does not go below about 5.
+
+!!! failure "A correct inference retracted on a table that could not refute it"
+    The missing floor was inferred from a fitted shape of 2 and `h(0) = 0`, correctly labelled an
+    inference rather than a measurement. It was then **retracted** because the aggregate 0-to-11
+    age band over-predicts at 0.755 -- and that reasoning does not hold, because the aggregate
+    mixes all ten deciles and the young-age over-prediction belongs to the *risky* ones, whose
+    fitted shape is below one. Inside decile 1 the first year under-predicts at 1.698. **A sum
+    over one dimension cannot refute a claim about an interaction**, which is the same lesson this
+    project already carries about diagnostics that go mute at scale, met from the other side.
+
+### Where this goes next
+
+The residual is a **documentable exception** rather than an open finding: a cause, a scope (three
+vintages; without them 1.082), a magnitude (0.11% of the in-sample defaults) and a remediation
+named rather than searched for. Whether that exception is accepted is a decision for the
+validation, not for the model, and the test window stays unread until it is made -- rule 14 says
+so, and the diagnosis makes a prediction about that window before anyone looks: the pattern is
+young loans in the safest band under benign macro readings, and the window's young loans are the
+2022 to 2024 originations.
+
+A hazard with a floor is an additive baseline, which is neither of the two families rule 2
+declared. It would need its own rule and its own motive, written before the fit rather than
+after this one, and the grid deliberately stopped at four rather than reaching for a fifth
+specification chosen by which came closest on the criterion it is judged by.

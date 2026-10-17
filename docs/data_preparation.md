@@ -536,9 +536,13 @@ eight. The loan characteristics left out -- *original balance (log)*
 *Census region* (`region`) -- were not dropped on their merits, and
 `docs/variable_selection.md` records what each would cost against what it might be worth.
 
-**The ceiling decides which of them the key can hold.** `docs/rules.md` caps the table at
-150 million cells and fixes, before any of it is measured, the order the extensions are
-given up in. `creditsurv profile --extensions` then priced them on nine quarters
+**The ceiling decides which of them the key can hold.** `docs/rules.md` caps the table and
+fixes, before any of it is measured, the order the extensions are given up in. The cap was
+**150 million cells** when the extensions below were priced against it, and was re-declared at
+**250 million** on 10 October 2026 from the engine's measured capacity *before* the table was
+rebuilt -- the aggregation writes a quarter at a time now, so the 11.3 GB peak that bounded it
+is gone, and a selection run fell from 10.5 hours to 20.7 minutes. The numbers in this section
+are the ones measured against the 150, which is what they were decided under. `creditsurv profile --extensions` then priced them on nine quarters
 (`docs/reports/key_extensions.csv`): all four together are 4.90× the base key, a projected
 312 million cells, and giving up the finer bands alone still leaves 161.9 million. So the
 second rung goes too and the key keeps the HARP level and the payment state, at 1.26× and a

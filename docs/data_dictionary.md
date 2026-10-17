@@ -270,7 +270,8 @@ The table has grown twice, both times by a key extension priced before it was ta
 times smaller before the validation, when the key carried the origination quarter rather than
 the month and neither mortgage insurance nor first-time buyer status; and it was 63,639,116
 cells before the HARP level and the payment state, which `docs/rules.md` admitted at a measured
-1.063x and 1.185x against a declared ceiling of 150 million. The projection from nine quarters
+1.063x and 1.185x against the ceiling of 150 million declared at the time -- since re-declared at
+250 million from measured capacity, before any table was rebuilt under it. The projection from nine quarters
 said 80.4 million and the rebuild produced 91.6, so **a ratio estimated that way runs about 14%
 light**.
 
