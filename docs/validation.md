@@ -75,6 +75,96 @@ The current figures are on the pages linked beside them.
   quantities the comparison needed are identically equal, so the ratio reads one whatever the
   curvature. What the stall meant was the floor above.
 
+## The second round, 17 October 2026
+
+A second independent validation read the model at commit `56ffa88` and did something the first
+did not: it **reproduced the published numbers with a scorer that imports nothing from this
+package** -- the FRED panel, the covariates and both families' interval probability rewritten from
+scratch in DuckDB, covering all 91,575,827 cells in 28 seconds. It found **zero discrepancies**:
+the actual-over-expected by year, the deciles, the anchoring multiplier, the test window, the
+three regime cuts and the master scale all agree to the fourth digit, and the project's own suite
+passes. Of the seventeen first-round findings, **fourteen are closed** including all five high
+ones, two are partial and one is reopened.
+
+Then it said the model is **not yet fit for professional use as a lifetime PD or a stress model**,
+and said where. That judgement, and what is being done about it, is the current state of this
+project.
+
+| Use | Verdict | What blocks it |
+|---|---|---|
+| Research, benchmark, challenger model | **fit** | — |
+| Portfolio risk ranking | with reservations | within-year Gini 0.52-0.55 out of sample, falling for ten years |
+| 12-month PD, performing pools (IFRS 9 stage 1) | **not yet** | the level drifts; the published master scale errs to +89% |
+| Lifetime PD (IFRS 9 stage 2) | **not fit** | `1 - S` at 36 months, a weak prepayment model, 2 of 7 age bands out of sample, no payment state |
+| Stress testing and scenarios | **not fit** | unemployment attenuated threefold, a rate proxy with no sign, calendar levels |
+| Regulatory PD (IRB) | out of scope | a different default definition, horizon, floors and data requirements |
+
+### The six high findings, and what each is
+
+**The level depends on the regime, and one multiplier cannot hold it.** Actual over expected reads
+0.458, 0.823 and 1.420 on the three declared cuts -- two outside the band, in opposite directions
+-- and anchored month by month on the test window it falls from 1.386 to 0.771, the last month
+already out of band. The overall figure passes partly because errors of opposite sign cancel.
+[Rule 4](rules.md) now carries monthly monitoring and a declared recalibration rule.
+
+**`policy_rate_change` is a cycle proxy with no expected sign, and it produces the 2023-24
+under-prediction.** It lowered the predicted hazard 33% in 2023 and 36% in 2024, is about **80% of
+the level drift** since 2021, and on the 2022 cut is the difference between 1.420 and 0.959. It
+carries 19% of the adverse scenario's stress, where in a stagflation it would *reduce* the PD.
+[Rule 15](rules.md) withdraws it as a candidate, because the direction it should take depends on
+whether rates rose with growth or with inflation and this model does not observe which.
+
+**The moratorium kept in estimation attenuates unemployment threefold.** The coefficient on
+*unemployment change since origination* reads −0.0920 at the 2018 cut and −0.0305 at 2021-12: four
+points of unemployment multiply the hazard by 1.67 on the first and 1.18 on the second. The
+largest unemployment shock in the series arrives with defaults suspended by law, and the
+coefficient records it. [Rule 1](rules.md) now puts a regime indicator on 2020-03 to 2021-09 in
+the protected block.
+
+**The age structure does not hold out of sample: 2 of 7 bands.** The model under-predicts the
+12-to-35-month hump by up to 44% and over-predicts the seasoned book by a third. For a lifetime PD
+the shape along age is the product itself. [Rule 16](rules.md) admits a flexible baseline in
+log(age) in the scale block, which costs zero cells because age is already in the calendar key.
+
+**The published lifetime PD is `1 - S` over 36 months**, not a cumulative incidence and not a
+lifetime. Measured with no model, by Kaplan-Meier against Aalen-Johansen on the development half,
+`1 - S` overstates cumulative default by **31% at three years, 57% at five, 122% at ten**. The
+competing-risk machinery is written and tested in `models/lifetime_pd.py` and never called.
+[Model](model.md) now says so where it used to claim the opposite.
+
+**Three generated reports describe a model that no longer exists.** Generated 17 September, with
+old covariate names, no HARP level, one backtest cut and prepayment as censoring, while the main
+pages linked to them. They are grouped under [superseded reports](reports/superseded.md) with a
+notice on each, and a test now fails when a generated report's formula is not the configured one.
+
+### What the round also found, and it is the better news
+
+**The candidate from [rule 14](rules.md) passes.** The validator wrote its decision on the
+in-sample decile-1 exception **before** computing any out-of-sample number, accepted it on
+materiality, and then read the test window: the log-logistic with the shape on the nine
+origination covariates reads anchored actual over expected **0.927**, Gini **0.548** and **10 of 10
+deciles in band**. It is the first model in this project to pass all three of
+[rule 5](rules.md)'s criteria out of time, and its master scale errs to +13% where the published
+model errs to +89%.
+
+**And it falsified a prediction this repository had recorded.** [The register](rules_register.md)
+holds the reasoning: the in-sample decile-1 miss was 83% the 2019-2021 originations, the safest
+band in its first year under the most benign macro readings on record, so the diagnosis predicted
+that an out-of-time decile 1 would under-predict too -- the test window's young loans being the
+2022-2024 vintages. It does not: decile 1 reads **1.056**, and the young vintages inside it 1.043
+and 0.992. The prediction was written before the window was read, which is the only reason it is
+knowable that it was wrong.
+
+### Where the work goes
+
+In [the second round's plan](second_round_plan.md), ordered by what moves a fitness verdict rather
+than by what is cheapest. The macro block is on the critical path to **two** of the three, so it
+goes first among the modelling work; the documentation and the rules go before it because they
+cost nothing and because a reader currently finds three different models. The third validation
+round is placed **after the macro block and the one adoption**, not at the end, because the age
+baseline and the lifetime PD are built on top of it -- and building them against a specification
+that turns out wrong is what happened to the three September reports.
+
 ## What the next stage closed
 
 Four of the five open items are closed, each by the thing the decision log said would close it.

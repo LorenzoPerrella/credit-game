@@ -23,6 +23,17 @@ on the Gini and <!-- value: backtest.deciles_verdict --> decile by decile. The f
 site are all drawn from one fit, <!-- value: views.fit -->, and were generated
 <!-- value: views.generated -->.
 
+!!! info "Which out-of-time figure this is, because there are three"
+    The figures in the table above are **unanchored**, over every month from 2022 onwards. They
+    are not the same quantity as the headline on
+    [Calibration & backtest](calibration.md), which is **anchored** by rule 4's multiplier and
+    scored on the **test window alone** from 2025-01 — a stricter reading, because the anchoring
+    window never saw the months it is judged on while the span above overlaps it. The second
+    independent validation found three out-of-time ratios in this repository presented as one:
+    the unanchored span above, the anchored test window on the calibration page, and a third in
+    the contributor notes that belonged to the September model. Each is correct for its own
+    window and none of them was labelled, which is the fault -- not the figures.
+
 ```mermaid
 flowchart TD
     subgraph local["On the machine that holds the data"]

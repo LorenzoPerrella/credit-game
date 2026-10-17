@@ -425,3 +425,91 @@ def test_no_figure_or_table_shows_a_name_the_code_uses(published: Sources) -> No
 
     leaks = sorted({match.group(0) for text in shown for match in pattern.finditer(text)})
     assert leaks == []
+
+
+#: Reports `creditsurv report` generates, which carry a `- Formula:` line naming the
+#: specification they were run on. A report whose formula is not the configured one describes a
+#: model that no longer exists.
+GENERATED_REPORTS = ("methodology", "calibration", "backtesting")
+
+#: The marker a superseded report carries in its first lines, so that the test below can tell
+#: "stale and said so" from "stale and silent". The second is the failure this test exists for.
+SUPERSEDED_MARKER = "Superseded: this report describes a model that no longer exists"
+
+
+def test_a_generated_report_states_the_formula_it_was_run_on_or_says_it_is_superseded() -> None:
+    """The drift the second validation found, caught by a test instead of a reader.
+
+    Three reports generated on 17 September 2026 sat in the site's navigation describing a model
+    with different covariate names, no HARP level, a different estimation window and prepayment as
+    censoring -- while the main pages linked to them and `CLAUDE.md` quoted their backtest as the
+    current state. Nothing failed, because nothing compared a generated report to the
+    configuration it claims to describe.
+
+    So: a generated report either carries the configured formula, or says in its first lines that
+    it is superseded. Both are honest; silence is not. Regenerating is the cheap fix when the
+    specification is settled, and the notice is the honest one while it is not.
+    """
+    from creditsurv.config import default_formula
+
+    formula = default_formula()
+    # Word boundaries, for the reason the test above gives: `dti` is inside `debt_to_income`, and
+    # a substring match would read an old name as present in a new one.
+    configured = set(re.findall(r"\w+", formula))
+
+    for name in GENERATED_REPORTS:
+        report = reports_dir() / f"{name}.md"
+        if not report.exists():
+            continue
+        text = report.read_text()
+        if SUPERSEDED_MARKER in text[:4000]:
+            continue
+        stated = re.search(r"^[-*]?\s*Formula:\s*`(?P<formula>[^`]+)`", text, re.MULTILINE)
+        assert stated is not None, (
+            f"docs/reports/{name}.md names no formula and carries no superseded notice, "
+            "so nothing says which model it describes"
+        )
+        named = set(re.findall(r"\w+", stated.group("formula")))
+        assert named == configured, (
+            f"docs/reports/{name}.md was generated from a different specification: "
+            f"{sorted(named - configured)} are not in the configuration, "
+            f"{sorted(configured - named)} are missing. Regenerate it, or mark it superseded."
+        )
+
+
+def test_the_views_manifest_and_the_configured_specification_name_one_model() -> None:
+    """The site's model views come from one fit, and that fit is of the configured formula.
+
+    `site/hooks.py` already refuses a manifest holding views from more than one fit. What it
+    cannot see is whether that one fit is of the specification the configuration now declares --
+    which is the other half of the drift the second validation found, and the half that would
+    leave every figure on the site one specification out of date without a single placeholder
+    failing.
+
+    Skipped where the fit cache is not on the machine, which is every CI run: the manifest is
+    committed and the pickles are not, so this can only be checked where the data lives. That
+    makes it a local guard rather than a gate, and it is still the only thing that would catch a
+    manifest naming a fit of a formula nobody configures any more.
+    """
+    from creditsurv.config import default_formula
+    from creditsurv.data.store import find_fits
+
+    manifest = load_manifest(COMMITTED)
+    fits = {entry["fit"] for entry in manifest.values() if entry["fit"]}
+    if not fits:
+        pytest.skip("no model views are committed")
+    assert len(fits) == 1, f"views from several fits: {fits}"
+    named = fits.pop()
+
+    described = dict(find_fits())
+    if named not in described:
+        pytest.skip(f"the manifest's fit {named} is not in this machine's cache")
+    formula = described[named].get("formula")
+    assert formula is not None, f"the cached fit {named} carries no formula to compare"
+    # Word boundaries, for the reason the tests above give: a substring match reads an old
+    # covariate name as present inside a new one.
+    assert set(re.findall(r"\w+", str(formula))) == set(re.findall(r"\w+", default_formula())), (
+        f"the views come from fit {named}, whose formula is not the configured one. "
+        "Re-run `creditsurv views` after `creditsurv report`, or the site publishes figures "
+        "of a specification the configuration has replaced."
+    )

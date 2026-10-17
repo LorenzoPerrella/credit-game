@@ -34,7 +34,8 @@ flowchart TD
     F["FRED, 14 series"] -->|"lagged three months"| M["macro covariates<br/>a function of origination month and age"]
     A --> E["episodes"]
     M --> E
-    E -->|"training half up to 2024-12"| T["the fit"]
+    E -->|"training half up to 2021-12"| T["the fit"]
+    E -->|"2022-01 to 2024-12"| K["the level anchoring"]
     E -->|"months after 2024-12"| B["the backtest"]
 ```
 
@@ -85,14 +86,25 @@ default still counts. The May 2020 default rate fell from 90.4 to 2.00 basis poi
 
 | Left out | Why | How much |
 |---|---|---|
-| **HARP refinances** | Freddie Mac reports no debt-to-income for them, and the complete-case rule drops a loan missing a covariate rather than imputing it | 18% of the 2009Q2 to 2019Q1 vintages, about three times as likely to default as the loans kept |
+| ~~HARP refinances~~ | **No longer left out.** They are in the model with a level of their own, by rule 8: the ratio stays missing in the cell table and the `harp` level absorbs the constant that fills it, which is the dummy-variable adjustment and not an imputation | 238.8 million loan-months, **8.6% of the book**, 135,070 defaults |
 | Other incomplete cases | a missing credit score, loan-to-value or debt-to-income, or a code no mapping covers | see [what dropping removes](data_preparation.md#what-dropping-removes) |
 | Months after a modification | `loan_age` restarts at a modification, so the loan is censored there | -- |
 | Loans outside the agency, fixed-rate, US perimeter | not in the dataset | a bank's portfolio would need its own calibration |
 
-!!! warning "HARP is the largest gap"
-    Covering it takes a level of its own in the cell key -- a re-aggregation and a new
-    selection -- never an imputed debt-to-income.
+!!! success "HARP was the largest gap, and it is closed"
+    It took exactly what this page said it would take: a level of its own in the cell key, a
+    re-aggregation and a new selection, and never an imputed debt-to-income. Done in September
+    2026 under [rule 8](rules.md), which also refuses to fit the debt-to-income without the level
+    -- in code, so the rule does not rest on being remembered.
+
+!!! warning "The macro series are national, and that is an assumption"
+    House prices and unemployment enter at the national level; the region is mapped but is not in
+    the cell key. So this model does not distinguish a loan in Las Vegas from one in Ohio, in the
+    ranking or under stress -- and 2008 was a regional crisis, concentrated in California,
+    Florida, Nevada and Arizona. The second independent validation found this the one assumption
+    the project had not declared. Declaring it is the first step; the cost in cells of a
+    few-level region, and `ltv_change` on a regional price index, are measured in
+    [the second round's plan](second_round_plan.md).
 
 ??? info "Rules that are silent when broken"
     - **Missing-value sentinels are real numbers**: 9999 for credit score, 999 for

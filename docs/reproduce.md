@@ -21,7 +21,7 @@ flowchart TD
 | `uv run creditsurv profile` | screens the covariates before aggregating | minutes |
 | `uv run creditsurv profile --extensions` | prices each extension of the cell key on nine quarters | ~3.5 h |
 | `uv run creditsurv aggregate --moratorium exclude` | collapses the book into weighted cells | ~40 min, 11.3 GB peak |
-| `uv run creditsurv select` | steps 5 to 10 on the training half; resumes from its cache | **~3.5 h**; three readings, 2.9 GB |
+| `uv run creditsurv select` | steps 5 to 10 on the training half; resumes from its cache | **<!-- value: selection.minutes --> min**; one cached reading, 2.75 GB |
 | `uv run creditsurv select --dist loglogistic` | the same procedure through the other family | hours |
 | `uv run creditsurv select --cause prepayment` | the competing model, under rule 6's priors | hours |
 | `uv run creditsurv family` | applies rule 2 and writes the verdict; fits nothing | ~1 h |
@@ -104,8 +104,9 @@ are unchanged is never paid for twice.
   was on rather than at the reading.
 - **A cold fit is 10.2 minutes, not 43.8**, and about 4 with the compiled kernel. Damped Newton
   goes first now; a Hessian costs about twice a value-and-gradient where it used to cost 49
-  times a value, so 16 evaluations replace 142. A selection run is about **1.5 to 2 hours**
-  where the four recorded runs averaged 10.5. `--traced` on `select`, `fit` and `report` goes
+  times a value, so 16 evaluations replace 142. A selection run is **20.7 minutes**
+  where the four recorded runs averaged 10.5 hours -- measured cold on the production window with
+  every fit remade, re-deriving the published specification exactly. `--traced` on `select`, `fit` and `report` goes
   back to tracing lifelines' likelihood with autograd in `--workers` processes, which is the
   path the equivalence tests hold the other to and the only one that can fit a shape with
   covariates. `docs/reports/engine.md` carries every number.

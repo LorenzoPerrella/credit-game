@@ -7,7 +7,7 @@
   truncation.
 - **The unit** is the weighted cell: episodes that agree on every covariate and on their
   position in time, collapsed into one row with a count.
-- **The specification is an output.** `creditsurv select` runs steps 5 to 9 of a written
+- **The specification is an output.** `creditsurv select` runs steps 5 to 10 of a written
   procedure on the training half, and a test fails when the configuration and its record
   part.
 - **The hazard rises with loan age**: the Weibull shape is <!-- value: model.rho -->, and the
@@ -166,7 +166,7 @@ read in the [calibration by segment](calibration.md).
 
 ```mermaid
 flowchart TD
-    A["59.7 million cells"] --> B["blocks of rows"]
+    A["72.7 million cells"] --> B["blocks of rows"]
     B --> C["lifelines' own likelihood,<br/>gradient and Hessian, per block"]
     C --> D["summed"]
     D --> E["SLSQP from lifelines' seed,<br/>or Newton from a warm start"]
