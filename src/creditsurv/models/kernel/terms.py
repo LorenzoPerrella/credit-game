@@ -101,6 +101,14 @@ class Kernel:
     shape_index: int
     blocks: tuple[Rows, ...]
     total_weight: float
+    #: The shape's own design table and coefficient positions, when the shape reads covariates
+    #: fixed at origination -- rule 14's admissible set, which makes `rho = exp(C[i])` a
+    #: function of the **loan combination** and so leaves a row depending on two scalars, which
+    #: is where this kernel's economy comes from. ``None`` is the scalar shape, and that path is
+    #: untouched: its arithmetic, its summation order and therefore every cached fit's last
+    #: digits are exactly what they were.
+    shape: np.ndarray | None = None
+    shape_columns: np.ndarray | None = None
     #: Threads the row loop is cut into, and **part of what determines the answer**.
     #:
     #: The rows go into this many contiguous parts, each part sums its own in its own order, and
@@ -124,8 +132,16 @@ class Kernel:
     chunk: int = 1 << 17
 
     def __call__(self, x: np.ndarray, *, curvature: bool = False) -> _Totals:
-        """The value, the gradient, and the curvature when it is asked for."""
-        if _compiled is not None and self.distribution in _FAMILY_CODE:
+        """The value, the gradient, and the curvature when it is asked for.
+
+        A shape reading covariates goes to the **written-out** path, which rule 13 declares
+        normative. The crate takes the shape as one `f64`, and widening its boundary is a
+        separate piece of work priced in `docs/reports/engine.md`: the NumPy kernel is already
+        about thirteen times autograd on a Hessian, which is the part of the gap that was
+        making this fit cost an hour and a half.
+        """
+        compiled = _compiled is not None and self.distribution in _FAMILY_CODE
+        if compiled and self.shape is None:
             return self._compiled(x, curvature=curvature)
         return self._written(x, curvature=curvature)
 
@@ -137,9 +153,15 @@ class Kernel:
         their columns, because which index a coefficient sits at is a fact about lifelines and
         not about the arithmetic. One permutation puts it back.
         """
-        return np.concatenate([self.loan_index, self.calendar_index, [self.shape_index]]).astype(
-            np.intp
-        )
+        shape = self._shape_index
+        return np.concatenate([self.loan_index, self.calendar_index, shape]).astype(np.intp)
+
+    @cached_property
+    def _shape_index(self) -> np.ndarray:
+        """The shape's coefficient positions, one for a scalar shape and several for a table."""
+        if self.shape_columns is None:
+            return np.array([self.shape_index], dtype=np.intp)
+        return np.asarray(self.shape_columns, dtype=np.intp)
 
     @cached_property
     def _rows(self) -> Rows:
@@ -175,23 +197,38 @@ class Kernel:
         return _Totals(value, whole, curved)
 
     def _written(self, x: np.ndarray, *, curvature: bool = False) -> _Totals:
-        """The objective written out in NumPy, which is the normative implementation."""
+        """The objective written out in NumPy, which is the normative implementation.
+
+        Two shapes, one loop. With a **scalar** shape every accumulator for it is a float and
+        the arithmetic is operation for operation what it was before October 2026 -- which is
+        deliberate, because the summation order is part of the answer and every cached fit was
+        made in this one. With a shape **table** the three become arrays indexed by the loan
+        combination, and the only genuinely new accumulator is the shape-by-calendar block of
+        the Hessian, which crosses the two indices exactly as `crossed` already does.
+        """
         entry, following, far = log_times(self.distribution, np.arange(_MAX_AGE + 1))
         loans, calendars = len(self.loan), len(self.calendar)
+        table = self.shape
+        widths = 0 if table is None else table.shape[1]
         total = 0.0
         by_loan = np.zeros(loans)
         by_calendar = np.zeros(calendars)
         shape_first = 0.0
+        by_shape = np.zeros(loans) if table is not None else None
         curved_loan = np.zeros(loans) if curvature else None
         curved_calendar = np.zeros(calendars) if curvature else None
         crossed = np.zeros((loans, self.calendar.shape[1])) if curvature else None
         mixed_loan = np.zeros(loans) if curvature else None
         mixed_calendar = np.zeros(calendars) if curvature else None
+        mixed_crossed = np.zeros((calendars, widths)) if curvature and table is not None else None
         shape_second = 0.0
+        curved_shape = np.zeros(loans) if curvature and table is not None else None
 
         eta_loan = self.loan @ x[self.loan_index]
         eta_calendar = self.calendar @ x[self.calendar_index]
-        shape = float(x[self.shape_index])
+        shape_index = self._shape_index
+        eta_shape = None if table is None else table @ x[shape_index]
+        shape = float(x[self.shape_index]) if table is None else 0.0
 
         for block in self.blocks:
             for start in range(0, block.rows, self.chunk):
@@ -212,14 +249,18 @@ class Kernel:
                     log_stop=np.where(event, closes, far),
                     truncated=(age > 0).astype(np.float64),
                     eta=eta_loan[i] + eta_calendar[j],
-                    shape=shape,
+                    shape=shape if eta_shape is None else eta_shape[i],
                     curvature=curvature,
                 )
                 total += float(np.dot(weight, np.asarray(jet.v)))
                 scaled = weight * np.asarray(jet.de)
                 by_loan += np.bincount(i, weights=scaled, minlength=loans)
                 by_calendar += np.bincount(j, weights=scaled, minlength=calendars)
-                shape_first += float(np.dot(weight, np.broadcast_to(jet.dr, weight.shape)))
+                first = weight * np.broadcast_to(jet.dr, weight.shape)
+                if by_shape is None:
+                    shape_first += float(np.dot(weight, np.broadcast_to(jet.dr, weight.shape)))
+                else:
+                    by_shape += np.bincount(i, weights=first, minlength=loans)
                 if not curvature:
                     continue
                 assert curved_loan is not None
@@ -237,13 +278,30 @@ class Kernel:
                 mixing = weight * np.broadcast_to(jet.der, weight.shape)
                 mixed_loan += np.bincount(i, weights=mixing, minlength=loans)
                 mixed_calendar += np.bincount(j, weights=mixing, minlength=calendars)
-                shape_second += float(np.dot(weight, np.broadcast_to(jet.drr, weight.shape)))
+                if curved_shape is None:
+                    shape_second += float(np.dot(weight, np.broadcast_to(jet.drr, weight.shape)))
+                    continue
+                assert table is not None
+                assert mixed_crossed is not None
+                curved_shape += np.bincount(
+                    i, weights=weight * np.broadcast_to(jet.drr, weight.shape), minlength=loans
+                )
+                # The one block that crosses the two indices: the shape is a function of `i`
+                # and the calendar coefficients of `j`, so neither scatter-add alone reaches it.
+                for column in range(widths):
+                    mixed_crossed[:, column] += np.bincount(
+                        j, weights=mixing * table[i, column], minlength=calendars
+                    )
 
         value = -float(total) / self.total_weight
         gradient = np.zeros(len(x))
         gradient[self.loan_index] = -(self.loan.T @ by_loan) / self.total_weight
         gradient[self.calendar_index] = -(self.calendar.T @ by_calendar) / self.total_weight
-        gradient[self.shape_index] = -shape_first / self.total_weight
+        if by_shape is None:
+            gradient[self.shape_index] = -shape_first / self.total_weight
+        else:
+            assert table is not None
+            gradient[shape_index] = -(table.T @ by_shape) / self.total_weight
         if not curvature:
             return _Totals(value, gradient, None)
         assert curved_loan is not None
@@ -259,11 +317,23 @@ class Kernel:
         hessian[np.ix_(self.calendar_index, self.calendar_index)] = calendar_block
         hessian[np.ix_(self.loan_index, self.calendar_index)] = cross
         hessian[np.ix_(self.calendar_index, self.loan_index)] = cross.T
-        hessian[self.loan_index, self.shape_index] = self.loan.T @ mixed_loan
-        hessian[self.shape_index, self.loan_index] = self.loan.T @ mixed_loan
-        hessian[self.calendar_index, self.shape_index] = self.calendar.T @ mixed_calendar
-        hessian[self.shape_index, self.calendar_index] = self.calendar.T @ mixed_calendar
-        hessian[self.shape_index, self.shape_index] = shape_second
+        if curved_shape is None:
+            hessian[self.loan_index, self.shape_index] = self.loan.T @ mixed_loan
+            hessian[self.shape_index, self.loan_index] = self.loan.T @ mixed_loan
+            hessian[self.calendar_index, self.shape_index] = self.calendar.T @ mixed_calendar
+            hessian[self.shape_index, self.calendar_index] = self.calendar.T @ mixed_calendar
+            hessian[self.shape_index, self.shape_index] = shape_second
+            return _Totals(value, gradient, -hessian / self.total_weight)
+        assert table is not None
+        assert mixed_crossed is not None
+        shape_block = table.T @ (table * curved_shape[:, None])
+        loan_shape = self.loan.T @ (table * mixed_loan[:, None])
+        calendar_shape = self.calendar.T @ mixed_crossed
+        hessian[np.ix_(self.loan_index, shape_index)] = loan_shape
+        hessian[np.ix_(shape_index, self.loan_index)] = loan_shape.T
+        hessian[np.ix_(self.calendar_index, shape_index)] = calendar_shape
+        hessian[np.ix_(shape_index, self.calendar_index)] = calendar_shape.T
+        hessian[np.ix_(shape_index, shape_index)] = shape_block
         return _Totals(value, gradient, -hessian / self.total_weight)
 
     @property

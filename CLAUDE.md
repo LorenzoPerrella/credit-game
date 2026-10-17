@@ -237,6 +237,22 @@ takes 0.30 minutes and one evaluation to certify that optimum **7.73e-05 standar
 at an identical log-likelihood of -10,688,088.42593586 -- a difference of exactly 0.0, with the
 coefficients moved at most 7.1e-15 standard errors.
 
+**A shape reading the origination side goes through the kernel, and the jet does not widen.** Rule
+14 admits only covariates fixed at origination into the shape, so `rho = exp(C[i])` is a function
+of the loan combination -- the same index `i` the loan table uses -- and a row still depends on
+**two scalars**. `_Jet`, the Rust `Jet` and every family function are therefore unchanged; what
+widens is three accumulators, from floats to arrays indexed by `i`, plus one genuinely new Hessian
+block (**shape by calendar**, indexed by `i` on one side and `j` on the other, so neither
+scatter-add alone reaches it). Measured on the whole half: the fit is **15.50 minutes against 87.0
+on autograd**, ten evaluations against ten, eight damped Newton steps from 707 standard errors to
+1.55e-08 against autograd's 1.56e-08, the same log-likelihood -- the same walk over the same
+surface to the same place. A value-and-gradient costs **7% more for eighteen more parameters**
+(21.48 s against 20.10) and a Hessian 2.07x (78.33 against 37.78). **The crate is not widened**:
+it takes the shape as one `f64`, so this is the NumPy path, and the arithmetic for widening it is
+in `docs/reports/engine.md` -- about 45 minutes a selection against 4.2 hours, not taken yet.
+**`shape=None` is the old code literally**, same accumulators and same summation order, so every
+cached fit's last digits are unchanged; that was the property to protect.
+
 **A pickle names the module it was written from, so splitting one empties the fit cache.** All
 176 cached fits named `creditsurv.models.blocks.BlockFit`, which this branch's split into
 `models/engine/` removed, and `load_fit` turns an unreadable pickle into a **miss** -- so the

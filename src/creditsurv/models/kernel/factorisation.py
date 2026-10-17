@@ -385,7 +385,11 @@ class Factorisation:
         return _completed(loan_keys, calendar_keys)
 
     def expand(
-        self, transform: Callable[[pd.DataFrame], pd.DataFrame], *, primary: str
+        self,
+        transform: Callable[[pd.DataFrame], pd.DataFrame],
+        *,
+        primary: str,
+        ancillary: str | None = None,
     ) -> Expanded:
         """A model's two design tables and column moments, from the key frames alone.
 
@@ -397,12 +401,20 @@ class Factorisation:
         that moves on both couples the two sides, which a sum of two tables cannot represent,
         and it is refused by name.
 
-        ``primary`` names the **scale's** parameter block, and the tables hold only its
+        ``primary`` names the **scale's** parameter block, and the two tables hold only its
         columns. lifelines' design carries the shape's column too -- a constant, and therefore
         a function of both sides -- so without this the shape's coefficient would be read once
         as the shape and again as a loan-side column, and the fit would stop 2.1 standard
         errors out while reporting 2.5e-4. The moments still cover every column, because that
         is what gives each coefficient its scale.
+
+        ``ancillary`` names the **shape's** block and asks for a third table. Rule 14 of
+        `docs/rules.md` admits only covariates fixed at origination into the shape, so every
+        one of its columns has to be a function of the loan combination -- the same index `i`
+        the loan table uses. A column that is not is refused here by name rather than fitted as
+        something else: `period = cohort + age` holds identically, so a shape column moving
+        with the calendar is a shape moving with the **age**, which is what rule 14 forbids on
+        the ground that the hazard would stop integrating to a survival function.
         """
         loan_keys, calendar_keys = self.keys()
         on_loan = transform(_completed(loan_keys, calendar_keys))
@@ -446,6 +458,24 @@ class Factorisation:
         calendar_positions = _within(everywhere_calendar, scale)
         loan = by_loan[:, scale.start + loan_positions]
         calendar = by_calendar[:, scale.start + calendar_positions]
+        shape, shape_positions = None, None
+        if ancillary is not None:
+            block = _only(cast("pd.MultiIndex", columns), ancillary)
+            wandering = [
+                str(columns[position])
+                for position in range(block.start, block.stop)
+                if not held[position]
+            ]
+            if wandering:
+                message = (
+                    f"The shape's column(s) {', '.join(wandering)} move with the calendar, so "
+                    "the shape moves with the loan age -- which rule 14 of `docs/rules.md` "
+                    "refuses, because the hazard would no longer integrate to a survival "
+                    "function. Only covariates fixed at origination may enter the shape."
+                )
+                raise ValueError(message)
+            shape_positions = np.arange(block.stop - block.start)
+            shape = by_loan[:, block.start + shape_positions]
         return Expanded(
             columns=cast("pd.MultiIndex", columns),
             loan=loan,
@@ -456,6 +486,8 @@ class Factorisation:
             second=second,
             low=low,
             high=high,
+            shape=shape,
+            shape_block=block.start if ancillary is not None else None,
         )
 
     @property
@@ -620,6 +652,13 @@ class Expanded:
     second: np.ndarray
     low: np.ndarray
     high: np.ndarray
+    #: The shape's own design table, one row per loan combination, when the shape reads
+    #: covariates. ``None`` for the scalar shape every fit before October 2026 had, which keeps
+    #: that path's arithmetic -- and so every cached fit's last digits -- exactly as it was.
+    shape: np.ndarray | None = None
+    #: Where the shape's block starts in the design, so its coefficients can be named in
+    #: lifelines' own parameter vector.
+    shape_block: int | None = None
 
 
 def _only(columns: pd.MultiIndex, parameter: str) -> slice:

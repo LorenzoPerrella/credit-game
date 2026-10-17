@@ -465,8 +465,15 @@ def fit_encoded(
         force_intercept=fitter.fit_intercept,
         force_no_intercept=fitter.force_no_intercept,
     )
+    # The shape's table is asked for only when the shape has something to read. `ancillary` is
+    # a formula when it does, and `None` or a bool when lifelines is building the intercept the
+    # scalar shape is -- and that path stays on the old arithmetic, so every cached fit's last
+    # digits are unchanged.
+    reads_covariates = isinstance(ancillary, str) and ancillary.strip() not in {"", "1"}
     expanded = encoding.factorisation.expand(
-        regressors.transform_df, primary=fitter._primary_parameter_name
+        regressors.transform_df,
+        primary=fitter._primary_parameter_name,
+        ancillary=fitter._ancillary_parameter_name if reads_covariates else None,
     )
     # The design checks lifelines makes, on the two tables rather than on 72 million rows:
     # a design column is a function of one side, so a NaN in it is a NaN in a key.
