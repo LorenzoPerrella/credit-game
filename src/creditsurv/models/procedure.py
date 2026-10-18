@@ -344,7 +344,16 @@ def run_selection(
     unfittable: set[str] = set()
     while True:
         result = fits.fit(current, start=previous, parent=previous_spec)
-        removal = worst(_terms(result), current, alone=alone, signs=signs, skip=unfittable)
+        removal = worst(
+            _terms(result),
+            current,
+            alone=alone,
+            signs=signs,
+            skip=unfittable,
+            # Rule 12's factors are not judged by a rule that reads one coefficient: they have
+            # one per band and no single sign. `screen` reads them band by band instead.
+            banded=set(banded),
+        )
         if removal is None:
             break
         name, reason = removal.covariate, removal.reason
@@ -432,7 +441,11 @@ def run_selection(
                     start=whole,
                 )
             table = stability_table(
-                current, _terms(whole), {k: _terms(v) for k, v in splits.items()}, deviations
+                current,
+                _terms(whole),
+                {k: _terms(v) for k, v in splits.items()},
+                deviations,
+                banded=set(banded),
             ).assign(round=len(rounds) + 1)
             rounds.append(table)
             verdict = not_identified(table)

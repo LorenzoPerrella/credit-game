@@ -127,6 +127,7 @@ def worst(
     alone: Mapping[str, float] | None = None,
     signs: Mapping[str, int] = EXPECTED_SIGNS,
     skip: Collection[str] = (),
+    banded: Collection[str] = (),
 ) -> Removal | None:
     """The covariate step 8 removes next, and why -- or ``None`` when every one stays.
 
@@ -151,11 +152,24 @@ def worst(
 
     ``skip`` names covariates whose removal step 8 has tried and found to leave a model that
     cannot be fitted. They stay in the model and are not offered again.
+
+    ``banded`` names covariates rule 12 reads as **factors**, and they are not judged here at
+    all. The three rules above each read one coefficient, one z and one p-value; a banded
+    covariate has one of each **per band** -- four for `credit_score` -- and no single sign. The
+    first band-form selection discovered this by raising `KeyError: 'credit_score'` two hours
+    into step 8, because `spec.continuous` holds covariate names while a fitted table holds
+    design columns.
+
+    Skipping them loses nothing that is not reported elsewhere. They are the protected loan
+    block, so step 8 was never going to remove them; and `screen` already reads a banded
+    covariate band by band and publishes `sign_agrees` for each, which is where a backwards
+    band would be visible. A joint test across the bands would be a different rule and would
+    have to be declared before the fit rather than written here.
     """
     backwards: list[tuple[float, str, float, float]] = []
     reversed_: list[tuple[float, str, float, float]] = []
     thin: list[tuple[float, str, float, float]] = []
-    for name in (term for term in spec.continuous if term not in skip):
+    for name in (term for term in spec.continuous if term not in skip and term not in banded):
         coefficient = number(terms, name, "coef")
         z = coefficient / number(terms, name, "se(coef)")
         p_value = number(terms, name, "p")
@@ -203,6 +217,7 @@ def stability_table(
     whole: pd.DataFrame,
     splits: Mapping[str, pd.DataFrame],
     deviations: pd.Series,
+    banded: Collection[str] = (),
 ) -> pd.DataFrame:
     """Each continuous covariate's standardised effect on the whole and on each split.
 
@@ -219,9 +234,15 @@ def stability_table(
     the calendar, and a time cut removes some of the very variation it is identified from. A
     covariate called unstable by a time cut may be one the half could not measure rather than
     one that moves.
+
+    ``banded`` is skipped for the reason `worst` gives: a covariate rule 12 reads as a factor
+    has one effect per band and no single standardised effect to compare across splits. They are
+    the protected loan block, so `not_identified` was never going to remove them.
     """
     rows = []
     for name in spec.continuous:
+        if name in banded:
+            continue
         effects = {label: effect_of(terms, name, deviations) for label, terms in splits.items()}
         whole_effect = effect_of(whole, name, deviations)
         signs = {bool(effect > 0) for effect in (whole_effect, *effects.values())}
