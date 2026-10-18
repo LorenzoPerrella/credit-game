@@ -312,12 +312,18 @@ def test_every_candidate_has_an_economic_dimension_fixed_in_advance() -> None:
         MACRO_CANDIDATES,
         MACRO_ELIMINATION_PRIORITY,
         ORDINAL,
+        PROTECTED_MACRO,
         STATIC_CONTINUOUS,
     )
 
-    candidates = {*MACRO_CANDIDATES, *STATIC_CONTINUOUS, *ORDINAL}
+    candidates = {*MACRO_CANDIDATES, *PROTECTED_MACRO, *STATIC_CONTINUOUS, *ORDINAL}
     assert candidates <= set(ECONOMIC_DIMENSION), sorted(candidates - set(ECONOMIC_DIMENSION))
-    assert set(MACRO_ELIMINATION_PRIORITY) == set(MACRO_CANDIDATES)
+    # A superset, not an equality. Both maps are fixed before any fit and must stay so, so rule
+    # 15's withdrawal of five candidates on 17 October 2026 leaves their entries behind **on
+    # purpose**: deleting them would be editing an input after seeing a result, and a priority
+    # that lists a covariate nobody offers costs nothing. What must not happen is the reverse --
+    # a candidate with no priority, which the procedure would then order arbitrarily.
+    assert set(MACRO_ELIMINATION_PRIORITY) >= set(MACRO_CANDIDATES)
 
 
 def test_factors_read_back_from_a_saved_correlation_are_the_ones_the_rows_give() -> None:
@@ -648,7 +654,13 @@ def test_the_prior_a_sign_is_read_against_is_the_cause_s_own() -> None:
     # By the default model's priors the score is backwards -- it expects a higher score to
     # lengthen survival -- and unemployment agrees with them, which is the wrong question to be
     # asking of a model of repayment.
-    assert signs_against_prior(fitted, EXPECTED_SIGNS) == ["credit_score"]
+    # Two under the default model's priors since rule 15 gave `mortgage_rate_decline` one of
+    # its own (+1, refinancing relief available) -- which only sharpens what this test is for:
+    # reading the wrong map now flags more, not less.
+    assert signs_against_prior(fitted, EXPECTED_SIGNS) == [
+        "credit_score",
+        "mortgage_rate_decline",
+    ]
     # By rule 6's, the score is right and unemployment is the one that is backwards: a weaker
     # labour market should lengthen the time to repayment, and here it shortens it.
     assert signs_against_prior(fitted, PREPAYMENT_SIGNS) == ["unemployment_change"]

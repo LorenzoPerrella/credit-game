@@ -383,7 +383,12 @@ ADVERSE: Final = Scenario(
         # to +2.7 points as the front end was cut to zero, the 30-year mortgage rate fell about
         # 1.5 points with Treasuries though spreads widened, the Nasdaq lost 45% and the VIX
         # trebled. Taken a little short of each, and held rather than recovered.
-        "treasury_10y_2y_spread": [*np.linspace(0.0, 1.5, 18), *([1.5] * 18)],
+        # The yield curve's own leg is **gone**, not set to zero: rule 15 withdrew
+        # `yield_curve_slope` as a candidate on 17 October 2026 -- a slope is a forward-looking
+        # cycle proxy whose whole relation to default runs through a cycle this model already
+        # carries -- so no fitted covariate reads this series, and a scenario that went on
+        # shocking it would be moving a number nothing listens to. The test that holds the
+        # scenario and the formula together in both directions is what found it.
         "mortgage_rate_30y": [*np.linspace(0.0, -1.2, 18), *([-1.2] * 18)],
         "mortgage_rate_15y": [*np.linspace(0.0, -1.0, 18), *([-1.0] * 18)],
         "nasdaq_composite": [*np.linspace(0.0, -0.40, 12), *([-0.40] * 24)],

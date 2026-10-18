@@ -10,17 +10,14 @@
   "cause": "default",
   "distribution": "weibull",
   "eliminated": {
-    "corporate_bond_spread": "step 6: variance inflation 10.8, above 10",
-    "equity_return": "step 8: reversed sign: -0.004448 in the full model, +0.5614 beside the loan block alone",
-    "equity_volatility": "step 8: wrong sign: +0.009578 where - is expected",
-    "financial_conditions": "step 10: 1 sd effect -0.0155 on log survival time, under 0.02",
-    "house_price_growth": "step 8: wrong sign: -0.1456 where + is expected",
-    "inflation_change": "step 10: 1 sd effect +0.0032 on log survival time, under 0.02",
-    "inflation_rate": "step 8: reversed sign: -8.929 in the full model, +7.972 beside the loan block alone",
-    "mortgage_rate_decline": "step 9: 1 sd effect -0.030 on even and +0.034 on odd origination years, beside policy_rate_change (+0.118), both interest rates",
-    "volatility_change": "step 8: wrong sign: +0.001721 where - is expected"
+    "corporate_bond_spread": "step 8: wrong sign: +0.1499 where - is expected",
+    "equity_volatility": "step 8: wrong sign: +0.001269 where - is expected",
+    "house_price_growth": "step 8: wrong sign: -0.7808 where + is expected",
+    "housing_starts_growth": "step 9: 1 sd effect +0.040 on even vintages, +0.044 on odd vintages, +0.046 on to 2010 06, -0.003 on after 2010 06, beside ltv_change (-0.201), both housing",
+    "mortgage_rate_decline": "step 8: wrong sign: -0.1571 where + is expected",
+    "volatility_change": "step 8: wrong sign: +0.0004502 where - is expected"
   },
-  "formula": "credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
+  "formula": "credit_score + original_ltv + debt_to_income + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
   "moratorium": "exclude",
   "ordinal": [
     "term_years"
@@ -31,11 +28,10 @@
     "debt_to_income"
   ],
   "time_varying_continuous": [
+    "moratorium_regime",
     "ltv_change",
     "unemployment_change",
-    "policy_rate_change",
-    "yield_curve_slope",
-    "consumer_sentiment",
-    "housing_starts_growth"
+    "financial_conditions",
+    "consumer_sentiment"
   ]
 }

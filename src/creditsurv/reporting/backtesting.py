@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from creditsurv.backtest.splits import Split
 
 
-def generate(split: Split, result: BacktestResult, *, reports_dir: Path) -> Path:
+def generate(split: Split, result: BacktestResult, *, formula: str, reports_dir: Path) -> Path:
     """Write ``backtesting.md`` and its figure."""
     figures = reports_dir / "figures"
     report = Report(
@@ -190,6 +190,8 @@ competing risk, and the direction of the bias is upward on lifetime PD.
         provenance(
             [
                 "`uv run creditsurv report`",
+                # See the same line in `calibration.py`: a report has to name its own model.
+                f"Formula: `{formula}`",
                 f"Reporting date: {result.as_of}",
                 f"Training exposure: {split.describe()['train_loan_months']:,} loan-months",
                 f"Test exposure: {result.loan_months:,} loan-months",

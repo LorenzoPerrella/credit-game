@@ -24,6 +24,7 @@ from creditsurv.config import (
     TIME_VARYING_CONTINUOUS,
     default_covariates,
     default_formula,
+    default_shape,
     reports_dir,
 )
 
@@ -835,7 +836,9 @@ def report(
     reporting_date = pd.Period(as_of, freq="M")
     split, macro = _split(moratorium, reporting_date)
 
+    shape = default_shape()
     typer.echo(f"Fitting on {int(split.train[WEIGHT].sum()):,} loan-months up to {as_of}...")
+    typer.echo(f"  the shape reads: {shape}")
     fitted = cast(
         "FitResult",
         fit_once(
@@ -845,7 +848,11 @@ def report(
             as_of=as_of,
             reuse=reuse,
             moratorium=moratorium,
-            start=selection_start(as_of, moratorium),
+            # Rule 14's shape is part of the specification, so the published model carries it:
+            # a report fitting the scale alone would publish a different model from the one the
+            # selection chose, under the same name.
+            ancillary=shape,
+            start=selection_start(as_of, moratorium, shape, formula),
         ),
     )
 
@@ -877,6 +884,7 @@ def report(
             macro,
             covariates,
             [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS],
+            formula=formula,
             reports_dir=destination,
             horizon_months=horizon,
             weights=book.set_index("loan_id")[WEIGHT],
@@ -888,7 +896,7 @@ def report(
 
     typer.echo("Backtesting against what happened...")
     _, result = backtest_split(split, covariates, formula, fitted=fitted)
-    written.append(backtesting.generate(split, result, reports_dir=destination))
+    written.append(backtesting.generate(split, result, formula=formula, reports_dir=destination))
 
     typer.echo("\nWritten:")
     for path in [*written, coefficients]:
@@ -940,6 +948,7 @@ def views(
                 moratorium=moratorium,
                 covariates=default_covariates(),
                 formula=default_formula(),
+                ancillary=default_shape(),
                 macro=load_macro_panel(),
                 block_rows=block_rows,
                 loans=loans,
@@ -1024,7 +1033,7 @@ def select(
 
     import pandas as pd
 
-    from creditsurv.config import MACRO_CANDIDATES, PROTECTED_MACRO, default_shape
+    from creditsurv.config import MACRO_CANDIDATES, PROTECTED_MACRO
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import month_ordinal
     from creditsurv.data.store import cells_identity

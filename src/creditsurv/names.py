@@ -794,6 +794,13 @@ HEADERS: Final[dict[str, str]] = {
     "effect_all": "Whole training half",
     "effect_even": "Even vintage years",
     "effect_odd": "Odd vintage years",
+    "effect_even_vintages": "Even vintage years",
+    "effect_odd_vintages": "Odd vintage years",
+    # Rule 9's time cuts, named after `config.STABILITY_CUT` so a reader can see which window
+    # each column is. The header map is keyed by column name, so a cut moved in config would
+    # want these moved with it -- which is the cost of naming a window in a column.
+    "effect_to_2010_06": "To 2010-06",
+    "effect_after_2010_06": "After 2010-06",
 }
 
 #: Columns whose values are variable names or formula terms, and how each is read.

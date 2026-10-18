@@ -466,6 +466,16 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
     # Volatility risen since origination is stress the loan was not written in.
     "volatility_change": -1,
     "house_price_growth": +1,  # rising house prices build equity
+    # A market rate below the note rate means refinancing into a lower payment is available,
+    # which is relief. Rule 6 gives this covariate the opposite prior for *prepayment*, where
+    # the same availability shortens the time to the exit being modelled.
+    "mortgage_rate_decline": +1,
+    # A wider spread is the price of credit risk rising: tighter credit, a weaker economy.
+    "corporate_bond_spread": -1,
+    # Sentiment measures households' own assessment of their capacity and willingness to pay.
+    "consumer_sentiment": +1,
+    # Housebuilding is housing demand and the liquidity of the collateral.
+    "housing_starts_growth": +1,
     #
     # ``mortgage_rate_decline`` and ``policy_rate_change`` were briefly given revised signs here, on
     # the strength of their marginal orderings and a mechanism about fixed-rate books. That

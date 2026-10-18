@@ -64,6 +64,10 @@ def _run(train: pd.DataFrame, *, identity: str = "fixture") -> tuple[SelectionRe
         # indicator is a production default, and the candidate lists are
         # parameters precisely so a test can say so.
         protected_macro=(),
+        # And the linear form, as every run before 18 October 2026 used: the
+        # production default is rule 12's bands, which on a fixture book of a
+        # handful of covariates would fit five levels of a column holding two.
+        banded={},
         macro=["ltv_change", "unemployment_change", "equity_volatility"],
         base_categorical={"purpose": reference},
         candidate_categorical=candidates,
@@ -244,7 +248,13 @@ def test_a_reversed_sign_goes_after_a_backwards_one_and_before_a_thin_one() -> N
     }
     fitted = {
         "credit_score": (0.3, 0.01, 0.0),
-        "mortgage_rate_decline": (+0.018, 0.0008, 0.0),  # no prior, reversed, z = 22.5
+        # `mortgage_rate_decline` carried no prior until rule 15 gave it one (+1: a market rate
+        # below the note rate means refinancing relief is available), and +0.018 agrees with it,
+        # so it is no longer a reversal and the no-prior role falls to the next covariate without
+        # one. Worth saying out loud: with every *candidate* now carrying a declared sign, the
+        # reversal arm of `worst` fires in production only on the protected block -- `term_years`
+        # has no prior -- and on the prepayment model, whose own map is its own question.
+        "mortgage_rate_decline": (+0.018, 0.0008, 0.0),  # prior +1, agrees, z = 22.5
         "inflation_rate": (-8.0, 0.063, 0.0),  # no prior, reversed, z = 127
         "unemployment_change": (
             -0.04,
@@ -256,7 +266,7 @@ def test_a_reversed_sign_goes_after_a_backwards_one_and_before_a_thin_one() -> N
 
     removal = worst(_coefficients(fitted), spec, alone=alone)
     assert removal is not None
-    assert removal.covariate == "mortgage_rate_decline"
+    assert removal.covariate == "inflation_rate"
     assert removal.reason.startswith("reversed sign")
 
     backwards = {**fitted, "unemployment_change": (+0.04, 0.0004, 0.0)}
@@ -264,9 +274,13 @@ def test_a_reversed_sign_goes_after_a_backwards_one_and_before_a_thin_one() -> N
     assert removal is not None
     assert removal.covariate == "unemployment_change"
 
+    # Every covariate agreeing with whatever prior it has, so the thin p-value is the only
+    # thing left to remove. `mortgage_rate_decline` is +0.018 here rather than -0.018: rule 15
+    # gave it a prior of +1, and the negative value that used to be the agreeing one is now a
+    # backwards sign, which outranks a thin p-value and would be testing the wrong branch.
     agreeing = {
         **fitted,
-        "mortgage_rate_decline": (-0.018, 0.0008, 0.0),
+        "mortgage_rate_decline": (+0.018, 0.0008, 0.0),
         "inflation_rate": (+8.0, 0.063, 0.0),
     }
     removal = worst(_coefficients(agreeing), spec, alone=alone)
@@ -281,8 +295,8 @@ def test_an_unstable_covariate_goes_only_beside_a_larger_one_of_its_dimension() 
             "covariate": ["equity_volatility", "financial_conditions", "unemployment_change"],
             "dimension": ["financial stress", "financial stress", "labour"],
             "effect_all": [-0.32, +0.05, -0.09],
-            "effect_even": [-0.30, -0.02, +0.01],
-            "effect_odd": [-0.33, +0.06, -0.10],
+            "effect_even_vintages": [-0.30, -0.02, +0.01],
+            "effect_odd_vintages": [-0.33, +0.06, -0.10],
             "stable": [True, False, False],
         }
     )
@@ -302,6 +316,7 @@ def test_the_selection_starts_from_candidates_the_configuration_cannot_change() 
         CATEGORICAL_REFERENCE,
         MACRO_CANDIDATES,
         ORDINAL,
+        PROTECTED_MACRO,
         STATIC_CONTINUOUS,
         TIME_VARYING_CONTINUOUS,
     )
@@ -314,7 +329,10 @@ def test_the_selection_starts_from_candidates_the_configuration_cannot_change() 
 
     assert set(STATIC_CONTINUOUS) <= set(LOAN_CONTINUOUS)
     assert set(ORDINAL) <= set(LOAN_ORDINAL)
-    assert set(TIME_VARYING_CONTINUOUS) <= set(MACRO_CANDIDATES)
+    # Candidates **or** the protected macro block: rule 1's moratorium indicator is in the
+    # selected specification and is not a candidate, because its purpose is to absorb a regime
+    # rather than to be tested -- the same standing `harp` has among the categoricals.
+    assert set(TIME_VARYING_CONTINUOUS) <= set(MACRO_CANDIDATES) | set(PROTECTED_MACRO)
     assert set(CATEGORICAL_REFERENCE) <= set(BASE_CATEGORICAL) | set(CANDIDATE_CATEGORICAL)
     assert not set(BASE_CATEGORICAL) & set(CANDIDATE_CATEGORICAL)
 
@@ -778,6 +796,10 @@ def test_a_selection_streamed_from_the_cells_chooses_what_the_held_panel_chose(
         # indicator is a production default, and the candidate lists are
         # parameters precisely so a test can say so.
         protected_macro=(),
+        # And the linear form, as every run before 18 October 2026 used: the
+        # production default is rule 12's bands, which on a fixture book of a
+        # handful of covariates would fit five levels of a column holding two.
+        banded={},
         macro=["ltv_change", "unemployment_change"],
         base_categorical={"purpose": "purchase"},
         candidate_categorical={},
@@ -797,6 +819,10 @@ def test_a_selection_streamed_from_the_cells_chooses_what_the_held_panel_chose(
         # indicator is a production default, and the candidate lists are
         # parameters precisely so a test can say so.
         protected_macro=(),
+        # And the linear form, as every run before 18 October 2026 used: the
+        # production default is rule 12's bands, which on a fixture book of a
+        # handful of covariates would fit five levels of a column holding two.
+        banded={},
         macro=["ltv_change", "unemployment_change"],
         base_categorical={"purpose": "purchase"},
         candidate_categorical={},
@@ -812,8 +838,8 @@ def test_a_selection_streamed_from_the_cells_chooses_what_the_held_panel_chose(
     held_halves = in_memory.stability.set_index(["covariate", "round"])
     streamed_halves = streamed.stability.set_index(["covariate", "round"])
     np.testing.assert_allclose(
-        streamed_halves["effect_even"].to_numpy(),
-        held_halves["effect_even"].to_numpy(),
+        streamed_halves["effect_even_vintages"].to_numpy(),
+        held_halves["effect_even_vintages"].to_numpy(),
         rtol=1e-4,
     )
 
@@ -838,6 +864,10 @@ def test_moments_that_do_not_cover_the_candidates_are_refused_before_the_first_f
             # indicator is a production default, and the candidate lists are
             # parameters precisely so a test can say so.
             protected_macro=(),
+            # And the linear form, as every run before 18 October 2026 used: the
+            # production default is rule 12's bands, which on a fixture book of a
+            # handful of covariates would fit five levels of a column holding two.
+            banded={},
             macro=[],
             moments=partial,
         )
@@ -933,6 +963,10 @@ def test_the_family_command_reads_both_records_and_applies_the_rule(
             # indicator is a production default, and the candidate lists are
             # parameters precisely so a test can say so.
             protected_macro=(),
+            # And the linear form, as every run before 18 October 2026 used: the
+            # production default is rule 12's bands, which on a fixture book of a
+            # handful of covariates would fit five levels of a column holding two.
+            banded={},
             macro=["ltv_change"],
             base_categorical={},
             candidate_categorical={},
@@ -1002,6 +1036,10 @@ def test_a_candidate_that_cannot_be_fitted_is_a_finding_not_a_crash() -> None:
         # indicator is a production default, and the candidate lists are
         # parameters precisely so a test can say so.
         protected_macro=(),
+        # And the linear form, as every run before 18 October 2026 used: the
+        # production default is rule 12's bands, which on a fixture book of a
+        # handful of covariates would fit five levels of a column holding two.
+        banded={},
         macro=["ltv_change", "equity_volatility"],
         base_categorical={},
         candidate_categorical={},
@@ -1432,6 +1470,10 @@ def test_a_selection_from_one_encoding_chooses_what_a_re_reading_chooses(
             # indicator is a production default, and the candidate lists are
             # parameters precisely so a test can say so.
             protected_macro=(),
+            # And the linear form, as every run before 18 October 2026 used: the
+            # production default is rule 12's bands, which on a fixture book of a
+            # handful of covariates would fit five levels of a column holding two.
+            banded={},
             macro=["ltv_change", "unemployment_change"],
             base_categorical={"purpose": "purchase"},
             candidate_categorical={},
@@ -1457,8 +1499,10 @@ def test_a_selection_from_one_encoding_chooses_what_a_re_reading_chooses(
     assert got.rows == expected.rows
     assert int(got.loan_months) == int(expected.loan_months)
 
-    # One reading a sample, not one a candidate: the whole half and the two halves of step 9.
-    assert len(once.held) <= 3
+    # One reading a sample, not one a candidate: the whole half, step 9's two origination-year
+    # halves, and -- since rule 9's amendment of 17 October 2026 -- its two time cuts. Five, not
+    # three, and still against the thirty-odd fits a run makes.
+    assert len(once.held) <= 5
     assert len(once.record) > len(once.held), "the run must have made more fits than readings"
 
 

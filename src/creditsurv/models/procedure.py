@@ -43,12 +43,15 @@ import pandas as pd
 from lifelines import exceptions
 
 from creditsurv.config import (
+    BANDED_REFERENCE,
     MACRO_CANDIDATES,
     MACRO_ELIMINATION_PRIORITY,
     PROTECTED_MACRO,
+    STABILITY_CUT,
 )
 from creditsurv.data.panel import (
     WEIGHT,
+    month_ordinal,
 )
 from creditsurv.explore import collinear_pairs
 from creditsurv.models.fits import _terms
@@ -160,6 +163,7 @@ def run_selection(
     macro: Sequence[str] = MACRO_CANDIDATES,
     protected_macro: Sequence[str] = PROTECTED_MACRO,
     base_categorical: Mapping[str, str] = BASE_CATEGORICAL,
+    banded: Mapping[str, float] = BANDED_REFERENCE,
     candidate_categorical: Mapping[str, str] = CANDIDATE_CATEGORICAL,
     stability: np.ndarray | bool | None = None,
     moments: Moments | None = None,
@@ -271,6 +275,10 @@ def run_selection(
     base = Specification(
         continuous=tuple(name for name in loan if name in surviving),
         categorical=tuple(base_categorical.items()),
+        # Rule 12's bands, carried from here through every `plus` and `minus` of the run, so
+        # the formula the record writes is the formula a report fits. Leaving the two to differ
+        # cost nine and a half hours on one fit: see `Specification.formula`.
+        banded=tuple((name, level) for name, level in banded.items() if name in surviving),
     )
 
     # 7. Each candidate beside the loan block, started from the loan block's fit.
@@ -372,29 +380,59 @@ def run_selection(
         current, previous, previous_spec = candidate, fitted, candidate
     elimination = pd.DataFrame(steps, columns=_ELIMINATION_COLUMNS)
 
-    # 9. Stability, on two halves of the book.
+    # 9. Stability, on four splits of the book: two by origination parity and two by calendar.
+    #
+    # Rule 9 compared parity alone until 17 October 2026. A parity split holds the calendar
+    # fixed and varies the cohort; a **time cut** does the opposite, and the second validation
+    # found a covariate reading +0.083 at the 2018 cut and -0.032, -0.039, -0.048 at the three
+    # after it while parity called it stable. The cut is `config.STABILITY_CUT`, the calendar
+    # midpoint of the development window -- arithmetic rather than a choice about results.
+    #
+    # And the rule states that the two are not interchangeable: `period = cohort + age` holds,
+    # so the macro block is identified only through the calendar and a time cut removes some of
+    # the variation it is identified from. A covariate the second half cannot measure looks the
+    # same as one that moves, which is why the elimination reason names every split.
     rounds: list[pd.DataFrame] = []
     if stability is not None and stability is not False:
-        log.info("step 9: stability on two halves")
+        log.info("step 9: stability on four splits")
         mask = None if isinstance(stability, bool) else stability
+        cut = month_ordinal(pd.Period(STABILITY_CUT, freq="M"))
         while True:
             whole = fits.fit(current, start=previous, parent=previous_spec)
-            even = fits.fit(
-                current,
-                sample="even origination years",
-                where=mask,
-                parity=0,
-                start=whole,
-            )
-            odd = fits.fit(
-                current,
-                sample="odd origination years",
-                where=None if mask is None else ~mask,
-                parity=1,
-                start=whole,
-            )
+            splits = {
+                "even_vintages": fits.fit(
+                    current,
+                    sample="even origination years",
+                    where=mask,
+                    parity=0,
+                    start=whole,
+                ),
+                "odd_vintages": fits.fit(
+                    current,
+                    sample="odd origination years",
+                    where=None if mask is None else ~mask,
+                    parity=1,
+                    start=whole,
+                ),
+            }
+            # A time cut is a property of the reading, not a mask, so it is taken only where the
+            # rows are read from the cell file. On a held frame the parity split stands alone and
+            # the record says which splits it carries.
+            if mask is None:
+                splits["to_" + STABILITY_CUT.replace("-", "_")] = fits.fit(
+                    current,
+                    sample=f"to {STABILITY_CUT}",
+                    months=(None, cut),
+                    start=whole,
+                )
+                splits["after_" + STABILITY_CUT.replace("-", "_")] = fits.fit(
+                    current,
+                    sample=f"after {STABILITY_CUT}",
+                    months=(cut + 1, None),
+                    start=whole,
+                )
             table = stability_table(
-                current, _terms(whole), _terms(even), _terms(odd), deviations
+                current, _terms(whole), {k: _terms(v) for k, v in splits.items()}, deviations
             ).assign(round=len(rounds) + 1)
             rounds.append(table)
             verdict = not_identified(table)
