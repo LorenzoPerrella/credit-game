@@ -14,7 +14,7 @@ import pandas as pd
 
 from creditsurv.config import DEFAULT_CAUSE, SELECTION_RECORD, record_name
 from creditsurv.models.rules import MATERIALITY_THRESHOLD
-from creditsurv.reporting.builder import Report, provenance
+from creditsurv.reporting.builder import Report, provenance, specification
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -144,6 +144,7 @@ every other coefficient.
                 f"`uv run creditsurv select --as-of {record.as_of} "
                 f"--moratorium {record.moratorium} --dist {record.distribution}"
                 + (f" --cause {record.cause}`" if record.cause != DEFAULT_CAUSE else "`"),
+                *specification(record.selected.formula, record.ancillary),
                 "Procedure: `creditsurv.models.procedure.run_selection`",
             ]
         )

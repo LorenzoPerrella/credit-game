@@ -26,14 +26,16 @@ import pandas as pd
 
 from creditsurv.backtest.runner import predicted_hazard
 from creditsurv.config import (
+    BOOK_WINDOW_MONTHS,
     DISTRIBUTION,
     ORDINAL,
     STATIC_CONTINUOUS,
     TIME_VARYING_CONTINUOUS,
 )
-from creditsurv.data.panel import WEIGHT, cells_to_episodes, month_ordinal
-from creditsurv.data.store import find_fits, load_cells_window, load_fit, load_largest_cells
+from creditsurv.data.panel import WEIGHT, cells_to_episodes, ended_in, month_ordinal
+from creditsurv.data.store import find_fits, load_cells_window, load_fit, load_originations
 from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS, FitResult
+from creditsurv.models.anchoring import ANCHOR_WINDOW, anchor_on_window
 from creditsurv.models.fits import cell_source
 from creditsurv.models.lifetime_pd import origination_book
 from creditsurv.models.selection import weighted_moments
@@ -80,10 +82,20 @@ def model_views(
     ancillary: str | None = None,
     macro: pd.DataFrame,
     block_rows: int,
-    loans: int,
+    book_months: int = BOOK_WINDOW_MONTHS,
+    anchor_window: tuple[str, str] = ANCHOR_WINDOW,
     horizon: int,
 ) -> ModelViews:
-    """Find the cached fit of this specification and build every view of it."""
+    """Find the cached fit of this specification and build every view of it.
+
+    ``book_months`` is how many months of originations the projection book is, ending at the
+    reporting date. It replaces a ``loans`` count, which was a truncation rather than a window:
+    `config.BOOK_WINDOW_MONTHS` says why twelve, and says it before the book was rebuilt.
+
+    ``anchor_window`` is rule 1's, and is an argument for the reason `windows` makes it one:
+    the criteria are measured on the model **as published**, multiplier included, and a
+    fixture book does not run to 2024.
+    """
     # `ancillary` is named rather than left out, and a criterion of `None` means the key must be
     # **absent** -- so this asks for a fit of this scale formula with exactly this shape, and a
     # scale-only fit of the same formula is a miss rather than a near-enough hit. With rule 14's
@@ -150,25 +162,76 @@ def model_views(
         ),
     ]
 
-    # The test window and the projections read only what they need: the months after the
-    # reporting date, and the origination profiles at age zero.
+    # The test window and the projections read only what they need: the months rule 1 declares
+    # the test window to be, and the origination profiles at age zero.
+    #
+    # **Both the window and the level were wrong, and they are the same correction.** This read
+    # from `as_of + 1`, which is 2022-01 -- the anchoring window *and* the test window together
+    # -- and scored it on an unanchored hazard. Rule 1 reserves the anchoring window for the
+    # level adjustment "and nothing else" and begins the test window at 2025-01, and rule 5's
+    # criteria are of the model as published, multiplier included. So `acceptance_by_segment`
+    # was published with a `deciles_passed` column that did not evaluate the criteria it is
+    # named after: it read False at a worst decile of 1.456 where the declared criterion reads
+    # True at 1.150, and three separate readings of that one decile were taken off it in a day.
+    #
+    # It costs nothing: the anchoring window is three years of observation and the test window
+    # about one and a half, against the four and a half this used to read in one go.
+    first_anchor, last_anchor = anchor_window
+    log.info("the anchoring window %s to %s, for the level", first_anchor, last_anchor)
+    anchoring = cells_to_episodes(
+        load_cells_window(
+            moratorium,
+            first=month_ordinal(pd.Period(first_anchor, freq="M")),
+            last=month_ordinal(pd.Period(last_anchor, freq="M")),
+        ),
+        macro,
+        covariates=list(covariates),
+    )
+    if anchoring.empty:
+        message = (
+            f"No cells observed between {first_anchor} and {last_anchor}, so the level cannot be "
+            "anchored and the criteria cannot be measured on the model as published. Pass an "
+            "anchor_window the table has rows in."
+        )
+        raise NoCachedFit(message)
+    anchor = anchor_on_window(
+        predicted_hazard(fitted, anchoring, covariates),
+        ended_in(anchoring),
+        anchoring[WEIGHT],
+        anchoring["period"],
+        window=(first_anchor, last_anchor),
+    )
+    log.info("multiplier %.4f", anchor.multiplier)
+    del anchoring
+
     log.info("the test window, and the projections from the book written today")
     test = cells_to_episodes(
-        load_cells_window(moratorium, first=cut + 1), macro, covariates=list(covariates)
+        load_cells_window(moratorium, first=month_ordinal(pd.Period(last_anchor, freq="M")) + 1),
+        macro,
+        covariates=list(covariates),
     )
-    test_hazard = predicted_hazard(fitted, test, covariates).to_numpy()
+    test_hazard = anchor.apply(predicted_hazard(fitted, test, covariates))
     tables += [
-        *backtest_views(test, test_hazard, as_of=as_of),
+        *backtest_views(
+            test,
+            test_hazard,
+            out_of_time=f"On the test window rule 1 declares -- the months after "
+            f"{last_anchor}, which neither the fit nor the anchoring saw -- at the "
+            f"anchored level, multiplier {anchor.multiplier:.4f}.",
+        ),
         *projection_views(
             fitted,
+            # The declared book: every origination of the `BOOK_WINDOW_MONTHS` ending at the
+            # reporting date, at the weights it carries. No ordering and no truncation, which
+            # is what `load_largest_cells(limit=loans)` used to impose -- and what made the
+            # published book 0.6% purchase against the window's own 32.2%.
             origination_book(
                 cells_to_episodes(
-                    load_largest_cells(moratorium, age=0, limit=loans),
+                    load_originations(moratorium, first=cut - (book_months - 1), last=cut),
                     macro,
                     covariates=list(covariates),
                 ),
                 macro,
-                loans,
             ),
             macro,
             covariates,

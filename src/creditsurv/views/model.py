@@ -215,7 +215,12 @@ def calibration_views(
     views = [View(name, *described[name], tables[name], source="fit") for name in described]
     # The out-of-time block is the same three views the streamed path publishes, so it is the
     # same function: this one used to repeat them verbatim, names, titles and prose.
-    views += backtest_views(test, test_hazard, as_of=str(split.as_of))
+    views += backtest_views(
+        test,
+        test_hazard,
+        out_of_time=f"On the months after {split.as_of}, which the model never saw. "
+        f"At the model's own level, with no anchoring.",
+    )
     if families:
         pieces = [
             survival_by_age(train, hazard).assign(distribution=name)
@@ -234,14 +239,19 @@ def calibration_views(
     return views
 
 
-def backtest_views(test: pd.DataFrame, hazard: np.ndarray, *, as_of: str) -> list[View]:
-    """The out-of-time tables: the months after the reporting date, which the model never saw.
+def backtest_views(test: pd.DataFrame, hazard: np.ndarray, *, out_of_time: str) -> list[View]:
+    """The out-of-time tables, over whatever window and level the caller scored.
 
     Separate from the in-sample ones because they are read separately and computed
     differently: the test window is small enough to hold, and its deciles are cut on its own
     exposure rather than on the training half's.
+
+    ``out_of_time`` is the caption clause naming the window **and the level**, because this
+    used to compose it from a reporting date and the two callers do not score the same thing.
+    The streamed path now scores the test window rule 1 declares, at the anchored level, which
+    is what rule 5's criteria are of; the held-panel path scores the months after its own cut,
+    unanchored. A table named "acceptance criteria" has to say which.
     """
-    out_of_time = f"On the months after {as_of}, which the model never saw."
     return [
         View(
             "backtest_by_month",
@@ -255,6 +265,18 @@ def backtest_views(test: pd.DataFrame, hazard: np.ndarray, *, as_of: str) -> lis
             "Backtest by decile of predicted risk",
             f"Deciles of the test window's exposure. {out_of_time}",
             _actual_expected_by_segment(test, hazard, "decile", deciles(hazard, test)),
+            source="fit",
+        ),
+        View(
+            "backtest_by_age_band",
+            "Backtest by seasoning band",
+            f"Defaults against expectation by seasoning band. {out_of_time}",
+            # Rule 5's fourth criterion, added 17 October 2026: at least five of seven bands
+            # inside 0.80 to 1.25 out of sample. Nothing computed it -- this function emitted
+            # months, deciles and the acceptance table and nothing by age -- so a criterion was
+            # declared for two days that the package could not evaluate. It is the in-sample
+            # view's own grouper on the test window's rows, which is the whole of it.
+            _actual_expected_by_segment(test, hazard, "age_band", age_bands(test)),
             source="fit",
         ),
         View(
@@ -358,8 +380,14 @@ def projection_views(
 ) -> list[View]:
     """The PD term structure and the scenarios, on the origination book, by segment.
 
-    The book is the commonest origination profiles dated to today, each weighted by how much
-    of the lending it stands for (:func:`creditsurv.models.lifetime_pd.origination_book`).
+    The book is every origination of the declared window, dated to today and each at the weight
+    it carries (:func:`creditsurv.models.lifetime_pd.origination_book`,
+    `config.BOOK_WINDOW_MONTHS`). It was "the commonest origination profiles" until 19 October
+    2026, and that is a mode rather than a portfolio: against the lending of the window itself,
+    the heaviest 500 ever written were 0.6% purchase where the book is 32.2%.
+
+    Every table here carries `book_weight` by segment, so what the book is made of is published
+    beside what it is worth. That is the check that would have caught the old one.
     """
     weights = book.set_index(LOAN_ID)[WEIGHT].astype(float)
     extended = extend_macro(macro, horizon_months + 2)

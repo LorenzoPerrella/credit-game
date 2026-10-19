@@ -113,6 +113,15 @@ class FitResult:
     #: What the block engine recorded, for an interval-censored fit. Absent from models
     #: cached before the engine existed, so read it with ``getattr``.
     blocks: BlockFit | None = None
+    #: The ancillary formula the shape was fitted with, or ``None`` for a scalar shape.
+    #:
+    #: Carried because a fit that does not say which shape it has cannot be told from one that
+    #: has none, and that is exactly what happened: `windows` fitted four scalar-shape models,
+    #: published every number of them, and nothing in the package could state or compare the
+    #: shape to notice. Absent from models cached before this field existed, so read it with
+    #: ``getattr`` the way ``blocks`` is read. Typed as lifelines accepts it, which includes
+    #: ``True`` for "the scale's own formula".
+    ancillary: str | bool | None = None
 
     @property
     def aic(self) -> float:
@@ -276,6 +285,7 @@ def fit_aft(
         n_events=n_events,
         elapsed_seconds=elapsed,
         blocks=record,
+        ancillary=ancillary,
     )
 
 
@@ -332,6 +342,7 @@ def fit_encoding(
         n_events=int(record.events),
         elapsed_seconds=time.perf_counter() - started,
         blocks=record,
+        ancillary=ancillary,
     )
 
 
@@ -395,6 +406,7 @@ def fit_streamed(
         n_events=int(record.events),
         elapsed_seconds=time.perf_counter() - started,
         blocks=record,
+        ancillary=ancillary,
     )
 
 

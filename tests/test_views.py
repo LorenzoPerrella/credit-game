@@ -697,7 +697,23 @@ def test_the_views_command_scores_from_the_cell_file(
     save_fit(fitted, fit_fingerprint(**described), described)
 
     result = CliRunner().invoke(
-        app, ["views", "--no-portfolio", "--as-of", as_of, "--block-rows", "20000", "--loans", "50"]
+        app,
+        [
+            "views",
+            "--no-portfolio",
+            "--as-of",
+            as_of,
+            "--block-rows",
+            "20000",
+            "--book-months",
+            "12",
+            # Rule 1's own window is 2022-01 to 2024-12 and this book ends in 2014, so the
+            # window is named here for the reason `windows` takes the same option: the criteria
+            # are measured on the model as published, multiplier included, and a fixture has to
+            # be able to exercise that.
+            "--anchor-window",
+            "2013-01,2013-12",
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -740,3 +756,42 @@ def test_every_selection_table_the_record_writes_has_a_description(tmp_path: Pat
 
     assert [view.name for view in views] == ["selection_materiality"]
     assert "0.02" in views[0].description
+
+
+def test_the_origination_book_is_dated_to_today_in_every_column_that_dates_it(
+    split: Split, macro_module: pd.DataFrame
+) -> None:
+    """The defect the third validation found, and the two tests that could not see it.
+
+    `origination_book` set `period` and left `origination_period`, which
+    `features.add_macro_covariates` reads as its own column -- so the gap covariates were
+    measured from the month a profile was really written to the projected month. Two tests
+    asserted those gaps are zero at origination and both ran on a hand-built panel; the two
+    that exercised this function asserted only that its segments recombine and that its curve
+    rises, which is true either way.
+
+    So: the book is one cohort, and the covariates that are zero at origination by construction
+    are zero in its first projected month. Either assertion fails on the old code.
+    """
+    from creditsurv.models.lifetime_pd import BASELINE, extend_macro, project_panel
+
+    book = origination_book(split.train, macro_module, 40)
+    today = macro_module.index.max() + 1
+
+    assert pd.PeriodIndex(book["origination_period"]).nunique() == 1
+    assert pd.PeriodIndex(book["origination_period"])[0] == today
+    assert pd.PeriodIndex(book["period"])[0] == today
+    if "origination_month" in book.columns:
+        # The raw ordinal and the period are the same fact; a reader of either gets one answer.
+        assert set(book["origination_month"]) == {today.year * 12 + (today.month - 1)}
+
+    # Through the projection, which is the path that scores it: the panel has to reach past
+    # the book's own month before any covariate at it can be built.
+    extended = extend_macro(macro_module, 4, BASELINE)
+    panel = project_panel(book, extended, horizon_months=3)
+    first = panel[pd.PeriodIndex(panel["period"]) == today]
+    assert not first.empty
+    for name in ("ltv_change", "unemployment_change"):
+        assert first[name].abs().max() == pytest.approx(0.0, abs=1e-9), (
+            f"{name} is a change since origination, so a book written this month carries none"
+        )

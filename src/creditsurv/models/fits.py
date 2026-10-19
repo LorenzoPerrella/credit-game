@@ -264,50 +264,15 @@ class Fits:
             # development window would score the model on months rule 1 keeps for the anchoring.
             narrowed = replace(narrowed, months=_narrowed(narrowed.months, months))
         source = narrowed.prepared()
-        name = encoding_fingerprint(
-            identity=self.identity,
+        held = read_cells(
+            source,
             loan=loan,
             calendar=macro,
-            age_column=AGE_START,
-            cause=source.cause,
+            identity=self.identity,
+            moratorium=self.moratorium,
+            as_of=self.as_of,
             parity=parity,
-            months=source.months,
-            block_rows=source.rows,
-            macro=source.macro,
-            lag_months=source.lag_months,
         )
-        held = load_encoding(name)
-        if held is None:
-            held = encode_blocks(
-                source(),
-                loan=loan,
-                calendar=macro,
-                lower_bound_col=LOWER_BOUND,
-                upper_bound_col=UPPER_BOUND,
-                event_col=EXACT_OBSERVATION,
-                entry_col=AGE_START,
-                weights_col=WEIGHT,
-            )
-            save_encoding(
-                held,
-                name,
-                {
-                    "identity": self.identity,
-                    "moratorium": self.moratorium,
-                    "as_of": self.as_of,
-                    "cause": source.cause,
-                    "parity": parity,
-                    "months": list(source.months) if source.months is not None else None,
-                    "block_rows": source.rows,
-                    "loan": loan,
-                    "calendar": macro,
-                    "cells": held.episodes,
-                    "events": held.events,
-                    "loan_months": held.weight,
-                },
-            )
-        else:
-            log.info("the reading %s, mapped back: %s cells", name, f"{held.episodes:,}")
         self.held[(parity, months)] = held
         return held
 
@@ -640,6 +605,77 @@ def _terms(result: FitResult) -> pd.DataFrame:
     """The coefficient table of the scale parameter, where every covariate enters."""
     summary: pd.DataFrame = result.fitter.summary.loc[result.fitter._primary_parameter_name]
     return summary
+
+
+def read_cells(
+    source: CellBlocks,
+    *,
+    loan: Sequence[str],
+    calendar: Sequence[str],
+    identity: str,
+    moratorium: str,
+    as_of: str,
+    parity: int | None = None,
+) -> Encoding:
+    """One reading of a cell source, written to disk the first time and mapped back after.
+
+    The reading involves no formula, so nothing in it depends on the model: five memory-mapped
+    arrays and two key frames, 1.0 GB on disk for the production table's training half, mapped
+    back in 0.4 seconds against 214 to read it. The name covers everything that decides it --
+    the table's identity, the two covariate lists, the cause, the parity, the window, the batch
+    size and the macro panel's own numbers clipped to the months the window can reach.
+
+    Extracted from ``Fits`` because the backtest campaign needs the same thing. It used to fit
+    through ``fit_streamed``, which stores a design rather than a factorisation and **cannot
+    carry a shape that reads covariates** -- so passing rule 14's shape to it raised, which is
+    how the campaign came to be the one path in the project still fitting a scalar shape. Two
+    implementations of a reading would have been the way to grow a second set of last digits.
+    """
+    name = encoding_fingerprint(
+        identity=identity,
+        loan=list(loan),
+        calendar=list(calendar),
+        age_column=AGE_START,
+        cause=source.cause,
+        parity=parity,
+        months=source.months,
+        block_rows=source.rows,
+        macro=source.macro,
+        lag_months=source.lag_months,
+    )
+    held = load_encoding(name)
+    if held is not None:
+        log.info("the reading %s, mapped back: %s cells", name, f"{held.episodes:,}")
+        return held
+    held = encode_blocks(
+        source(),
+        loan=list(loan),
+        calendar=list(calendar),
+        lower_bound_col=LOWER_BOUND,
+        upper_bound_col=UPPER_BOUND,
+        event_col=EXACT_OBSERVATION,
+        entry_col=AGE_START,
+        weights_col=WEIGHT,
+    )
+    save_encoding(
+        held,
+        name,
+        {
+            "identity": identity,
+            "moratorium": moratorium,
+            "as_of": as_of,
+            "cause": source.cause,
+            "parity": parity,
+            "months": list(source.months) if source.months is not None else None,
+            "block_rows": source.rows,
+            "loan": list(loan),
+            "calendar": list(calendar),
+            "cells": held.episodes,
+            "events": held.events,
+            "loan_months": held.weight,
+        },
+    )
+    return held
 
 
 def cell_source(

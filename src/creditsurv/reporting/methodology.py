@@ -30,7 +30,7 @@ from creditsurv.models.selection import (
 )
 from creditsurv.names import DISTRIBUTIONS, label
 from creditsurv.reporting import charts
-from creditsurv.reporting.builder import Report, provenance
+from creditsurv.reporting.builder import Report, provenance, specification
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -455,7 +455,11 @@ along each loan's realised covariate path instead.
         provenance(
             [
                 "`uv run creditsurv report`",
-                f"Formula: `{formula}`",
+                # The published shape, read off the fit. Distinct from the *relaxed* shape of
+                # the section above, which tests one covariate at a time and is a diagnostic
+                # rather than a specification: naming both "shape" would make this report
+                # appear to state two contradictory ones.
+                *specification(formula, getattr(fitted, "ancillary", None)),
                 "Loan data: Freddie Mac Single-Family Loan-Level Dataset. Macro: FRED; "
                 "see `docs/data_dictionary.md`.",
             ]

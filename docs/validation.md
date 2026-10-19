@@ -134,8 +134,10 @@ competing-risk machinery is written and tested in `models/lifetime_pd.py` and ne
 
 **Three generated reports describe a model that no longer exists.** Generated 17 September, with
 old covariate names, no HARP level, one backtest cut and prepayment as censoring, while the main
-pages linked to them. They are grouped under [superseded reports](reports/superseded.md) with a
-notice on each, and a test now fails when a generated report's formula is not the configured one.
+pages linked to them. They were regenerated on 19 October 2026 and are back in their own
+sections; [what was superseded, and when](reports/superseded.md) records the gap, and a test now
+holds every generated report to the configured formula **and shape** -- which is the half the
+third round found still open.
 
 ### What the round also found, and it is the better news
 
