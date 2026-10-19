@@ -94,8 +94,8 @@ project.
 |---|---|---|
 | Research, benchmark, challenger model | **fit** | — |
 | Portfolio risk ranking | with reservations | within-year Gini 0.52-0.55 out of sample, falling for ten years |
-| 12-month PD, performing pools (IFRS 9 stage 1) | **not yet** | the level drifts; the published master scale errs to +89% |
-| Lifetime PD (IFRS 9 stage 2) | **not fit** | `1 - S` at 36 months, a weak prepayment model, 2 of 7 age bands out of sample, no payment state |
+| 12-month PD, performing pools (IFRS 9 stage 1) | **not yet** | the level drifts; the master scale holds 1 of 8 grades |
+| Lifetime PD (IFRS 9 stage 2) | **not fit** | `1 - S` at 36 months, a weak prepayment model, 2 of 7 age bands out of sample *on the model as it then stood*, no payment state |
 | Stress testing and scenarios | **not fit** | unemployment attenuated threefold, a rate proxy with no sign, calendar levels |
 | Regulatory PD (IRB) | out of scope | a different default definition, horizon, floors and data requirements |
 
@@ -165,6 +165,93 @@ round is placed **after the macro block and the one adoption**, not at the end, 
 baseline and the lifetime PD are built on top of it -- and building them against a specification
 that turns out wrong is what happened to the three September reports.
 
+## The third round, 19 October 2026
+
+A third independent validation read the model at commit `f77f440` and again found **zero
+discrepancies between published and recomputed**, on its third independent implementation of the
+likelihood. Of the second round's eighteen findings, four are closed -- P2, P3, **P7** and C6 --
+eight are partly closed and almost all of those are documentation, and six are open, five of them
+deferred by the plan to the fourth round. It found **seven new findings, four of them high**.
+
+One verdict moved and one came closer:
+
+| Use | Second round | Third round | What is missing |
+|---|---|---|---|
+| Research, benchmark, challenger | fit | **fit** | — |
+| Portfolio risk ranking | with reservations | with reservations | within-year Gini 0.53-0.55 |
+| 12-month PD, performing pools (IFRS 9 stage 1) | not yet | **not yet, closer** | the projection (N2, N3), a floor on the safe tail (N6), seasoning (P5), a governed level (N4) |
+| Lifetime PD (IFRS 9 stage 2) | not fit | **not fit** | L1, L2, L3, P5, N2, N3 |
+| Stress testing and scenarios | not fit | **not yet** | the stress composition is now sensible; sentiment (N4), a forecast-macro backtest, scenario numbers computed correctly (N2) |
+| Regulatory PD (IRB) | out of scope | out of scope | — |
+
+**P7 closed: the model calibrates across risk levels.** On the declared test window, anchored, the
+published model holds **10 of 10 deciles between 0.803 and 1.150** and **8 of 8 grades** inside
+section 5's tolerance. That is the first time this project has met the cross-sectional criterion,
+and it is **not in any report**, because the reports measure a fit without the shape.
+
+### The finding that explains why the good news was invisible
+
+**N1 — the published out-of-sample evidence is of another model.** `creditsurv windows` never passes
+the ancillary formula to its fits, so all four of them -- the three regime cuts and the development
+model -- estimate a scalar shape. Two cached fit descriptions differ in exactly one key on identical
+rows: 27.1 minutes with `ancillary`, 5.2 without. Every number in `docs/reports/windows.md`,
+including the anchoring multiplier and the master scale's 1 of 8, measures a specification the
+configuration does not declare -- while `report`, `views` and `select` all pass the shape.
+
+The second half of the same defect is that **nothing compared a report to the shape it was fitted
+with**. `FitResult` carries no ancillary field, so no report states one and no test could check one;
+the freshness test added after the second round covers three reports of eleven and compares the
+scale formula alone.
+
+### The other three high findings
+
+- **N2 — the projection does not re-date the origination.** `origination_book` dates its profiles to
+  today by setting the period and the age, and leaves the month they were written in. Every *change
+  since origination* covariate is then measured over twenty years in a book that is supposed to have
+  been written this month, so the published 12-month PD, the term structure and both scenario PDs
+  are computed on covariates no book could carry. The proof is in the published table itself: a book
+  written in one future month shows **five vintage eras**.
+- **N3 — the origination book is not a portfolio.** It is the 500 heaviest age-zero cells ever
+  written, which is a mode: **87.8% rate-term refinance** against Freddie Mac's own 15.6% in
+  2025-26, **0.59% purchase** against 71.1%, no first-time buyers at all against 33.7%, and 95.9% in
+  one credit-score band. Every published lifetime and scenario PD is of that book.
+- **N6 — the safe tail has no floor, and the 2020 cut shows what it costs.** Re-estimated with the
+  shape, over 2021-22 the safest decile records **1,335 defaults against 164 expected, an A/E of
+  8.12** where without the shape it was 2.88. It is 93% vintages 2019-21, 76% in their first year
+  and 90% in the top score band; there the model predicts **0.49 defaults per 100,000 loan-months a
+  month and 5.10 are realised**, and inside the moratorium months the regime indicator takes it
+  eleven times under. A shape near 2 gives the best loans a hazard starting at zero. In aggregate
+  1.4% of that window's defaults -- but it is the PD of the best new production at the moment most of
+  it is written, and it sits below any regulatory floor.
+
+The three medium findings are **N4**, that rule 4's level monitoring is declared and not
+implemented and would already have fired; **N5**, that the regime indicator is one level across
+nineteen months where a moratorium does not suppress defaults the same way in 2020 and in 2021; and
+**N7**, that rule governance is declared and not yet exercised -- the register stops at 17 October
+and contains none of that day's amendments.
+
+### Four numbers reported wrongly, and the table that caused three of them
+
+This round's corrections were not all the validator's. Reading its findings back against the
+committed tables, **the same decile was reported three different ways in one day**, and the cause is
+a published table that does not evaluate the criteria it is named after. `views.build` scores its
+backtest tables from `as_of + 1` -- 2022-01, which is the anchoring window **and** the test window
+together -- on an **unanchored** hazard. So `acceptance_by_segment` carries a `deciles_passed`
+column that reads False where the criterion section 5 declares reads True. The three readings of
+decile 1 are 1.676 in sample, 1.456 on that mixed unanchored window, and **1.150 on the declared
+test window, which is the only one that is a criterion**. Rule 14 meanwhile cited 1.415 and 1.056,
+which belong to a candidate that was not adopted. All four are now sourced in
+[the register](rules_register.md), and the lesson is the one the second round already drew about
+generated artefacts: a number is not interpretable without the model *and the window* it is of.
+
+### Where the work goes
+
+In [the plan](third_round_plan.md), in the order the round set: correct the calculation before
+measuring anything else -- N1, N2, N3 -- then one round of `report`, `windows` and `views`, then the
+age baseline, the regime split, the prepayment rebuild and the declared floor. The rules and the
+register go first, because they cost nothing and because N7 is the finding that says they were not
+being kept.
+
 ## What the next stage closed
 
 Four of the five open items are closed, each by the thing the decision log said would close it.
@@ -177,15 +264,21 @@ Four of the five open items are closed, each by the thing the decision log said 
 | **Payment history** | The state of the month **before** is in the key, since the state during the month is the event by definition | 1,518,761 of 1,671,207 defaults open the month two payments behind |
 
 And the level is anchored on a window of its own, which was the other half of the plan: one
-multiplier of 1.1831 estimated on 2022-01 to 2024-12 takes the test window's actual over
-expected from 1.134 to **0.958** with the Gini untouched at 0.541, because it moves the level
-and nothing else.
+multiplier estimated on 2022-01 to 2024-12 moves the level and nothing else, leaving the Gini
+untouched because a single factor on every hazard cannot change an order.
+
+**The multiplier this paragraph quoted -- 1.1831, taking the test window from 1.134 to 0.958 --
+is of the model at the second round's commit.** The third round found that every anchoring number
+on the record comes from `creditsurv windows`, whose fits carry no shape, so 1.1831 and the 0.9695
+that replaced it on 19 October are both of a specification the configuration does not declare. The
+published model's own multiplier is measured when the shape reaches the campaign, and until then
+no anchored figure here describes it.
 
 ## Still open
 
 | | Why it is open |
 |---|---|
-| **Decile calibration** | Still failing, and now **explained**. The compression was the hazard's **shape**, not the resolution of the bands: letting it read the covariates fixed at origination takes the in-sample deciles from **5 of 10 inside 0.80 to 1.25 to 9 of 10** and flips the cycle criterion from 69.6% of calendar years in band to 73.9%. What remains is decile 1 alone, missing **high** at 1.415, and **83% of that miss is the 2019, 2020 and 2021 originations** -- 17% of the decile's exposure, 34% of its defaults, an actual over expected of 3.413, where every vintage to 2018 reads **1.082**. The cause is structural: those loans stack every favourable reading the model has at once and a **multiplicative hazard has no floor**, so the prediction reaches 1.5 defaults per 100,000 loan-months a month where the book does not go below about 5. A floor takes an additive baseline, which is another family. The exception is bounded at **0.11%** of the in-sample defaults. The resolution hypothesis was tested and is withdrawn: the finer 8 / 8 / 6 grid bought **0.015** on the worst decile for 2.12x the table |
+| **Decile calibration** | Still failing, and now **explained**. The compression was the hazard's **shape**, not the resolution of the bands: letting it read the covariates fixed at origination takes the in-sample deciles from **5 of 10 inside 0.80 to 1.25 to 9 of 10** and flips the cycle criterion from 69.6% of calendar years in band to 73.9%. What remains is decile 1 alone, missing **high** at 1.676 in sample for the published fit `bc016657b2b40bfc` -- though not on the declared test window, where it reads 1.150 and all ten deciles hold -- and **83% of that miss is the 2019, 2020 and 2021 originations** -- 17% of the decile's exposure, 34% of its defaults, an actual over expected of 3.413, where every vintage to 2018 reads **1.082**. The cause is structural: those loans stack every favourable reading the model has at once and a **multiplicative hazard has no floor**, so the prediction reaches 1.5 defaults per 100,000 loan-months a month where the book does not go below about 5. A floor takes an additive baseline, which is another family. The exception is bounded at **0.11%** of the in-sample defaults. The resolution hypothesis was tested and is withdrawn: the finer 8 / 8 / 6 grid bought **0.015** on the worst decile for 2.12x the table |
 | **The level across regimes** | Actual over expected runs 0.458, 0.823 and 1.420 across the three declared cuts, in opposite directions. This is the identification restriction, not a fit: `period = cohort + age` holds identically, so calendar time enters only through six macro covariates, and a regime driven by another channel -- a moratorium suppressing the event in 2019-20, affordability in 2023-24 -- mis-levels the model. The anchoring is the declared remedy and it works on the window it is estimated on; by construction it cannot cover a regime it has not seen |
 | **Point-in-time macro** | FRED serves revised series. ALFRED's vintages were attempted and need an API key, so the limit is documented rather than closed |
 
