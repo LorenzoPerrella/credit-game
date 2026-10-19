@@ -18,7 +18,7 @@ import pandas as pd
 from creditsurv.backtest.runner import ACCEPTANCE
 from creditsurv.models.aft import coefficient_table
 from creditsurv.names import term_label
-from creditsurv.reporting.builder import Report, provenance
+from creditsurv.reporting.builder import Report, provenance, specification
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -37,6 +37,12 @@ class Outcome:
     coefficients: pd.DataFrame
     backtest: dict[str, object]
     acceptance: pd.DataFrame
+    #: The specification each policy was fitted under. Both policies fit the same one --
+    #: the comparison is of the dependent variable, not of the model -- so a report that
+    #: states it once states it for both, and a report that states it never cannot be
+    #: told from one of a model that no longer exists.
+    formula: str = ""
+    ancillary: str | bool | None = None
 
 
 def outcome(policy: str, split: Split, fitted: FitResult, result: BacktestResult) -> Outcome:
@@ -45,6 +51,8 @@ def outcome(policy: str, split: Split, fitted: FitResult, result: BacktestResult
         policy=policy,
         panel=split.describe(),
         coefficients=coefficient_table(fitted),
+        formula=fitted.formula,
+        ancillary=getattr(fitted, "ancillary", None),
         backtest=result.summary(),
         acceptance=ACCEPTANCE.assess(result),
     )
@@ -122,6 +130,7 @@ The largest move is in *{term_label(str(largest["covariate"]))}*:
             [
                 "`uv run creditsurv aggregate --moratorium exclude` and `--moratorium censor`",
                 "`uv run creditsurv moratorium`",
+                *specification(exclude.formula, exclude.ancillary),
             ]
         )
     )

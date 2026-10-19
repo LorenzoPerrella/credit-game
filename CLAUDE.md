@@ -142,6 +142,32 @@ Nothing new is stored for it.
   derivation for that reason. A **decile** is the exception: it needs the whole distribution,
   so its boundaries come off a weighted histogram of the log hazard in a pass of its own, land
   within a bin of the true quantile, and cannot split a tie.
+**Every command that fits has to be handed the shape, and one was not.** Rule 14 makes the
+ancillary formula part of the specification, so `report`, `views` and `select` pass
+`default_shape()` -- and `windows` did not, because `backtest/campaign.py` never threaded it into
+`fit_streamed` or into `fit_description`. Four fits a campaign, all scalar-shape, and every
+published out-of-sample number was of them: the three regime cuts, the anchoring multiplier, the
+master scale. The evidence is two cached descriptions differing in exactly one key on identical
+rows, **27.1 minutes against 5.2**. It went unseen because `FitResult` carried no `ancillary`
+field, so **no report stated its shape and no test could compare one** -- the freshness test
+added the week before covered three reports of eleven and compared the scale formula alone. The
+campaign now fits through `read_cells` + `fit_encoding`, because `fit_streamed` stores a design
+and **refuses a shape that reads covariates**; `reporting.builder.specification()` writes
+`Formula:`, `Shape:` and `Generated:` on every report; and `tests/test_site.py` holds every
+report a reporting module writes, with an exemption keyed to the `Generated:` line so it retires
+itself the moment a report is regenerated.
+
+**And a table named for a criterion has to evaluate that criterion.** `views.build` scored its
+backtest tables from `as_of + 1` -- 2022-01, the anchoring window **and** the test window
+together -- on an **unanchored** hazard, while rule 1 reserves the anchoring window for the level
+"and nothing else" and begins the test window at 2025-01. So `acceptance_by_segment` published a
+`deciles_passed` column reading False at a worst decile of **1.456** where the declared criterion
+reads True at **1.150**, and the same decile got read three ways in one day: 1.676 in sample,
+1.456 on that mixed window, 1.150 anchored on the declared one. **A number is not interpretable
+without the model *and* the window it is of.** Rule 5's out-of-sample age-band criterion was in
+the same state from the other side -- declared on 17 October with nothing in the package able to
+compute it, now one further view off the in-sample grouper.
+
 - **A cached fit is searchable.** The fingerprint hashes the row counts, so naming a fit meant
   expanding the rows to count them -- to find the model that would have scored them.
   `find_fits(**criteria)` reads the descriptions written beside the pickles instead, and tells
@@ -149,8 +175,19 @@ Nothing new is stored for it.
 - **A window is read, not filtered.** `load_cells_window` selects on the observation month,
   which is `origination_month + age` and therefore not a column parquet can be asked about by
   name; DuckDB evaluates it while reading. Two years of observation are about 3% of the table,
-  and `outcomes_by_age` and `load_largest_cells` do the same for a non-parametric curve and
-  for the origination profiles.
+  and `outcomes_by_age`, `load_largest_cells` and `load_originations` do the same for a
+  non-parametric curve, for the heaviest profiles and for a declared book.
+- **The projection book is a declared window, and the old one was a mode.** `BOOK_WINDOW_MONTHS`
+  is twelve, the book is **every** origination of the year ending at the reporting date at the
+  weight it carries -- 20,465 profiles standing for 4.1 million loans, read in 1.3 s -- and
+  nothing is ordered or truncated. It was the 500 heaviest age-zero cells ever written, which
+  against the window's own lending is **0.6% purchase where the book is 32.2%**, 87.8% rate-term
+  refinance where it is 41.4%, and **no first-time buyers and no investors at all** where the
+  window is 13.0% and 4.6%. Every published lifetime and scenario PD was of that.
+  **And dating a book takes three columns**: `origination_book` set `period` and left
+  `origination_period`, which `add_macro_covariates` reads separately, so every change since
+  origination spanned twenty years in a book said to have been written this month -- visible in
+  the published table as **five vintage eras** in a one-month book.
 - Aggregation peaks at ~11.3 GB, concatenating and writing the table. One heavy job at a
   time.
 - A successful fit is saved to `data/processed/fits/<hash>.pickle` the moment it

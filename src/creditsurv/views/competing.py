@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from creditsurv.backtest.metrics import grade_backtest, master_scale_passed
+from creditsurv.backtest.metrics import GRADE_TOLERANCE, grade_backtest, master_scale_passed
 from creditsurv.config import CAUSES, DEFAULT_CAUSE
 from creditsurv.data.panel import AGE, WEIGHT, ended_in
 from creditsurv.models.nonparametric import cumulative_incidence, predicted_incidence_curve
@@ -132,8 +132,9 @@ def grade_view(
         "pd_by_grade",
         "Twelve-month PD by grade",
         "Eight grades on geometric thresholds of predicted twelve-month PD, each floor "
-        "twice the one before. A grade passes when its predicted PD falls inside the 95% "
-        f"Jeffreys interval around what its loans did. The scale "
+        f"twice the one before. A grade passes when its predicted PD is within "
+        f"{GRADE_TOLERANCE:.0%} of what its loans did, with the magnitude of every miss "
+        "published beside it and the Jeffreys interval it replaced beside that. The scale "
         f"{'passes' if passed else 'fails'}: "
         f"{int(table['passed'].sum())} of {len(table)} populated grades hold.",
         table,

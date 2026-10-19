@@ -33,12 +33,12 @@ import pandas as pd
 
 from creditsurv.backtest.metrics import cycle_in_band, grade_backtest
 from creditsurv.backtest.runner import ACCEPTANCE, predicted_hazard, score
-from creditsurv.config import DISTRIBUTION, MACRO_CANDIDATES
+from creditsurv.config import DISTRIBUTION, MACRO_CANDIDATES, PROTECTED_MACRO
 from creditsurv.data.panel import WEIGHT, cells_to_episodes, ended_in, month_ordinal
-from creditsurv.data.store import fit_fingerprint, load_cells_window, save_fit
-from creditsurv.models.aft import fit_streamed
+from creditsurv.data.store import cells_identity, fit_fingerprint, load_cells_window, save_fit
+from creditsurv.models.aft import fit_encoding
 from creditsurv.models.anchoring import anchor_on_window
-from creditsurv.models.fits import cell_source, fit_description
+from creditsurv.models.fits import cell_source, fit_description, read_cells
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -88,8 +88,17 @@ def run_campaign(
     development_cut: pd.Period,
     anchor_window: tuple[str, str],
     block_rows: int,
+    shape: str | None = None,
 ) -> Campaign:
-    """Fit at each declared cut, score the months after it, then anchor and grade."""
+    """Fit at each declared cut, score the months after it, then anchor and grade.
+
+    ``shape`` is the ancillary formula rule 14 declares, and leaving it out is what the third
+    validation round found: every number this campaign published -- the three cuts, the anchoring
+    multiplier, the master scale -- was of a **scalar-shape** model, because the shape was never
+    passed on. The two fits differ in nothing else, on identical rows, and differ in cost by a
+    factor of five: 27.1 minutes against 5.2. It defaults to ``None`` so a fixture can still run
+    the campaign on the scale alone; the command passes ``config.default_shape()``.
+    """
     first, last = anchor_window
     rows: list[dict[str, object]] = []
     criteria: list[pd.DataFrame] = []
@@ -103,6 +112,7 @@ def run_campaign(
             moratorium=moratorium,
             covariates=covariates,
             formula=formula,
+            ancillary=shape,
             macro=macro,
             block_rows=block_rows,
         )
@@ -140,6 +150,7 @@ def run_campaign(
         moratorium=moratorium,
         covariates=covariates,
         formula=formula,
+        ancillary=shape,
         macro=macro,
         block_rows=block_rows,
     )
@@ -222,25 +233,57 @@ def _fitted_to(
     moratorium: str,
     covariates: Sequence[str],
     formula: str,
+    ancillary: str | None,
     macro: pd.DataFrame,
     block_rows: int,
 ) -> FitResult:
-    """The model estimated on everything up to ``cut``, read from the cell file and saved."""
+    """The model estimated on everything up to ``cut``, read from the cell file and saved.
+
+    ``ancillary`` goes to the fit **and** to the description. Passing it to only the fit would
+    save a shaped model under an unshaped fingerprint, which is worse than not passing it at
+    all: the artefact would then claim to be a model it is not, where today it merely is one.
+
+    **It does not read the cache, and the saving that looked available is not there.** With the
+    shape threaded the development cut's fingerprint coincides with the one `report` writes, so
+    reusing it looked like 27 minutes free. Two things against it. The fingerprint covers the
+    panel's row count and not its contents, which is why reuse is opt-in in `report` and would
+    be a silent correctness question here. And the 27 minutes is `report`'s **cold** fit: this
+    one is warm-started from the cut before, so it is a few Newton steps. A saving measured on
+    the wrong fit, bought with a cache rule this project deliberately does not have.
+    """
     source = cell_source(
         moratorium, macro, covariates, block_rows=block_rows, until=month_ordinal(cut)
     )
-    result = fit_streamed(
+    # The calendar side is every covariate that is a function of the month, which is the macro
+    # candidates **and** the protected block: the selection declares it that way
+    # (`cli.select`) and this path declared it without the protected names, so the moratorium
+    # indicator -- a pure function of the observation month -- landed on the loan side. The
+    # arithmetic survives it, because each row's loan index encodes its own value; what does
+    # not survive is one specification being declared two ways in two paths.
+    calendar = [name for name in covariates if name in MACRO_CANDIDATES or name in PROTECTED_MACRO]
+    loan = [name for name in covariates if name not in set(calendar)]
+    # **Through the encoding, not through `fit_streamed`.** The streamed path stores a design and
+    # reads the shape's coefficient straight out of the parameter vector, so it refuses a shape
+    # that reads covariates -- which is how this command came to be the one place in the project
+    # still fitting a scalar one. The encoding is the better half of the deal anyway: no formula
+    # is involved in it, so it is written once per table and window and mapped back in 0.4
+    # seconds, and the design is then two tables built from the keys.
+    encoding = read_cells(
         source,
+        loan=loan,
+        calendar=calendar,
+        identity=cells_identity(moratorium),
+        moratorium=moratorium,
+        as_of=str(cut),
+    )
+    result = fit_encoding(
+        encoding,
         covariates,
         formula,
         distribution=DISTRIBUTION,
-        weights_col=WEIGHT,
+        ancillary=ancillary,
+        # Each cut is warm-started from the one before, so this is a few Newton steps.
         initial_point=None if start is None else start.fitter.params_,
-        # One process, because the written-out likelihood needs no more: fifteen bytes a row
-        # puts the whole window under a gigabyte. Each cut is warm-started from the one
-        # before, so this is a few Newton steps at 39 seconds a Hessian.
-        workers=1,
-        calendar=[name for name in covariates if name in MACRO_CANDIDATES],
     )
     record = result.blocks
     assert record is not None
@@ -250,6 +293,7 @@ def _fitted_to(
         as_of=str(cut),
         moratorium=moratorium,
         distribution=DISTRIBUTION,
+        ancillary=ancillary,
     )
     save_fit(
         result, fit_fingerprint(**described), {**described, "minutes": result.elapsed_seconds / 60}

@@ -22,6 +22,7 @@ here is the default model, which is what the rule is about.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -33,7 +34,7 @@ from creditsurv.models.selection import (
     family_by_the_rule,
     family_comparison,
 )
-from creditsurv.reporting.builder import Report, provenance
+from creditsurv.reporting.builder import Report, provenance, specification
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -45,13 +46,20 @@ def generate(
     signs: Mapping[str, Sequence[str]],
     *,
     formulas: Mapping[str, str],
+    shapes: Mapping[str, str | bool | None] | None = None,
     reports_dir: Path,
 ) -> tuple[str, Path]:
     """Write ``family.md``, and return the family the rule chose.
 
     ``gaps`` maps each family to the table :func:`creditsurv.models.nonparametric.incidence_gap`
     produced for its selected model, ``signs`` to the covariates that model turns against a
-    declared prior, and ``formulas`` to what each selection ended on.
+    declared prior, ``formulas`` to what each selection ended on, and ``shapes`` to the ancillary
+    formula each was fitted with.
+
+    This report shows each family's formula as a **table column**, which reads well and is
+    invisible to a freshness check looking for a provenance line -- so the two reports with no
+    `Formula:` line were this one and `windows.md`, and both drifted. The provenance now names
+    both formulas per family, one line each, and the date.
     """
     reports_dir.mkdir(parents=True, exist_ok=True)
     comparison = family_comparison(gaps, signs)
@@ -102,6 +110,15 @@ other.
         provenance(
             [
                 "`uv run creditsurv select --dist weibull` and `--dist loglogistic`",
+                *[
+                    line
+                    for name in sorted(formulas)
+                    for line in [
+                        f"{name} -- "
+                        + "; ".join(specification(formulas[name], (shapes or {}).get(name))[:2])
+                    ]
+                ],
+                f"Generated: {date.today().isoformat()}",
                 "Rule: `docs/rules.md`, section 2",
                 "Applied by: `creditsurv.models.selection.family_by_the_rule`",
             ]

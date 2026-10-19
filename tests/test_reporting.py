@@ -228,9 +228,13 @@ def test_time_varying_covariates_have_a_marginal_effect(
     panel, _ = build_panel(book_dir, macro_module, n_loans=600, seed=13, params=params)
     fitted = fit_aft(to_interval_censored(panel), covariates, " + ".join(covariates))
 
+    # All three columns, for the reason `origination_book` now carries: `period` alone leaves
+    # the gap covariates measuring a change from the month a loan was really written, in a book
+    # that is supposed to have been written today.
     book = at_origination(panel).head(150).copy()
     book["age"] = 0
     book["period"] = macro_module.index.max() + 1
+    book["origination_period"] = macro_module.index.max() + 1
 
     effects = marginal_effects(
         fitted, book, macro_module, covariates, [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS]
@@ -272,9 +276,13 @@ def test_a_macro_level_moves_by_its_deviation_in_the_fitting_data(
     encoded = to_interval_censored(panel)
     fitted = fit_aft(encoded, covariates, " + ".join(covariates))
 
+    # All three columns, for the reason `origination_book` now carries: `period` alone leaves
+    # the gap covariates measuring a change from the month a loan was really written, in a book
+    # that is supposed to have been written today.
     book = at_origination(panel).head(150).copy()
     book["age"] = 0
     book["period"] = macro_module.index.max() + 1
+    book["origination_period"] = macro_module.index.max() + 1
 
     steps = covariate_steps(encoded, covariates)
     effects = marginal_effects(

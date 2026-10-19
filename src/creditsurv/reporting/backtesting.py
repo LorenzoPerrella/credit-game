@@ -9,7 +9,7 @@ import pandas as pd
 from creditsurv.backtest.metrics import covered_months
 from creditsurv.backtest.runner import ACCEPTANCE
 from creditsurv.reporting import charts
-from creditsurv.reporting.builder import Report, provenance
+from creditsurv.reporting.builder import Report, provenance, specification
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -18,8 +18,20 @@ if TYPE_CHECKING:
     from creditsurv.backtest.splits import Split
 
 
-def generate(split: Split, result: BacktestResult, *, formula: str, reports_dir: Path) -> Path:
-    """Write ``backtesting.md`` and its figure."""
+def generate(
+    split: Split,
+    result: BacktestResult,
+    *,
+    formula: str,
+    shape: str | bool | None,
+    reports_dir: Path,
+) -> Path:
+    """Write ``backtesting.md`` and its figure.
+
+    ``shape`` travels beside ``formula`` for the same reason and from the same caller: this
+    report holds no fit of its own, and a report that states only the scale cannot be told
+    from one of a model with no shape.
+    """
     figures = reports_dir / "figures"
     report = Report(
         "Backtesting",
@@ -190,8 +202,9 @@ competing risk, and the direction of the bias is upward on lifetime PD.
         provenance(
             [
                 "`uv run creditsurv report`",
-                # See the same line in `calibration.py`: a report has to name its own model.
-                f"Formula: `{formula}`",
+                # See the same lines in `calibration.py`: a report has to name its own model,
+                # and the shape is half of what the model is.
+                *specification(formula, shape),
                 f"Reporting date: {result.as_of}",
                 f"Training exposure: {split.describe()['train_loan_months']:,} loan-months",
                 f"Test exposure: {result.loan_months:,} loan-months",

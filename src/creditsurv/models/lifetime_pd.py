@@ -251,22 +251,61 @@ def incidence_term_structure(paths: CompetingPaths, cause: str = "default") -> p
     )
 
 
-def origination_book(encoded: pd.DataFrame, macro: pd.DataFrame, size: int) -> pd.DataFrame:
-    """The commonest origination profiles, as a book to be scored from today.
+def origination_book(
+    encoded: pd.DataFrame, macro: pd.DataFrame, size: int | None = None
+) -> pd.DataFrame:
+    """The origination profiles of a book, dated to today so they can be scored forward.
 
-    Calibration asks what the regressors are worth on a book, so the book has to be
-    one that exists. Cells at age zero are exactly the origination profiles the
-    portfolio was written in, and their counts say how much of it each accounts for
-    -- so the largest ``size`` of them, carried with their weights, describe the book
-    far better than the same number of individual loans drawn arbitrarily.
+    Calibration asks what the regressors are worth on a book, so the book has to be one that
+    exists. Cells at age zero are exactly the origination profiles a portfolio was written in,
+    and their weights say how much of it each accounts for.
+
+    ``size`` truncates to the heaviest profiles and **should be left out**. It was 500 by
+    default, and the third validation measured what that produced: against the lending actually
+    written in the window, the heaviest 500 profiles ever written were 0.6% purchase where the
+    book is 32.2%, 87.8% rate-term refinance where it is 41.4%, and **no first-time buyers and
+    no investors at all** where the book is 13.0% and 4.6%. A mode is not a portfolio. Pass the
+    originations of a declared window -- :func:`creditsurv.data.store.load_originations` -- and
+    no ``size``: on the production table that is 20,465 cells standing for 4.1 million loans,
+    read in 1.3 seconds, so there was never anything to buy by truncating.
+
+    The argument it rested on, that a few hundred weighted profiles "describe the book far
+    better than the same number of individual loans drawn arbitrarily", was true and answered
+    the wrong question: the alternative to a biased summary is the whole window, not a smaller
+    sample of it.
 
     They are then dated to the present: age zero at the last macro period, which asks
     what these profiles would be worth if written today rather than replaying the
     history they were actually written in.
+
+    **Dating a book takes three columns and this set one.** Until 19 October 2026 it set
+    ``period`` and left ``origination_period``, which :func:`features.add_macro_covariates`
+    reads as a separate column -- so every *change since origination* covariate was measured
+    from the month the profile was really written to the projected month, twenty years in some
+    cases, in a book whose docstring said it had been written this month. ``ltv_change`` and
+    ``unemployment_change`` are zero at origination by construction and were not zero here.
+
+    The published figures computed on it are the site's headline 12-month PD, both lifetime
+    PDs, the adverse multiple and every row of the calibration report's term structure. The
+    proof that it was wrong is in the published table: a book written in one future month
+    showed **five vintage eras**, weighted 868,565 / 49,918 / 1,113,551 / 7,892 / 1,524,681,
+    because the segment that opens a book by vintage reads the same untouched column.
+
+    ``age = 0`` and ``period = origination_period`` are the same statement twice, since
+    ``period = cohort + age`` holds identically -- which is why the fixture in
+    `tests/test_lifetime_pd.py` always set all three and this function is that code with one
+    line missing.
     """
-    book = encoded.loc[encoded[AGE] == 0].nlargest(size, WEIGHT).reset_index(drop=True)
-    book[AGE] = 0
-    book["period"] = macro.index.max() + 1
+    at_zero = encoded.loc[encoded[AGE] == 0]
+    book = (at_zero if size is None else at_zero.nlargest(size, WEIGHT)).reset_index(drop=True)
+    today = macro.index.max() + 1
+    book["period"] = today
+    book["origination_period"] = today
+    # The raw ordinal the cells carry through `cells_to_episodes` moves with it, or
+    # `origination_months` and `origination_period` disagree about the same book and whichever
+    # a caller happens to read decides the answer.
+    if "origination_month" in book.columns:
+        book["origination_month"] = today.year * 12 + (today.month - 1)
     # Named here rather than left to the projection, because the weights have to be
     # indexed by the same label the scored results come back under.
     book[LOAN_ID] = [f"row_{index:09d}" for index in range(len(book))]

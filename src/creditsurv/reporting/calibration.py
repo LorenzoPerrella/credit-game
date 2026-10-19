@@ -36,7 +36,7 @@ from creditsurv.models.lifetime_pd import (
 )
 from creditsurv.models.selection import EXPECTED_SIGNS
 from creditsurv.reporting import charts
-from creditsurv.reporting.builder import Report, provenance
+from creditsurv.reporting.builder import Report, provenance, specification
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -359,11 +359,13 @@ the question.
         provenance(
             [
                 "`uv run creditsurv report`",
-                # The formula, because a generated report that does not name the model it
-                # describes cannot be told from one describing a model that no longer exists --
-                # which is how three of them sat in the site's navigation for a month.
-                # `tests/test_site.py` holds this line to `config.default_formula()`.
-                f"Formula: `{formula}`",
+                # The formula, the shape and the date, because a generated report that does not
+                # name the model it describes cannot be told from one describing a model that no
+                # longer exists -- which is how three of them sat in the site's navigation for a
+                # month -- and a report naming only the scale cannot be told from one fitted
+                # without the shape, which is how `windows.md` published four of those.
+                # `tests/test_site.py` holds these lines to `config`.
+                *specification(formula, getattr(fitted, "ancillary", None)),
                 f"Distribution: {fitted.distribution}; likelihood: {fitted.likelihood.value}",
                 f"Book scored: {len(loans):,} rows"
                 + ("" if weights is None else f" standing for {weights.sum():,.0f} loans")
