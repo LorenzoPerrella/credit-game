@@ -528,3 +528,131 @@ scores 2025 onwards, where the young loans are the 2022 to 2024 originations. Th
 therefore **predicts** that an out-of-time decile 1 will under-predict too, and says so before the
 window is read rather than after.
 
+
+### The document splits, and five amendments that were made the same day
+
+Entered **19 October 2026**, two days late, and the lateness is itself the finding. The second
+validation's remedy C5 was that an amendment to an acceptance criterion needs a second signatory and
+a dated entry here; the amendments below were made on 17 October in commit `dc0dec4` and **none of
+them was entered**. By this document's own rule they were inadmissible for two days, including the
+25% tolerance that the third validation then found the code had never adopted. A register nobody
+writes to is a governance control that exists only in prose.
+
+**What was amended on 17 October 2026, before the selection and the fits it governs:**
+
+- **Rule 1 — a moratorium regime indicator**, 2020-03 to 2021-09, in the *protected* block rather
+  than among the candidates. Its purpose is to absorb the moratorium so the macro coefficients read
+  cleanly, not to test whether it belongs -- the argument rule 8 already makes for `harp`. Measured
+  to cost **zero cells**, because it is built after aggregation from the observation month, and
+  measured not to split a calendar key, because the level-form candidates already pin the month
+  down.
+- **Rule 4 — the level is monitored, because one multiplier cannot correct a slope.** The anchored
+  **monthly** actual over expected falls from **1.386 in January 2025 to 0.771 in March 2026**, with
+  the last month already outside a band the overall figure passes at 0.959; by vintage, anchored,
+  2022 reads 1.49 and 2023 reads 1.31 while 2005-2007 read 0.46 to 0.54. So the monthly figure is
+  published beside the overall one, and a six-month rolling ratio outside **0.90 to 1.10 for three
+  consecutive months** triggers a re-anchoring -- a new multiplier on a new window, recorded with its
+  date, never a coefficient change.
+- **Rule 5 — the Jeffreys interval is replaced by a 25% relative tolerance, and four criteria are
+  added**: out-of-sample calibration by age band, cumulative PD by vintage, a backtest on *forecast*
+  macro, and the monthly level figure. See the 19 October entry below for what the replacement cost
+  and when it was ratified.
+- **Rule 7 — the order was broken once, and saying so is the correction.** Raising the ceiling to
+  admit the finer bands first did reorder the give-up list, and the earlier text's claim that it
+  "reorders nothing" is the inverse of what the order means.
+- **Rule 10 — split in two rather than forbidding both cases.** The payment state stays out of the
+  *origination* model, on the behavioural-score argument, measured at 28.45% monthly for a loan two
+  payments behind. A module conditioned on the state at the *valuation date* is permitted and
+  declared out of current scope, because conditioning does not require projecting. The scope is
+  performing pools, **not** the ECL of past-due credits.
+- **Rule 15 — an expected sign for every candidate, or it is not one.** Declared because the
+  selection's strongest filter is the sign against the prior, and four of the six macro covariates
+  in the published model carried none. Applied uniformly to all fifteen: four gained a sign, five
+  lost candidacy, three of those five the selection had already eliminated on its own. It takes
+  effect at the next selection, not before, because `TIME_VARYING_CONTINUOUS` is the selection's
+  output and `MACRO_CANDIDATES` its input and a test holds the first inside the second.
+- **Rule 16 — the baseline along age may be flexible**, under two conditions declared before the
+  fit: one basis column dropped for the collinearity with `rho * log t`, and `g(log t)` checked for
+  monotonicity over the ages carrying exposure. Admissible where rule 14 appears to forbid it
+  because a basis in log(age) in the *scale* block is a single monotone-if-checked function of time
+  per loan, which `exp(rho(t) * (log t - log lambda))` is not.
+
+## 19 October 2026
+
+### Rule 14 — The citation was of another model, so a confirmed prediction was recorded as retracted
+
+The third independent validation found that `docs/reports/windows.md` measures a **scalar-shape**
+model, because `backtest/campaign.py` never passes the ancillary formula to its fits. Checking which
+numbers in this document are of which model found that rule 14's exception paragraph was one of them.
+
+**What it said.** Decile 1 at 1.415 in sample, and "out of sample it does not recur: decile 1 reads
+1.056". Both figures are of the **log-logistic candidate**, the cell of the grid recorded above --
+not of the Weibull the family rule keeps.
+
+**What the published model reads**, fit `bc016657b2b40bfc`, on three windows -- which is the whole
+difficulty, because the three were read interchangeably:
+
+| window | anchored | decile 1 | deciles in band |
+|---|---|---|---|
+| development, in sample (`ae_by_decile`) | n/a | **1.676** | 9 of 10 |
+| 2022-01 onwards (`backtest_by_decile`) | no | **1.456** | 9 of 10 |
+| **the declared test window** (section 1) | **yes** | **1.150** | **10 of 10**, 0.803 to 1.150 |
+
+Only the third is a criterion of this project, and on it the published model **passes**, with 8 of 8
+grades inside section 5's tolerance. So the exception does not transfer and does not need to: the
+bound of 1.415 it was granted is not honoured in sample by the configured model, which reads 1.676.
+
+**A defect of the same class falls out of the second row.** `views.build` scores its "backtest"
+tables from `as_of + 1`, which is 2022-01 -- the **anchoring window and the test window together**,
+on an **unanchored** hazard. Section 1 declares the anchoring window to be for the level adjustment
+"and nothing else" and the test window to begin 2025-01. So `acceptance_by_segment`, published under
+that name with a `deciles_passed` column, **does not evaluate the criteria it is named after**, and
+reads False where the declared criterion reads True. Two of the three corrections this register
+records today are of numbers read off that table.
+
+**And where the exception does recur is the 2020 cut, eightfold.** Re-estimated with the shape, over
+2021-22 the safest decile records **1,335 defaults against 164 expected -- A/E 8.12**, against 2.88
+without the shape. 93% vintages 2019-21, 76% in the first year of life, 90% in the top score band;
+the model predicts **0.49 defaults per 100,000 loan-months a month where 5.10 are realised**, and
+inside the moratorium months the regime indicator takes it eleven times under. In aggregate 1.4% of
+that window's defaults, and it is the PD of the best new production at the moment most of it is
+written. A shape near 2 gives the best loans a hazard starting at zero: the mechanism is the one the
+17 October cross named, and it is confirmed on a window that cross never saw.
+
+**What the correction leaves standing** is an input to rule 2's comparison, still owed under the
+bands, and a label: nothing is "called selected" before that comparison, yet the specification is in
+the configuration and in every view on the site with nothing saying it is provisional.
+
+### Rule 5 — The 25% tolerance is ratified, and two of its numbers were of other models
+
+**Ratified 19 October 2026**, on the second signature C5 requires. What settles it is not the
+argument but the arithmetic: on the one grade table published at that date the tolerance passes
+**six of eight** grades against Jeffreys' **one of eight**, and the master scale, which allows at
+most one failure, **fails either way**. An amendment that cannot turn a failure into a pass is
+admissible on its argument; one that could would not be, whatever the argument. The Jeffreys bounds
+stay as published columns.
+
+The misses, for the record: +5.3%, +15.0%, +36.7%, +26.3%, +9.3%, -4.4%, -5.5%, +21.0%, with grades
+3 and 4 out under both criteria. These are of the **unshaped** fit, because that is the only grade
+table that exists; the published model's scale is measured when the shape reaches the campaign.
+
+**Two numbers in this rule were of other models and are replaced.** The per-grade profile it quoted
+(+89%, +31%, +43%, +23%, +6%, -6%, -7%, +3%) matches no run on the record. And the age-band bullet
+quoted "2 of 7 out of sample against 5 of 7 in sample": the first is the second validation's reading
+of the scalar-shape model, the second is wrong for the published model, which holds **6 of 7** in
+sample with only the first year out at 0.727.
+
+**And the criterion could not be evaluated.** `views.backtest_views` emits months, deciles and the
+acceptance table and nothing by age, so an out-of-sample age-band criterion was declared in this rule
+on 17 October with nothing in the package able to measure it. One further view fixes it, built from
+`age_bands` exactly as the in-sample one is. A declared criterion that nothing computes is the same
+defect as a rule nobody enters here, in the other half of the system.
+
+### Rule 16 — The rule rests on a defect measured on a predecessor, and says so
+
+The flexible baseline was declared on "2 of 7 age bands out of sample", which the entry above places
+on the scalar-shape model. The published model's out-of-sample age profile is not measured at all,
+and in sample it holds 6 of 7. The rule is **kept** -- the argument for why *when* matters as much as
+*how much* in a lifetime PD does not depend on the count -- but the branch implementing it now owes
+that table first: if the first year is the only band out, the remedy is narrower than a free
+baseline in log-time, and the rule should say so before the fit rather than after.
