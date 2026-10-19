@@ -20,49 +20,48 @@ what it is.
 
 | Parameter | Covariate | Coefficient | Standard error | Time ratio | Lower 95% | Upper 95% | p-value |
 |---|---|---|---|---|---|---|---|
-| Scale | Intercept | 7.8824 | 0.0107 | 2650.1907 | 7.8615 | 7.9033 | 0.0000 |
-| Scale | Moratorium regime | 0.4607 | 0.0032 | 1.5851 | 0.4544 | 0.4669 | 0.0000 |
-| Scale | Loan-to-value change since origination | -0.0193 | 5.92e-05 | 0.9809 | -0.0194 | -0.0192 | 0.0000 |
+| Scale | Intercept | 7.8818 | 0.0106 | 2648.7656 | 7.8610 | 7.9027 | 0.0000 |
+| Scale | Moratorium regime | 0.4606 | 0.0032 | 1.5851 | 0.4544 | 0.4669 | 0.0000 |
+| Scale | Loan-to-value change since origination | -0.0193 | 5.91e-05 | 0.9809 | -0.0194 | -0.0192 | 0.0000 |
 | Scale | Unemployment change since origination | -0.0774 | 0.0004 | 0.9255 | -0.0781 | -0.0767 | 0.0000 |
 | Scale | Financial conditions | -0.1115 | 0.0009 | 0.8945 | -0.1132 | -0.1098 | 0.0000 |
 | Scale | Consumer sentiment | 0.0030 | 7.78e-05 | 1.0030 | 0.0029 | 0.0032 | 0.0000 |
 | Scale | Original term | -0.0435 | 0.0003 | 0.9574 | -0.0441 | -0.0430 | 0.0000 |
-| Scale | C(credit score, Treatment(790.0))[T.620.0] | -0.7123 | 0.0036 | 0.4905 | -0.7194 | -0.7052 | 0.0000 |
-| Scale | C(credit score, Treatment(790.0))[T.680.0] | -0.4786 | 0.0036 | 0.6197 | -0.4857 | -0.4715 | 0.0000 |
-| Scale | C(credit score, Treatment(790.0))[T.720.0] | -0.3118 | 0.0037 | 0.7321 | -0.3192 | -0.3045 | 0.0000 |
-| Scale | C(credit score, Treatment(790.0))[T.750.0] | -0.1735 | 0.0046 | 0.8407 | -0.1826 | -0.1644 | 2.83e-306 |
-| Scale | C(original ltv, Treatment(50.0))[T.75.0] | -0.2561 | 0.0025 | 0.7741 | -0.2610 | -0.2511 | 0.0000 |
-| Scale | C(original ltv, Treatment(50.0))[T.85.0] | -0.2025 | 0.0088 | 0.8167 | -0.2198 | -0.1853 | 3.33e-117 |
-| Scale | C(original ltv, Treatment(50.0))[T.95.0] | -0.3035 | 0.0088 | 0.7382 | -0.3207 | -0.2862 | 1.17e-260 |
-| Scale | C(debt to income, Treatment(19.0))[T.32.0] | -0.1714 | 0.0032 | 0.8425 | -0.1776 | -0.1651 | 0.0000 |
+| Scale | C(credit score, Treatment(790.0))[T.620.0] | -0.7123 | 0.0036 | 0.4905 | -0.7194 | -0.7053 | 0.0000 |
+| Scale | C(credit score, Treatment(790.0))[T.680.0] | -0.4786 | 0.0036 | 0.6196 | -0.4857 | -0.4715 | 0.0000 |
+| Scale | C(credit score, Treatment(790.0))[T.720.0] | -0.3119 | 0.0037 | 0.7321 | -0.3192 | -0.3045 | 0.0000 |
+| Scale | C(credit score, Treatment(790.0))[T.750.0] | -0.1736 | 0.0046 | 0.8407 | -0.1826 | -0.1645 | 1.5e-306 |
+| Scale | C(original ltv, Treatment(50.0))[T.75.0] | -0.2561 | 0.0025 | 0.7741 | -0.2610 | -0.2512 | 0.0000 |
+| Scale | C(original ltv, Treatment(50.0))[T.85.0] | -0.2027 | 0.0088 | 0.8165 | -0.2200 | -0.1855 | 1.55e-117 |
+| Scale | C(original ltv, Treatment(50.0))[T.95.0] | -0.3039 | 0.0088 | 0.7380 | -0.3211 | -0.2867 | 1.08e-262 |
+| Scale | C(debt to income, Treatment(19.0))[T.32.0] | -0.1713 | 0.0032 | 0.8425 | -0.1776 | -0.1651 | 0.0000 |
 | Scale | C(debt to income, Treatment(19.0))[T.39.5] | -0.3002 | 0.0031 | 0.7407 | -0.3063 | -0.2941 | 0.0000 |
-| Scale | C(debt to income, Treatment(19.0))[T.49.0] | -0.4025 | 0.0029 | 0.6686 | -0.4083 | -0.3968 | 0.0000 |
-| Scale | Loan purpose: Cash-out refinance (against Purchase) | -0.2660 | 0.0028 | 0.7664 | -0.2715 | -0.2606 | 0.0000 |
-| Scale | Loan purpose: Rate-and-term refinance (against Purchase) | -0.0903 | 0.0029 | 0.9137 | -0.0960 | -0.0845 | 8.75e-207 |
-| Scale | Occupancy: Investment property (against Owner-occupied) | 0.0802 | 0.0046 | 1.0835 | 0.0711 | 0.0893 | 2.27e-67 |
-| Scale | Occupancy: Second home (against Owner-occupied) | 0.1262 | 0.0059 | 1.1345 | 0.1147 | 0.1378 | 1.36e-101 |
-| Scale | HARP refinance: HARP refinance (against Standard refinance or purchase) | -0.3797 | 0.0075 | 0.6841 | -0.3943 | -0.3650 | 0.0000 |
-| Scale | Mortgage insurance: Insured (against Not insured) | -0.1593 | 0.0085 | 0.8528 | -0.1759 | -0.1427 | 7.91e-79 |
-| Scale | Buyer type: First-time buyer (against Repeat buyer) | -0.0021 | 0.0037 | 0.9979 | -0.0093 | 0.0051 | 0.5725 |
-| Shape | Intercept | 0.5643 | 0.0040 | 1.7582 | 0.5564 | 0.5722 | 0.0000 |
-| Shape | Original term | 0.0037 | 0.0001 | 1.0037 | 0.0035 | 0.0040 | 3.89e-199 |
-| Shape | C(credit score, Treatment(790.0))[T.620.0] | -0.3891 | 0.0018 | 0.6776 | -0.3927 | -0.3856 | 0.0000 |
+| Scale | C(debt to income, Treatment(19.0))[T.49.0] | -0.4025 | 0.0029 | 0.6687 | -0.4082 | -0.3967 | 0.0000 |
+| Scale | Loan purpose: Cash-out refinance (against Purchase) | -0.2654 | 0.0025 | 0.7669 | -0.2704 | -0.2604 | 0.0000 |
+| Scale | Loan purpose: Rate-and-term refinance (against Purchase) | -0.0896 | 0.0027 | 0.9143 | -0.0950 | -0.0843 | 1.09e-236 |
+| Scale | Occupancy: Investment property (against Owner-occupied) | 0.0804 | 0.0046 | 1.0837 | 0.0714 | 0.0894 | 3.25e-68 |
+| Scale | Occupancy: Second home (against Owner-occupied) | 0.1266 | 0.0059 | 1.1350 | 0.1151 | 0.1381 | 9.2e-104 |
+| Scale | HARP refinance: HARP refinance (against Standard refinance or purchase) | -0.3795 | 0.0075 | 0.6842 | -0.3941 | -0.3649 | 0.0000 |
+| Scale | Mortgage insurance: Insured (against Not insured) | -0.1591 | 0.0085 | 0.8529 | -0.1757 | -0.1425 | 9.91e-79 |
+| Shape | Intercept | 0.5645 | 0.0040 | 1.7587 | 0.5567 | 0.5724 | 0.0000 |
+| Shape | Original term | 0.0037 | 0.0001 | 1.0037 | 0.0035 | 0.0040 | 3.73e-199 |
+| Shape | C(credit score, Treatment(790.0))[T.620.0] | -0.3891 | 0.0018 | 0.6776 | -0.3927 | -0.3855 | 0.0000 |
 | Shape | C(credit score, Treatment(790.0))[T.680.0] | -0.2142 | 0.0018 | 0.8072 | -0.2178 | -0.2106 | 0.0000 |
-| Shape | C(credit score, Treatment(790.0))[T.720.0] | -0.1102 | 0.0019 | 0.8956 | -0.1139 | -0.1066 | 0.0000 |
-| Shape | C(credit score, Treatment(790.0))[T.750.0] | -0.0479 | 0.0023 | 0.9532 | -0.0524 | -0.0433 | 5.95e-95 |
+| Shape | C(credit score, Treatment(790.0))[T.720.0] | -0.1102 | 0.0019 | 0.8957 | -0.1138 | -0.1065 | 0.0000 |
+| Shape | C(credit score, Treatment(790.0))[T.750.0] | -0.0479 | 0.0023 | 0.9533 | -0.0524 | -0.0433 | 6.77e-95 |
 | Shape | C(original ltv, Treatment(50.0))[T.75.0] | -0.0359 | 0.0014 | 0.9647 | -0.0386 | -0.0332 | 1.46e-150 |
-| Shape | C(original ltv, Treatment(50.0))[T.85.0] | -0.1366 | 0.0044 | 0.8724 | -0.1451 | -0.1280 | 5.05e-215 |
-| Shape | C(original ltv, Treatment(50.0))[T.95.0] | -0.1707 | 0.0043 | 0.8430 | -0.1792 | -0.1623 | 0.0000 |
-| Shape | C(debt to income, Treatment(19.0))[T.32.0] | 0.0033 | 0.0017 | 1.0033 | 3.28e-05 | 0.0066 | 0.0478 |
-| Shape | C(debt to income, Treatment(19.0))[T.39.5] | -0.0055 | 0.0016 | 0.9946 | -0.0087 | -0.0022 | 0.0009 |
-| Shape | C(debt to income, Treatment(19.0))[T.49.0] | -0.0362 | 0.0016 | 0.9644 | -0.0394 | -0.0331 | 2.66e-113 |
-| Shape | Loan purpose: Cash-out refinance (against Purchase) | -0.0215 | 0.0016 | 0.9787 | -0.0246 | -0.0184 | 1.17e-41 |
-| Shape | Loan purpose: Rate-and-term refinance (against Purchase) | -0.0066 | 0.0016 | 0.9934 | -0.0097 | -0.0034 | 3.96e-05 |
-| Shape | Occupancy: Investment property (against Owner-occupied) | -0.0996 | 0.0024 | 0.9052 | -0.1043 | -0.0949 | 0.0000 |
-| Shape | Occupancy: Second home (against Owner-occupied) | -0.0323 | 0.0032 | 0.9682 | -0.0386 | -0.0261 | 2.6e-24 |
-| Shape | HARP refinance: HARP refinance (against Standard refinance or purchase) | 0.0221 | 0.0036 | 1.0224 | 0.0151 | 0.0292 | 7.55e-10 |
-| Shape | Mortgage insurance: Insured (against Not insured) | 0.0072 | 0.0042 | 1.0073 | -0.0010 | 0.0155 | 0.0862 |
-| Shape | Buyer type: First-time buyer (against Repeat buyer) | 0.0051 | 0.0020 | 1.0051 | 0.0012 | 0.0090 | 0.0101 |
+| Shape | C(original ltv, Treatment(50.0))[T.85.0] | -0.1365 | 0.0044 | 0.8724 | -0.1450 | -0.1279 | 6.23e-215 |
+| Shape | C(original ltv, Treatment(50.0))[T.95.0] | -0.1706 | 0.0043 | 0.8432 | -0.1790 | -0.1621 | 0.0000 |
+| Shape | C(debt to income, Treatment(19.0))[T.32.0] | 0.0033 | 0.0017 | 1.0033 | 2.93e-05 | 0.0066 | 0.0480 |
+| Shape | C(debt to income, Treatment(19.0))[T.39.5] | -0.0055 | 0.0016 | 0.9945 | -0.0087 | -0.0022 | 0.0009 |
+| Shape | C(debt to income, Treatment(19.0))[T.49.0] | -0.0362 | 0.0016 | 0.9644 | -0.0394 | -0.0331 | 1.46e-113 |
+| Shape | Loan purpose: Cash-out refinance (against Purchase) | -0.0217 | 0.0015 | 0.9785 | -0.0247 | -0.0188 | 1.57e-46 |
+| Shape | Loan purpose: Rate-and-term refinance (against Purchase) | -0.0069 | 0.0015 | 0.9932 | -0.0098 | -0.0039 | 7.08e-06 |
+| Shape | Occupancy: Investment property (against Owner-occupied) | -0.0997 | 0.0024 | 0.9051 | -0.1044 | -0.0950 | 0.0000 |
+| Shape | Occupancy: Second home (against Owner-occupied) | -0.0325 | 0.0032 | 0.9680 | -0.0387 | -0.0263 | 8.8e-25 |
+| Shape | HARP refinance: HARP refinance (against Standard refinance or purchase) | 0.0221 | 0.0036 | 1.0223 | 0.0150 | 0.0291 | 8.25e-10 |
+| Shape | Mortgage insurance: Insured (against Not insured) | 0.0072 | 0.0042 | 1.0072 | -0.0011 | 0.0154 | 0.0891 |
+| Shape | Buyer type: First-time buyer (against Repeat buyer) | 0.0042 | 0.0012 | 1.0042 | 0.0019 | 0.0066 | 0.0004 |
 
 ![Coefficient estimates with 95% confidence intervals](figures/coefficients.png)
 
@@ -105,7 +104,7 @@ the two appear.
 |---|---|---|---|---|
 | 1 | 1.0000 | 1.36e-06 | 1.36e-06 | 1.36e-06 |
 | 6 | 1.0000 | 3.55e-05 | 1.01e-05 | 1.01e-05 |
-| 11 | 0.9999 | 0.0001 | 1.76e-05 | 1.76e-05 |
+| 11 | 0.9999 | 0.0001 | 1.75e-05 | 1.76e-05 |
 | 16 | 0.9998 | 0.0002 | 2.46e-05 | 2.46e-05 |
 | 21 | 0.9996 | 0.0004 | 3.13e-05 | 3.13e-05 |
 | 26 | 0.9995 | 0.0005 | 3.78e-05 | 3.79e-05 |
@@ -113,7 +112,7 @@ the two appear.
 | 36 | 0.9990 | 0.0010 | 5.05e-05 | 5.05e-05 |
 | 41 | 0.9987 | 0.0013 | 5.66e-05 | 5.67e-05 |
 | 46 | 0.9984 | 0.0016 | 6.27e-05 | 6.28e-05 |
-| 51 | 0.9981 | 0.0019 | 6.87e-05 | 6.88e-05 |
+| 51 | 0.9981 | 0.0019 | 6.86e-05 | 6.88e-05 |
 | 56 | 0.9978 | 0.0022 | 7.45e-05 | 7.47e-05 |
 
 - **12-month PD**: 0.0001
@@ -179,6 +178,6 @@ the question.
 ## How this was produced
 
 - `uv run creditsurv report`
-- Formula: `moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))`
+- Formula: `moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured'))`
 - Distribution: weibull; likelihood: interval_censored
 - Book scored: 500 rows standing for 3,563,807 loans; horizon: 60 months

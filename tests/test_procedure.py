@@ -1226,14 +1226,38 @@ def test_the_reference_levels_are_one_set_written_twice_and_held_together() -> N
     the configuration is the selection's output and that would be a circle in the argument, not
     just in the imports.
 
-    So the levels are written twice and this holds them equal. A reference level that drifted
+    So the levels are written twice and this holds them together. A reference level that drifted
     would not fail anything else: both spellings produce a valid formula, the coefficients would
     simply be measured against different baselines in the selection and in the report.
+
+    **Together, not equal.** The equality held only while the selection had never removed a
+    candidate categorical, and on 19 October 2026 the band-form run removed `buyer_type` at step
+    7 with p = 0.177 -- where every other p-value in that table reads 0.0000, so it is a
+    covariate with nothing of its own left beside a loan block that went from three coefficients
+    to twelve. The configuration is the selection's **output** and the two blocks are its
+    **input**, so the right relation is containment with the levels agreeing wherever both
+    spell one. An equality here would force the configuration to carry a covariate the
+    procedure removed.
     """
-    from creditsurv.config import CATEGORICAL_REFERENCE
+    from creditsurv.config import CATEGORICAL_REFERENCE, ORIGINATION_CATEGORICAL
     from creditsurv.models.procedure import BASE_CATEGORICAL, CANDIDATE_CATEGORICAL
 
-    assert dict(CATEGORICAL_REFERENCE) == {**BASE_CATEGORICAL, **CANDIDATE_CATEGORICAL}
+    offered = {**BASE_CATEGORICAL, **CANDIDATE_CATEGORICAL}
+    # The **offered** set is written twice and this holds those two equal, which is the relation
+    # `CATEGORICAL_REFERENCE` used to carry before the selection removed one of them. Rule 14's
+    # shape reads `ORIGINATION_CATEGORICAL`, so a drift here would put a covariate in the shape
+    # that the procedure never offers -- or leave one out that it does, which is how
+    # `buyer_type` silently left the shape when it left the scale on 19 October 2026.
+    assert dict(ORIGINATION_CATEGORICAL) == offered
+    assert set(CATEGORICAL_REFERENCE) <= set(offered), sorted(
+        set(CATEGORICAL_REFERENCE) - set(offered)
+    )
+    # The levels themselves still have to agree, which is what this test was always for: a
+    # reference that drifted would measure the same coefficient against two baselines.
+    assert all(level == offered[name] for name, level in CATEGORICAL_REFERENCE.items())
+    # And the protected block may not be dropped: `harp` is there because rule 8 refuses to fit
+    # the debt-to-income without it, not on the strength of its coefficient.
+    assert set(BASE_CATEGORICAL) <= set(CATEGORICAL_REFERENCE)
     assert not set(BASE_CATEGORICAL) & set(CANDIDATE_CATEGORICAL), "a covariate in both blocks"
 
 

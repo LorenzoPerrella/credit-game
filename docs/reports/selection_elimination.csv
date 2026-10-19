@@ -1,6 +1,6 @@
 step,removed,coef,p,reason,remaining
-1,volatility_change,0.0004502247370725306,2.160295021040721e-08,wrong sign: +0.0004502 where - is expected,19
-2,equity_volatility,0.0012691510077274416,6.203374474190881e-21,wrong sign: +0.001269 where - is expected,18
-3,house_price_growth,-0.7808407533135294,0.0,wrong sign: -0.7808 where + is expected,17
-4,mortgage_rate_decline,-0.15714880435638315,0.0,wrong sign: -0.1571 where + is expected,16
-5,corporate_bond_spread,0.14989395095287508,0.0,wrong sign: +0.1499 where - is expected,15
+1,volatility_change,0.0004446746343864166,3.283686794008313e-08,wrong sign: +0.0004447 where - is expected,18
+2,equity_volatility,0.0012574207213995091,1.3966065757303802e-20,wrong sign: +0.001257 where - is expected,17
+3,house_price_growth,-0.7798693738142946,0.0,wrong sign: -0.7799 where + is expected,16
+4,mortgage_rate_decline,-0.1571947311184919,0.0,wrong sign: -0.1572 where + is expected,15
+5,corporate_bond_spread,0.14995698016641937,0.0,wrong sign: +0.15 where - is expected,14

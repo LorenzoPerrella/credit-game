@@ -507,6 +507,20 @@ ELIMINATED: Final[dict[str, str]] = {
         "otherwise conditional on the rest. The prior is not revised, and the covariate goes. "
         "The run before this removed it at step 9 for parity instability instead"
     ),
+    # --- step 7: nothing left to carry beside the loan block ---
+    #
+    # The one covariate the **band form** removed that the linear form kept, and the reason it
+    # is worth its own note: at this sample size the p-value arm of the procedure is otherwise
+    # inert -- every p-value in the screening table reads 0.0000 -- so a p of 0.177 is not a
+    # thin result, it is a covariate with nothing of its own left to say.
+    #
+    # What changed is the loan block around it. Under the linear form that block was three
+    # coefficients; read as rule 12's bands it is **twelve**, and with twelve coefficients
+    # describing underwriting risk, being a first-time buyer is no longer distinguishable from
+    # the score, the leverage and the debt burden that go with it. Rule 12 warned that "a
+    # covariate that survived on a straight line might not on a bend"; this is that, and it
+    # landed on a categorical rather than on the macro block, which came through unchanged.
+    "buyer_type": "step 7: p = 0.177 beside the loan block, where every other p-value reads 0.0000",
     # --- step 9: not identified beside a larger covariate of the same dimension ---
     #
     # **Rule 9's time cut, firing on its first run and catching what parity could not.** Both
@@ -569,12 +583,36 @@ DISTRIBUTION: Final = "weibull"
 #: missing for exactly the HARP refinances, and the constant that fills it is absorbed by this
 #: level. It is in the selection's protected block for that reason rather than on the strength of
 #: its coefficient -- rule 8 of `docs/rules.md`, and `features.NOT_REPORTED`.
-CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
+#: Every categorical **offered** at origination, with its reference level: the input, where
+#: `CATEGORICAL_REFERENCE` below is the selection's output.
+#:
+#: Rule 14's shape reads this one and not the output, and the difference is a defect found on 19
+#: October 2026 rather than a distinction drawn in advance. `default_shape` derived the shape
+#: from `CATEGORICAL_REFERENCE`, so when the band-form selection removed `buyer_type` from the
+#: **scale** it silently left the **shape** too -- and the report then fitted a different model
+#: from the one the selection chose, under the same name, with the warm start failing to find it
+#: because a fit's fingerprint carries its ancillary formula.
+#:
+#: Rule 14 defines its set by an identity -- what is fixed at origination -- and says a subset
+#: would be a pick. What the scale selected is not that identity. The two blocks are independent:
+#: a covariate may be in the shape and not in the scale, and coupling them is the kind of thing
+#: that is wrong quietly. `tests/test_procedure.py` holds this equal to `procedure`'s two blocks.
+ORIGINATION_CATEGORICAL: Final[dict[str, str]] = {
     "purpose": "purchase",
     "occupancy": "owner_occupied",
     "harp": "standard",
     "mortgage_insurance": "uninsured",
     "buyer_type": "repeat",
+}
+
+CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
+    "purpose": "purchase",
+    "occupancy": "owner_occupied",
+    "harp": "standard",
+    "mortgage_insurance": "uninsured",
+    # `buyer_type` was here until 19 October 2026 and the band-form selection removed it at
+    # step 7. It stays in `procedure.CANDIDATE_CATEGORICAL`, which is the **input** and is fixed
+    # before any fit; this is the **output**, so it is a subset of that input and not a copy.
 }
 
 
@@ -664,13 +702,29 @@ def record_name(*, distribution: str, cause: str, published: str = DISTRIBUTION)
 
 
 def default_covariates() -> list[str]:
-    """Every column the default formula is allowed to read.
+    """Every column the published model is allowed to read -- the **scale and the shape**.
 
-    Beside the formula that reads the same lists, because the two have to agree and because
+    Beside the formulas that read the same lists, because the three have to agree and because
     the package needs it: it lived in `cli.py` until the fits moved out of there, which made a
     model module reach up into the command line for the definition of its own design.
+
+    `ORIGINATION_CATEGORICAL` and not `CATEGORICAL_REFERENCE`, which is the same correction as
+    in `default_shape` and was found one layer further out: rule 14's shape reads every
+    categorical **offered** at origination, so the frame has to carry them whether or not the
+    scale's selection kept each one. With the output set here, the shape named
+    `C(buyer_type, Treatment('repeat'))` while nothing loaded the column, and the fit died on
+    `NameError: name 'buyer_type' is not defined` -- in 138 seconds rather than the ten hours
+    the two defects before it threatened, because a missing column fails where it is expanded.
+
+    A superset is safe and a subset is not: a column loaded and unread costs memory, a column
+    read and unloaded is a fit that cannot start.
     """
-    return [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL, *CATEGORICAL_REFERENCE]
+    return [
+        *STATIC_CONTINUOUS,
+        *TIME_VARYING_CONTINUOUS,
+        *ORDINAL,
+        *dict.fromkeys([*CATEGORICAL_REFERENCE, *ORIGINATION_CATEGORICAL]),
+    ]
 
 
 def default_shape() -> str:
@@ -690,8 +744,12 @@ def default_shape() -> str:
     """
     linear = [name for name in STATIC_CONTINUOUS + ORDINAL if name not in BANDED_REFERENCE]
     banded = [f"C({name}, Treatment({band}))" for name, band in BANDED_REFERENCE.items()]
+    # `ORIGINATION_CATEGORICAL`, the set **offered**, not `CATEGORICAL_REFERENCE`, the set the
+    # scale's selection kept. Rule 14's admissible side is an identity -- what is fixed at
+    # origination -- and does not shrink when the scale's does.
     categorical = [
-        f"C({name}, Treatment('{reference}'))" for name, reference in CATEGORICAL_REFERENCE.items()
+        f"C({name}, Treatment('{reference}'))"
+        for name, reference in ORIGINATION_CATEGORICAL.items()
     ]
     return " + ".join([*linear, *banded, *categorical])
 

@@ -18,8 +18,8 @@
       "gini_passed",
       "deciles_passed"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "ae_by_age_band": {
     "title": "Actual against expected by loan age",
@@ -37,14 +37,14 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "ae_by_decile": {
     "title": "Actual against expected by decile of predicted risk",
     "description": "Deciles of the whole training half's exposure, cut on the hazards of every loan-month up to 2021-12. On the training half, the data the model was fitted to.",
     "source": "fit",
-    "rows": 310,
+    "rows": 308,
     "columns": [
       "segment",
       "group",
@@ -56,8 +56,8 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "ae_by_vintage": {
     "title": "Actual against expected by vintage year",
@@ -75,8 +75,8 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "ae_by_year": {
     "title": "Actual against expected by calendar year",
@@ -94,14 +94,14 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "backtest_by_decile": {
     "title": "Backtest by decile of predicted risk",
     "description": "Deciles of the test window's exposure. On the months after 2021-12, which the model never saw.",
     "source": "fit",
-    "rows": 309,
+    "rows": 303,
     "columns": [
       "segment",
       "group",
@@ -113,8 +113,8 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "backtest_by_month": {
     "title": "Backtest by month",
@@ -132,8 +132,8 @@
       "expected_rate",
       "actual_over_expected"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "book_by_segment": {
     "title": "The book by month and segment",
@@ -158,7 +158,7 @@
     "title": "Coefficients",
     "description": "On log survival time: positive lengthens survival and lowers risk. The effect of one standard deviation, exposure-weighted on the training half, puts covariates measured in different units on one scale.",
     "source": "fit",
-    "rows": 26,
+    "rows": 42,
     "columns": [
       "parameter",
       "term",
@@ -171,21 +171,21 @@
       "one_sd",
       "effect_1sd"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "covariates_over_time": {
     "title": "Macro covariates over time",
     "description": "The exposure-weighted mean of each time-varying covariate across the loans observed in each month, up to the reporting date.",
     "source": "fit",
-    "rows": 1656,
+    "rows": 1380,
     "columns": [
       "month",
       "covariate",
       "mean"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "km_vs_model": {
     "title": "Kaplan-Meier against the model, by segment",
@@ -207,8 +207,8 @@
       "predicted_survival",
       "deviation"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "lending_by_segment": {
     "title": "Lending by vintage year and segment",
@@ -254,8 +254,8 @@
       "lifetime_pd_adverse",
       "adverse_multiple"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "selection_collinear": {
     "title": "Selection: collinear",
@@ -268,20 +268,20 @@
       "correlation"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-19 04:10 UTC"
   },
   "selection_correlation": {
     "title": "Selection: correlation",
     "description": "Exposure-weighted correlation between the continuous candidates.",
     "source": "selection",
-    "rows": 361,
+    "rows": 225,
     "columns": [
       "first",
       "second",
       "correlation"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-19 04:10 UTC"
   },
   "selection_elimination": {
     "title": "Selection: elimination",
@@ -297,13 +297,13 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-19 04:10 UTC"
   },
   "selection_fits": {
     "title": "Selection: fits",
     "description": "Every model the selection estimated, its time, and whether it was cached.",
     "source": "selection",
-    "rows": 32,
+    "rows": 35,
     "columns": [
       "purpose",
       "cells",
@@ -313,18 +313,19 @@
       "formula",
       "distribution",
       "likelihood",
+      "ancillary",
       "minutes",
       "evaluations",
       "cached"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-19 04:10 UTC"
   },
   "selection_inflation": {
     "title": "Selection: inflation",
     "description": "Candidates removed for variance inflation above 10, in the fixed order.",
     "source": "selection",
-    "rows": 1,
+    "rows": 0,
     "columns": [
       "step",
       "removed",
@@ -332,13 +333,13 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-19 04:10 UTC"
   },
   "selection_materiality": {
     "title": "Selection: materiality",
     "description": "Macro covariates removed at step 10 for an effect under 0.02 of log survival time per standard deviation, the threshold rule 3 declared before any fit.",
     "source": "selection",
-    "rows": 2,
+    "rows": 0,
     "columns": [
       "step",
       "removed",
@@ -347,13 +348,13 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-19 04:10 UTC"
   },
   "selection_screening": {
     "title": "Selection: screening",
     "description": "Each candidate beside the loan block: sign, effect, likelihood ratio.",
     "source": "selection",
-    "rows": 16,
+    "rows": 12,
     "columns": [
       "covariate",
       "term",
@@ -367,24 +368,26 @@
       "lr_statistic"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-19 04:10 UTC"
   },
   "selection_stability": {
     "title": "Selection: stability",
     "description": "Standardised effects on the training half and on each half of the book.",
     "source": "selection",
-    "rows": 25,
+    "rows": 13,
     "columns": [
       "covariate",
       "dimension",
       "effect_all",
-      "effect_even",
-      "effect_odd",
+      "effect_even_vintages",
+      "effect_odd_vintages",
+      "effect_to_2010_06",
+      "effect_after_2010_06",
       "stable",
       "round"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-19 04:10 UTC"
   },
   "term_structure_by_segment": {
     "title": "PD term structure by segment",
@@ -399,8 +402,8 @@
       "cumulative_pd",
       "marginal_pd"
     ],
-    "fit": "d17ebc18d665bf0d",
-    "generated": "2026-09-30 15:29 UTC"
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-19 04:10 UTC"
   },
   "underwriting_by_vintage": {
     "title": "Underwriting by vintage",

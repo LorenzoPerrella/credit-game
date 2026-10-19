@@ -1,7 +1,6 @@
 {
   "as_of": "2021-12",
   "categorical": {
-    "buyer_type": "repeat",
     "harp": "standard",
     "mortgage_insurance": "uninsured",
     "occupancy": "owner_occupied",
@@ -10,14 +9,15 @@
   "cause": "default",
   "distribution": "weibull",
   "eliminated": {
-    "corporate_bond_spread": "step 8: wrong sign: +0.1499 where - is expected",
-    "equity_volatility": "step 8: wrong sign: +0.001269 where - is expected",
-    "house_price_growth": "step 8: wrong sign: -0.7808 where + is expected",
+    "buyer_type": "step 7: p = 0.177 beside the loan block",
+    "corporate_bond_spread": "step 8: wrong sign: +0.15 where - is expected",
+    "equity_volatility": "step 8: wrong sign: +0.001257 where - is expected",
+    "house_price_growth": "step 8: wrong sign: -0.7799 where + is expected",
     "housing_starts_growth": "step 9: 1 sd effect +0.040 on even vintages, +0.044 on odd vintages, +0.046 on to 2010 06, -0.003 on after 2010 06, beside ltv_change (-0.201), both housing",
-    "mortgage_rate_decline": "step 8: wrong sign: -0.1571 where + is expected",
-    "volatility_change": "step 8: wrong sign: +0.0004502 where - is expected"
+    "mortgage_rate_decline": "step 8: wrong sign: -0.1572 where + is expected",
+    "volatility_change": "step 8: wrong sign: +0.0004447 where - is expected"
   },
-  "formula": "credit_score + original_ltv + debt_to_income + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
+  "formula": "C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured'))",
   "moratorium": "exclude",
   "ordinal": [
     "term_years"

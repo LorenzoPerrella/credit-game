@@ -75,7 +75,7 @@ each.
 The exponential is a Weibull with shape one, so the constant-hazard hypothesis is
 exactly `log rho = 0` and reads straight off the fitted coefficient table.
 
-**rho = 1.7582, z = 140, p = 0.00e+00.**
+**rho = 1.7587, z = 141, p = 0.00e+00.**
 The hazard **rises** with loan age, which is the seasoning pattern mortgages are expected to show, and the constant-hazard hypothesis
 is settled without estimating anything further.
 
@@ -206,12 +206,12 @@ along each loan's realised covariate path instead.
 - **defaults**: 1440771
 - **log-likelihood**: -1.06e+07
 - **AIC (episode scale)**: 2.13e+07
-- **fit seconds**: 34603.57
+- **fit seconds**: 1628.53
 
 ---
 
 ## How this was produced
 
 - `uv run creditsurv report`
-- Formula: `moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))`
+- Formula: `moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured'))`
 - Loan data: Freddie Mac Single-Family Loan-Level Dataset. Macro: FRED; see `docs/data_dictionary.md`.

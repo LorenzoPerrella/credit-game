@@ -544,6 +544,16 @@ def _check_nested(
 _NESTED_TOLERANCE: Final = 1.0
 
 
+def _terms_of(formula: str) -> frozenset[str]:
+    """A formula as the set of its terms, which is what decides whether two are one model.
+
+    The order is not: a design's columns are built in the formula's order, but an initial point
+    is a `pd.Series` and lifelines aligns it by index. Two formulas over the same terms are the
+    same model and one's optimum is the other's start.
+    """
+    return frozenset(term.strip() for term in formula.split(" + ") if term.strip())
+
+
 def _narrowed(
     outer: tuple[int | None, int | None] | None,
     inner: tuple[int | None, int | None],
@@ -929,6 +939,14 @@ def selection_start(
 
     This guard is the fix. The debt behind it is the one rule 12 declares owed -- a re-selection
     under the band form -- after which the two formulas agree and the start is worth having.
+
+    **The comparison is on the set of terms, not on the string**, and the first version of this
+    guard got that wrong. After the band-form selection the two formulas held the same thirteen
+    terms in a different order -- the selection writes the banded covariates first,
+    `default_formula` writes the macro block first -- and a string comparison refused a start
+    that was perfectly good, which would have cost the ten hours this guard exists to save.
+    lifelines aligns an initial point **by index**, so the order of the terms is not a fact
+    about the model.
     """
     import json
 
@@ -942,7 +960,7 @@ def selection_start(
     if summary.get("as_of") != as_of or summary.get("moratorium") != moratorium:
         return None
     chose = str(summary["formula"])
-    if formula is not None and chose != formula:
+    if formula is not None and _terms_of(chose) != _terms_of(formula):
         log.info(
             "the selection fitted a different formula, so its coefficients are not a start: "
             "it chose %r and this fit is of %r",
