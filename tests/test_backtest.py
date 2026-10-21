@@ -533,6 +533,42 @@ def test_a_grade_passes_when_its_prediction_falls_inside_the_realised_interval()
     assert not broken["passed"].any()
 
 
+def test_a_grade_with_no_realised_defaults_is_judged_on_the_interval() -> None:
+    """Rule 5's clause of 21 October 2026, and the defect that produced it.
+
+    The ratified criterion is a 25% relative tolerance, which needs a realised rate to be
+    relative to. A grade with exposure and **zero** defaults has none: the ratio is infinite and
+    the grade fails whatever it predicted -- including when it is right, which is the case
+    `jeffreys_interval` was chosen for in the first place. At zero defaults the interval has
+    width where a ratio has none, so that grade alone is judged on the interval, and every grade
+    publishes which of the two judged it.
+    """
+    from creditsurv.backtest.metrics import grade_backtest
+
+    # A grade with no defaults whose prediction sits inside the interval around zero, beside one
+    # that has defaults and misses the tolerance -- so one row of each kind, in one table.
+    hazard = pd.Series([0.0000040, 0.0000040, 0.0009])
+    observed = pd.Series([0.0, 0.0, 40.0])
+    exposure = pd.Series([120_000.0, 120_000.0, 60_000.0])
+
+    table = grade_backtest(hazard, observed, exposure).set_index("grade")
+    empty, populated = table.iloc[0], table.iloc[-1]
+
+    assert empty["defaults"] == 0
+    assert empty["judged_on"] == "interval"
+    assert bool(empty["inside_jeffreys"]) is True
+    assert not np.isfinite(empty["relative_miss"]), "a ratio to zero is what the clause is for"
+    assert bool(empty["passed"]) is True, "inside the interval, so it holds"
+
+    assert populated["defaults"] > 0
+    assert populated["judged_on"] == "tolerance"
+    # And the tolerance is *stricter* than the interval here, which is the direction rule 5 was
+    # amended for: inside the interval and still refused, at a 34% relative miss.
+    assert bool(populated["inside_jeffreys"]) is True
+    assert bool(populated["passed"]) is False
+    assert populated["relative_miss"] > 0.25
+
+
 def test_the_predicted_pd_and_the_realised_rate_are_in_the_same_unit() -> None:
     """Obligor-years on both sides: the denominator is loan-months over twelve, which is
     the exposure the defaults were earned on and the unit the annualised hazard is in.

@@ -696,3 +696,37 @@ projected month is not zero in the gaps; a `views` run whose anchoring window an
 overlap; a report that still states no shape; or a campaign fit whose description carries no
 `ancillary` key. Each is a defect in the change rather than a fact about the book, and each is
 checked before any number is read off the run.
+
+### Rule 5 — A grade with no realised defaults has no denominator, found before the run
+
+Declared **21 October 2026**, while checking the ratified tolerance against the code that now
+applies it, and before the measurement round it would have met.
+
+`grade_backtest` passed a grade on `|predicted / actual - 1| <= 0.25`. A grade with exposure and
+**zero** realised defaults has `actual = 0`, so the ratio is infinite and the grade fails whatever
+it predicted -- including when it is right. `jeffreys_interval`'s own docstring names this case as
+the reason the interval was chosen: *"the top grades hold few defaults and sometimes none, where a
+normal interval has no width and no grade can fail."*
+
+**Demonstrated** rather than argued, on three constructed grades:
+
+| grade | obligor years | defaults | predicted | interval | relative miss | inside | tolerance says |
+|---|---|---|---|---|---|---|---|
+| 1 | 20,000 | **0** | 4.8e-05 | 2.5e-08 to 1.26e-04 | **inf** | **yes** | fail |
+| 6 | 5,000 | 40 | 1.07e-02 | 5.81e-03 to 1.076e-02 | +34.3% | yes | fail |
+
+The first row is the defect: inside the interval and refused by the tolerance. The second is the
+tolerance working as intended and being *stricter* than the interval, which is the direction the
+amendment was made for.
+
+**So the clause is narrow and its scope is exactly the degenerate case**: no realised defaults,
+judge on the interval; otherwise judge on the tolerance. Each grade publishes which judged it, in
+a `judged_on` column, because a criterion that varies by row has to say so per row. This is not a
+weakening -- at zero defaults the tolerance is undefined, not lenient -- and it cannot be used to
+excuse a grade that has defaults.
+
+**Why this is in the register at all**: the amendment of 17 October was ratified on the arithmetic
+that six of eight grades pass where one does, and that arithmetic was computed on a table in which
+every grade had defaults. A ratification measured on the non-degenerate case does not license the
+degenerate one, and the two days between the rule and the code are what gave this time to be
+found rather than published.
