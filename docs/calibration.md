@@ -62,19 +62,33 @@ an event, so the model expected 167,362 and the book produced 76,664. The 2022 m
 under-predicts a rate shock that reached a fixed-rate book through affordability rather than
 through the payment, which is a channel it does not observe.
 
-**The level is anchored and the shape is not touched.** One multiplier of 1.1831 on the default
-hazard, estimated as actual over expected on 2022-01 to 2024-12 -- 151,423 defaults against
-127,871 expected over 464,137,790 loan-months -- takes the test window from 1.134 to **0.958**
-with the Gini unchanged at 0.541. Unchanged by construction: a multiplier moves every loan-month
-by the same factor, so the ranking, and therefore every segment view, means what it meant before.
+**The level is anchored and the shape is not touched.** One multiplier on the default hazard,
+estimated as actual over expected on the anchoring window of 2022-01 to 2024-12, moves every
+loan-month by the same factor -- so the ranking, and therefore every segment view, means what it
+meant before.
 
-**The master scale fails, and the magnitude says more than the verdict.** Eight grades of
-twelve-month PD on geometric thresholds, each judged against the 95% Jeffreys interval around
-what its loans did: **0 of 8** hold. But the misses are 5% relative in grade 5, 8% in grade 7 and
-30% in grade 4, against intervals a few parts in a thousand wide -- a grade here holds up to five
-million obligor-years, so the interval is testing the arithmetic of an average rather than the
-model. The rule was declared before the run and stands; what has to be read beside it is the
-distance, exactly as for the Kaplan-Meier band.
+!!! warning "The multiplier on this page is of a model without the shape"
+
+    1.1831, and the 1.134 to **0.958** it produced on the test window, come from
+    `creditsurv windows`, whose four fits carried **no ancillary formula**: rule 14 makes the
+    shape part of the specification and the campaign never passed it on. The third independent
+    validation found it on 19 October 2026. Every anchoring figure on this page, and the master
+    scale below it, is therefore of a specification the configuration does not declare, and is
+    replaced by the corrected campaign's own output rather than patched.
+
+**The master scale, and why its criterion changed.** Eight grades of twelve-month PD on geometric
+thresholds. The rule asked for the 95% Jeffreys interval around what each grade's loans did and
+**0 of 8** held -- on misses of 5% relative in grade 5, 8% in grade 7 and 30% in grade 4, against
+intervals a few parts in a thousand wide. A grade here holds up to five million obligor-years, so
+the interval tests the arithmetic of an average rather than the model, which is what this project
+already says about the Kaplan-Meier band.
+
+Rule 5 replaced it with a **25% relative tolerance** on 17 October 2026, and because the
+amendment was written *after* seeing 0 of 8 it needed ratifying rather than asserting. What
+admits it is arithmetic: the tolerance passes six of eight grades where Jeffreys passes one, and
+the scale -- which allows at most one failing grade -- **fails under both**, so the change cannot
+turn a failure into a pass. It was ratified on 19 October; the Jeffreys bounds stay in the
+published table beside the relative miss of every grade.
 
 The age-by-age numbers, the in-sample cycle and the acceptance criteria per window are in the
 [windows report](reports/windows.md).

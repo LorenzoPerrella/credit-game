@@ -578,13 +578,26 @@ loans and says nothing on 48 million. Expect more of these.
 - **An out-of-time actual-over-expected cannot be read alone.** In sample it ran from
   0.27 to 2.78 by year, so the backtest publishes that dispersion beside it, and the
   acceptance criteria in `backtest/runner.py` are declared before any run.
-- **The Jeffreys interval on a grade goes the same way.** The master scale asks that a grade's
-  predicted twelve-month PD fall inside the 95% interval around what its loans did, and **0 of 8
-  pass** -- on relative errors of 5% in grade 5 (0.005657 predicted against 0.005381), 8% in
-  grade 7 and 30% in grade 4. With 5 million obligor-years in a grade the interval is a few parts
-  in a thousand wide, so it is testing the arithmetic of the average, not the model. The rule was
-  declared before the run and stands; what has to be published beside it is the **magnitude** of
-  each miss, exactly as for the Kaplan-Meier band.
+- **The Jeffreys interval on a grade went the same way, and it is the one criterion this project
+  has withdrawn.** The master scale asked that a grade's predicted twelve-month PD fall inside the
+  95% interval around what its loans did, and **0 of 8 passed** -- on relative errors of 5% in
+  grade 5 (0.005657 predicted against 0.005381), 8% in grade 7 and 30% in grade 4. With 5 million
+  obligor-years in a grade the interval is a few parts in a thousand wide, so it tests the
+  arithmetic of the average and not the model.
+
+  Rule 5 replaced it with a **25% relative tolerance** on 17 October 2026 and the amendment was
+  **ratified on 19 October**, which it needed because it was written *after* seeing 0 of 8 -- the
+  shape of tuning. What admits it is arithmetic rather than argument: on the grade table published
+  at the time the tolerance passes **six of eight** where Jeffreys passes **one**, and the scale,
+  which allows at most one failing grade, **fails under both**. An amendment that cannot turn a
+  failure into a pass is admissible on its reasoning. The Jeffreys bounds stay as published
+  columns and `relative_miss` is published beside them, because the **magnitude** of each miss is
+  what the Kaplan-Meier band taught and because a withdrawn criterion that stops being reported is
+  one nobody can check the withdrawal of.
+
+  **The code disagreed with the rule for two days**, which is the governance half: `metrics.py`
+  still passed grades on the interval while `docs/rules.md` said 25%. A criterion lives in two
+  places and both have to move.
 
 **A marginal relationship is evidence that a covariate is correlated with the outcome,
 never that it is identified in a model.** This was got wrong twice — see
@@ -703,20 +716,33 @@ where there is not.
 
 ## Open
 
-**The backtest fails its decile criterion, and the figures to quote are the anchored ones on the
-declared test window.** 0.920 / 0.561 / 0.598-1.064 appeared here as the current state for a
-month and belonged to the **September** model -- a different table, a different window and
-prepayment as censoring. On the published model, anchored by rule 4's multiplier of 1.1831 and
-scored on 2025-01 onwards: overall actual over expected **0.959** and Gini **0.542** pass, and the
-deciles run **0.674 to 1.062** with **6 of 10** in band. The master scale reads **1 of 8**, with
-relative errors to **+89%** in the safest grade. The criteria were fixed before the run, so the
-model is not tuned to them on the test window -- and the candidate rule 14 produced reads
-**0.927 / 0.548 / 10 of 10** on the same window, which is the first time anything here has passed
-all three.
+**Every out-of-sample number this section has ever carried is of a model without the shape, and
+the third validation found it.** `backtest/campaign.py` never passed rule 14's ancillary formula
+to its fits, so all four of them -- the three regime cuts and the development model the anchoring
+and the grades are of -- were **scalar-shape**: two cached descriptions differ in exactly one key
+on identical rows, 27.1 minutes against 5.2. The multiplier of **1.1831**, the **0.959 / 0.542**,
+the deciles **0.674 to 1.062** at 6 of 10 and the master scale's **1 of 8** all come from that
+path, and `windows.md` carries a notice saying so.
 
-Three out-of-time ratios exist and they are different quantities: **1.166** unanchored from 2022
-(the site's home), **0.959** anchored on the test window (the calibration page), and the 0.920
-above. The second independent validation found all three presented as one.
+**What the published model reads has not been measured by this repository yet.** The third
+validation recomputed it with its own scorer and reports **10 of 10 deciles between 0.803 and
+1.150** and **8 of 8 grades** inside rule 5's tolerance on the declared test window, anchored --
+which would be the first time anything here passed all three. That figure is **the validator's,
+not a measurement of ours**, and it is replaced by the corrected campaign's own output rather than
+adopted. Until that run lands, no anchored figure in this repository describes the configured
+model.
+
+**And the same decile reads three different numbers on three different windows**, which is how it
+came to be reported three ways in one day: **1.676** in sample, **1.456** on 2022-01 onwards
+unanchored -- which is what `acceptance_by_segment` published under a `deciles_passed` column, and
+which spans the anchoring window and the test window together -- and **1.150** anchored on the
+declared test window, the only one of the three that is a criterion. A number is not interpretable
+without the model **and** the window it is of.
+
+Earlier states of this paragraph, kept because each was believed: 0.920 / 0.561 / 0.598-1.064 was
+the **September** model, on a different table and with prepayment as censoring. And three
+out-of-time ratios were once presented as one -- 1.166 unanchored from 2022, 0.959 anchored on the
+test window, and the 0.920 -- which the second validation found.
 
 **The shape on the risk removes the compression and overshoots it, and the model has no hazard
 floor.** Rule 14 let the Weibull's shape read the covariates fixed at origination -- all nine of

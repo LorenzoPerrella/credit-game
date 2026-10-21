@@ -656,3 +656,43 @@ and in sample it holds 6 of 7. The rule is **kept** -- the argument for why *whe
 *how much* in a lifetime PD does not depend on the count -- but the branch implementing it now owes
 that table first: if the first year is the only band out, the remedy is narrower than a free
 baseline in log-time, and the rule should say so before the fit rather than after.
+
+### The measurement round, predicted before it is read
+
+Written **21 October 2026**, before `report`, `views` and `windows` are run on the corrected code,
+because this document already carries one case of a prediction being read off the wrong model and
+recorded as retracted. Each line below is checked against the run and published either way.
+
+**The book.** Measured already, which is why it is not a prediction: the declared window is
+**20,465 profiles standing for 4,130,251 loans**, read in 1.3 seconds, against the old book's 500
+profiles standing for 3,564,607. What *is* predicted is the direction of what it does to the
+published figures. The old book was the safest mix the table can produce -- 95.9% in the top
+credit band, 87.8% rate-term refinance, **no** first-time buyers and **no** investment properties
+-- where the window itself is 32.2% purchase, 13.0% first-time and 4.6% investor. So the site's
+headline twelve-month PD should rise from **0.01%** by something nearer a factor than a margin,
+and both lifetime PDs with it. The adverse multiple is **not** predicted in either direction: a
+riskier book has more hazard to multiply and less room before the clip, and which dominates is
+what the run says.
+
+**The gap covariates.** `ltv_change` and `unemployment_change` are exactly zero in the book's
+first projected month, and the book is one `vintage_era` group rather than five. Both are asserted
+by a test, so this is a statement that the test is the right test and not a prediction about the
+data.
+
+**The deciles, and this one is a check on the validator as well as on us.** The third round
+reports the published model holding **10 of 10 deciles between 0.803 and 1.150** and **8 of 8
+grades** on the declared test window, anchored, measured with its own scorer. Our corrected
+`views` scores the same thing for the first time. If it agrees, the finding is confirmed from two
+implementations and rule 14's exception paragraph is settled. **If it disagrees, one of the two is
+wrong and the disagreement is the finding** -- and it is worth more than the agreement, because
+three rounds have now found zero discrepancies and a first one would say where to look.
+
+**The campaign.** The four fits carry the shape for the first time, so the multiplier will not be
+0.9695 and the master scale will be of the configured model rather than of a scalar-shape one. No
+prediction on the direction of either: the whole point of N1 is that nobody has measured them.
+
+**What would falsify the correction itself**, as opposed to the model: a book whose first
+projected month is not zero in the gaps; a `views` run whose anchoring window and test window
+overlap; a report that still states no shape; or a campaign fit whose description carries no
+`ancillary` key. Each is a defect in the change rather than a fact about the book, and each is
+checked before any number is read off the run.
