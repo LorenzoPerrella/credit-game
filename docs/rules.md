@@ -166,6 +166,15 @@ Amended 17 October 2026, before the runs that follow, because the second validat
   columns, because withdrawing a criterion is not a reason to stop reporting it, and the published
   model's own scale does not exist yet: it is measured when the shape reaches the campaign.
 
+  **A grade with no realised defaults is judged on the interval instead**, declared 21 October
+  2026 before the run that would have met it. A relative tolerance needs a realised rate to be
+  relative to, and at zero defaults there is none: the ratio is infinite and the grade fails
+  whatever it predicted. That is exactly the case the interval was chosen for in the first place
+  -- "the top grades hold few defaults and sometimes none" -- and at zero defaults the interval
+  has width where a ratio has none. Demonstrated: 0 defaults in 20,000 obligor-years against a
+  predicted 4.8e-05 sits **inside** the interval, 2.5e-08 to 1.26e-04, and reads a relative miss
+  of infinity. Each grade publishes which of the two judged it.
+
   An earlier draft of this bullet quoted +89%, +31%, +43%, +23%, +6%, −6%, −7%, +3% as "the
   published model". That profile matches no run on the record -- it predates 19 October and was
   never of the shaped fit. A criterion carrying an unsourced number is one nobody can check.

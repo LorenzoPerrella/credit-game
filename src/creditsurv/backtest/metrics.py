@@ -476,7 +476,21 @@ def grade_backtest(
     grouped["inside_jeffreys"] = (grouped["predicted_pd"] >= lower) & (
         grouped["predicted_pd"] <= upper
     )
-    grouped["passed"] = grouped["relative_miss"].abs() <= tolerance
+    # **A grade with no realised defaults is judged on the interval**, because a relative
+    # tolerance has nothing to be relative to: `predicted / 0` is `inf` and every such grade
+    # would fail whatever it predicted. `jeffreys_interval`'s own docstring says this case is
+    # real -- "the top grades hold few defaults and sometimes none" -- and it is the one place
+    # the interval is the right instrument rather than a test of the arithmetic of an average,
+    # because at zero defaults the interval has width where a ratio has none.
+    #
+    # Demonstrated before the run that would have met it: 0 defaults in 20,000 obligor-years
+    # against a predicted 4.8e-05 sits **inside** the interval (2.5e-08 to 1.26e-04) and reads
+    # a relative miss of `inf`. Rule 5 carries the clause; this is where it is applied.
+    empty = grouped["defaults"] <= 0.0
+    grouped["passed"] = np.where(
+        empty, grouped["inside_jeffreys"], grouped["relative_miss"].abs() <= tolerance
+    )
+    grouped["judged_on"] = np.where(empty, "interval", "tolerance")
     return grouped.reset_index()
 
 
