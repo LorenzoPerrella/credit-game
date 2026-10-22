@@ -881,6 +881,7 @@ def report(
             reports_dir=destination,
             weights_col=WEIGHT,
             extra_fits=extra_fits,
+            published_shape=shape,
             fit=cached_fit(as_of=as_of, moratorium=moratorium),
         )
     ]
@@ -908,6 +909,7 @@ def report(
             covariates,
             [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS],
             formula=formula,
+            shape=shape,
             reports_dir=destination,
             horizon_months=horizon,
             weights=book.set_index("loan_id")[WEIGHT],

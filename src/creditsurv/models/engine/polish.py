@@ -276,8 +276,26 @@ def _newton_from(
     if solution[5] > POLISH_TOLERANCE_SE:
         log.info("Newton steps did not converge from the warm start; falling back on SLSQP")
         return None
-    if not bool(np.all(np.linalg.eigvalsh(solution[2]) > 0)):
-        log.info("Newton steps ended where the likelihood is not concave; falling back on SLSQP")
+    eigenvalues = np.linalg.eigvalsh(solution[2])
+    if not bool(np.all(eigenvalues > 0)):
+        # **The eigenvalue is logged because the test has no tolerance and the distance does.**
+        # On the 2018-12 cut of the shaped model the polish reached 2.25e-06 standard errors --
+        # three orders inside the 1e-3 this engine promises -- and was then refused here, which
+        # sent it into the method chain at a worse objective (0.006502 against 0.005582). Two
+        # readings of that are possible and they call for opposite responses: the point is
+        # genuinely a saddle, and no optimiser or start will certify it; or the smallest
+        # eigenvalue is floating-point noise around zero on a 44-parameter Hessian, in which
+        # case a strict `> 0` is the knife-edge this project refuses elsewhere -- the
+        # Kaplan-Meier band, the crossing test -- for the same reason. Which one it is cannot be
+        # read off the message, so the message now carries the number.
+        log.info(
+            "Newton steps ended where the likelihood is not concave; falling back on SLSQP "
+            "(smallest eigenvalue %.3e, largest %.3e, %d of %d negative)",
+            float(eigenvalues.min()),
+            float(eigenvalues.max()),
+            int((eigenvalues <= 0).sum()),
+            eigenvalues.size,
+        )
         return None
     return solution
 

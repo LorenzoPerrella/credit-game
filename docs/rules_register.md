@@ -730,3 +730,50 @@ that six of eight grades pass where one does, and that arithmetic was computed o
 every grade had defaults. A ratification measured on the non-degenerate case does not license the
 degenerate one, and the two days between the rule and the code are what gave this time to be
 found rather than published.
+
+### The campaign's first cut refuses its own converged fit, and the test that refuses it has no tolerance
+
+Measured 22-23 October 2026, on the 2018-12 cut of the shaped model, in the first `creditsurv
+windows` run that carries rule 14's shape.
+
+**What happened.** Damped Newton walked the fit in exactly as this engine's record says it should
+-- 785 standard errors from the optimum at step 1, then 169, then down the damping ladder to
+**2.25e-06 at step 8**, three orders inside the 1e-3 this engine promises, at an objective of
+**0.005581852089**. It was then refused by `_newton_from`'s third condition, that the final
+Hessian be positive definite, and the method chain started from the same point. Twenty-eight
+SLSQP evaluations later the objective was **0.005745**, still worse than the point Newton had
+already found, and climbing back towards it.
+
+**The refusal's reasoning is sound and is not in question**: a point where the gradient vanishes
+and the curvature does not bend upwards is a saddle or a ridge, not a maximum, and publishing it
+would be publishing a non-maximum as an optimum.
+
+**What is in question is that the test has no tolerance while the distance beside it has one.**
+`solution[5] > POLISH_TOLERANCE_SE` admits anything inside 1e-3 standard errors; `np.all(eigvalsh
+(H) > 0)` is a strict inequality on a computed eigenvalue of a 44-parameter Hessian. Two readings
+fit the evidence and they call for opposite responses:
+
+- the point is **genuinely a saddle**, and then no optimiser and no starting point will certify
+  it -- the lesson this document already records about the parent's floor;
+- the smallest eigenvalue is **floating-point noise around zero**, and then a strict `> 0` is the
+  knife-edge this project refuses elsewhere for exactly this reason: the Kaplan-Meier band
+  collapses to a hundredth of a point at this scale, the crossing test fired on gaps of 0.00002,
+  and both were given floors.
+
+**What was ruled out first.** Not a rank deficiency: the shape's design on that cut is **full
+rank, 19 of 19** over 2,997 loan combinations, and its thinnest column -- the HARP level -- still
+carries 293 of them. So the shape is identified on the shorter window and the non-concavity is
+not a missing band.
+
+**What was done.** The refusal now logs the smallest and largest eigenvalue and how many are
+non-positive, because which of the two readings holds cannot be told from the message and the
+message is all a run leaves behind. The chain was stopped rather than left to run: it was
+demonstrably walking back towards a point already found, and this document already prices that
+path at over twelve hours for one candidate -- here, for one cut of four.
+
+**Declared before the next run**: the question is settled by the eigenvalue and by nothing else.
+If the smallest is negative by more than the Hessian's own conditioning can explain, the point is
+a saddle and the shaped model is not identified at that cut, which is a finding about the model.
+If it is within rounding of zero, the test gets a floor stated in the same terms as the distance
+tolerance it sits beside, and that is a change to the engine rather than to the model. No fit is
+published off either reading until the number is in hand.
