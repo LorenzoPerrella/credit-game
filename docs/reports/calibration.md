@@ -79,14 +79,14 @@ in percentage points, holding everything else where it is.
 
 | Covariate | Kind | One sd | Baseline PD | Shocked PD | Change, pp |
 |---|---|---|---|---|---|
-| Credit score | banded | 0.9980 | 0.0001 | 0.0002 | 0.0124 |
-| Loan-to-value at origination | banded | 0.9660 | 0.0001 | 0.0002 | 0.0062 |
-| Unemployment change since origination | time-varying | 2.5133 | 0.0001 | 0.0002 | 0.0049 |
-| Loan-to-value change since origination | time-varying | 10.0125 | 0.0001 | 0.0002 | 0.0049 |
-| Debt-to-income at origination | banded | 0.9640 | 0.0001 | 0.0002 | 0.0039 |
-| Moratorium regime | time-varying | 0.3011 | 0.0001 | 8.64e-05 | -0.0026 |
-| Financial conditions | time-varying | 0.5937 | 0.0001 | 0.0001 | 0.0015 |
-| Consumer sentiment | time-varying | 11.7476 | 0.0001 | 0.0001 | -0.0007 |
+| Credit score | banded | 0.8698 | 0.0029 | 0.0058 | 0.2948 |
+| Loan-to-value at origination | banded | 0.8858 | 0.0029 | 0.0042 | 0.1346 |
+| Unemployment change since origination | time-varying | 2.5133 | 0.0029 | 0.0039 | 0.0988 |
+| Loan-to-value change since origination | time-varying | 10.0125 | 0.0029 | 0.0039 | 0.0981 |
+| Debt-to-income at origination | banded | 0.7701 | 0.0029 | 0.0036 | 0.0657 |
+| Moratorium regime | time-varying | 0.3011 | 0.0029 | 0.0024 | -0.0545 |
+| Financial conditions | time-varying | 0.5937 | 0.0029 | 0.0032 | 0.0304 |
+| Consumer sentiment | time-varying | 11.7476 | 0.0029 | 0.0027 | -0.0151 |
 
 ## PD term structure
 
@@ -102,21 +102,21 @@ the two appear.
 
 | Month | Survival | Cumulative pd | Marginal pd | Hazard |
 |---|---|---|---|---|
-| 1 | 1.0000 | 1.36e-06 | 1.36e-06 | 1.36e-06 |
-| 6 | 1.0000 | 3.55e-05 | 1.01e-05 | 1.01e-05 |
-| 11 | 0.9999 | 0.0001 | 1.75e-05 | 1.76e-05 |
-| 16 | 0.9998 | 0.0002 | 2.46e-05 | 2.46e-05 |
-| 21 | 0.9996 | 0.0004 | 3.13e-05 | 3.13e-05 |
-| 26 | 0.9995 | 0.0005 | 3.78e-05 | 3.79e-05 |
-| 31 | 0.9993 | 0.0007 | 4.42e-05 | 4.43e-05 |
-| 36 | 0.9990 | 0.0010 | 5.05e-05 | 5.05e-05 |
-| 41 | 0.9987 | 0.0013 | 5.66e-05 | 5.67e-05 |
-| 46 | 0.9984 | 0.0016 | 6.27e-05 | 6.28e-05 |
-| 51 | 0.9981 | 0.0019 | 6.86e-05 | 6.88e-05 |
-| 56 | 0.9978 | 0.0022 | 7.45e-05 | 7.47e-05 |
+| 1 | 0.9998 | 0.0002 | 0.0002 | 0.0002 |
+| 6 | 0.9979 | 0.0021 | 0.0004 | 0.0004 |
+| 11 | 0.9954 | 0.0046 | 0.0005 | 0.0005 |
+| 16 | 0.9925 | 0.0075 | 0.0006 | 0.0006 |
+| 21 | 0.9892 | 0.0108 | 0.0007 | 0.0007 |
+| 26 | 0.9856 | 0.0144 | 0.0007 | 0.0008 |
+| 31 | 0.9817 | 0.0183 | 0.0008 | 0.0008 |
+| 36 | 0.9776 | 0.0224 | 0.0008 | 0.0009 |
+| 41 | 0.9733 | 0.0267 | 0.0009 | 0.0009 |
+| 46 | 0.9688 | 0.0312 | 0.0009 | 0.0009 |
+| 51 | 0.9641 | 0.0359 | 0.0010 | 0.0010 |
+| 56 | 0.9593 | 0.0407 | 0.0010 | 0.0010 |
 
-- **12-month PD**: 0.0001
-- **lifetime PD (60m)**: 0.0023
+- **12-month PD**: 0.0029
+- **lifetime PD (60m)**: 0.0335
 
 ## Macroeconomic scenarios
 
@@ -141,7 +141,7 @@ date, so the projected macro path was never reached and both scenarios returned
 almost the same answer. The model looked stable when it was simply not being asked
 the question.
 
-**Adverse lifetime PD is 3.28x the baseline.**
+**Adverse lifetime PD is 3.15x the baseline.**
 
 **The adverse legs: moves are proportional where shown in per cent**
 
@@ -164,14 +164,14 @@ the question.
 
 | Statistic | Baseline | Adverse |
 |---|---|---|
-| count | 500.0000 | 500.0000 |
-| mean | 0.0010 | 0.0032 |
-| std | 0.0009 | 0.0028 |
-| min | 0.0001 | 0.0004 |
-| 25% | 0.0004 | 0.0012 |
-| 50% | 0.0007 | 0.0022 |
-| 75% | 0.0013 | 0.0044 |
-| max | 0.0063 | 0.0201 |
+| count | 20465.0000 | 20465.0000 |
+| mean | 0.0224 | 0.0614 |
+| std | 0.0244 | 0.0544 |
+| min | 0.0007 | 0.0026 |
+| 25% | 0.0062 | 0.0215 |
+| 50% | 0.0133 | 0.0443 |
+| 75% | 0.0288 | 0.0835 |
+| max | 0.1528 | 0.3141 |
 
 ---
 
@@ -179,5 +179,7 @@ the question.
 
 - `uv run creditsurv report`
 - Formula: `moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured'))`
+- Shape: `scalar`
+- Generated: 2026-10-21
 - Distribution: weibull; likelihood: interval_censored
-- Book scored: 500 rows standing for 3,563,807 loans; horizon: 60 months
+- Book scored: 20,465 rows standing for 4,130,251 loans; horizon: 60 months

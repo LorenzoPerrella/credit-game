@@ -121,6 +121,15 @@ class FitResult:
     #: shape to notice. Absent from models cached before this field existed, so read it with
     #: ``getattr`` the way ``blocks`` is read. Typed as lifelines accepts it, which includes
     #: ``True`` for "the scale's own formula".
+    #:
+    #: **Do not read this off a fit that came out of the cache.** A pickle written before the
+    #: field existed unpickles with the dataclass default, so a shaped fit from the cache reports
+    #: ``None`` and is indistinguishable from a genuinely scalar one -- and the first report
+    #: generated after this field was added duly stated ``Shape: scalar`` for the published
+    #: shaped model, which is a *wrong* statement where there had been none. The description JSON
+    #: beside the pickle carries the truth, and a caller that asked for a shape already knows it:
+    #: pass what was asked for. ``reporting.builder.specification`` therefore takes the shape as
+    #: an argument and never discovers it.
     ancillary: str | bool | None = None
 
     @property

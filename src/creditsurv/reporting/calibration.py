@@ -227,6 +227,7 @@ def generate(
     continuous: Sequence[str],
     *,
     formula: str,
+    shape: str | bool | None = None,
     reports_dir: Path,
     horizon_months: int = 60,
     weights: pd.Series | None = None,
@@ -365,7 +366,7 @@ the question.
                 # month -- and a report naming only the scale cannot be told from one fitted
                 # without the shape, which is how `windows.md` published four of those.
                 # `tests/test_site.py` holds these lines to `config`.
-                *specification(formula, getattr(fitted, "ancillary", None)),
+                *specification(formula, shape),
                 f"Distribution: {fitted.distribution}; likelihood: {fitted.likelihood.value}",
                 f"Book scored: {len(loans):,} rows"
                 + ("" if weights is None else f" standing for {weights.sum():,.0f} loans")
