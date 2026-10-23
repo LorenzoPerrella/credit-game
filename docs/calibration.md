@@ -67,14 +67,17 @@ estimated as actual over expected on the anchoring window of 2022-01 to 2024-12,
 loan-month by the same factor -- so the ranking, and therefore every segment view, means what it
 meant before.
 
-!!! warning "The multiplier on this page is of a model without the shape"
+The multiplier is **1.0111**, estimated on the shaped model this page describes, and it takes
+the test window to an actual over expected of **0.9065** with the Gini unchanged at **0.5461**.
 
-    1.1831, and the 1.134 to **0.958** it produced on the test window, come from
-    `creditsurv windows`, whose four fits carried **no ancillary formula**: rule 14 makes the
-    shape part of the specification and the campaign never passed it on. The third independent
-    validation found it on 19 October 2026. Every anchoring figure on this page, and the master
-    scale below it, is therefore of a specification the configuration does not declare, and is
-    replaced by the corrected campaign's own output rather than patched.
+!!! note "An earlier version of this page quoted 1.1831, and it was of another model"
+
+    `creditsurv windows` fitted four models without rule 14's ancillary formula until 23 October
+    2026, so the 1.1831 this page carried — and the 1.134 to 0.958 it produced — were of a
+    **scalar-shape** specification the configuration does not declare. The third independent
+    validation found it on 19 October as N1; the corrected campaign ran on 23 October and the
+    figures above are its own. They are kept on the record here rather than quietly replaced,
+    because a reader who saw the old ones is owed the reason they changed.
 
 **The master scale, and why its criterion changed.** Eight grades of twelve-month PD on geometric
 thresholds. The rule asked for the 95% Jeffreys interval around what each grade's loans did and

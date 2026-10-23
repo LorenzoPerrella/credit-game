@@ -844,3 +844,53 @@ cut the deciles run **1.033 to 8.123**, and 8.123 is the third validation's own 
 safest decile over 2021-22 -- 1,335 defaults against 164 expected. Overall A/E at that cut is
 1.3211 and at the 2018-12 cut 0.4920, so the level across regimes is the open item it was, and the
 anchoring covers the window it is estimated on and not a regime it has not seen.
+
+### Rule 5 — The argument that admitted the 25% tolerance is falsified by the model it governs
+
+Found **23 October 2026**, reading the corrected campaign's grade table against the ratification
+written four days earlier. It needs a second look from the signatory, and this entry is written
+before any page is changed to reflect it.
+
+**What the ratification said.** The tolerance replaced the Jeffreys interval on 17 October and the
+amendment was written *after* seeing 0 of 8 grades hold, which is the shape of tuning. What
+admitted it was declared to be arithmetic rather than argument: on the grade table published at
+the time, 25% relative passed **six of eight** where Jeffreys passed **one**, and the master scale
+— which allows at most one failing grade — **failed under both**. An amendment that cannot turn a
+failure into a pass is admissible on its reasoning; one that could would not be.
+
+**That table was of the scalar-shape fit, because it was the only one that existed.** The
+corrected campaign produced the configured model's own grade table on 23 October:
+
+| | grades holding | master scale |
+|---|---|---|
+| 25% relative tolerance | **8 of 8** | **passes** |
+| 95% Jeffreys interval | **2 of 8** (grades 2 and 8) | fails |
+
+**So on the model that counts, the tolerance does turn a failure into a pass**, and the sentence
+that admitted it is false. The criterion change is now **decisive for a published verdict**, which
+is precisely the case the second signatory requirement exists for.
+
+**What has not changed is the substance.** At 956,580 to 3.88 million obligor-years a grade, the
+interval is a few parts in ten thousand wide — grade 5 runs 0.004819 to 0.004964, a width of 3% of
+its own value — so it continues to test the arithmetic of an average rather than the model, which
+is the same argument this document carries for the Kaplan-Meier band and the crossing test. The
+relative misses are real and are published: −20.0%, +1.8%, +22.1%, +21.5%, +16.5%, +6.5%, +2.4%,
++0.02%. Three grades sit above 16% and none above 25%.
+
+**What this entry does not do is decide.** Two readings are open and they are not symmetric:
+
+- the tolerance is **right on its merits and was ratified on the wrong arithmetic** — then the
+  ratification is re-signed on the correct table, with the sentence about failing either way struck
+  and replaced by the interval-width argument, which stands on its own;
+- the tolerance is **right only where it does not matter** — then a criterion that flips a verdict
+  cannot rest on a width argument alone, and what is owed is a declared per-grade materiality that
+  is not 25% because 25% is what the misses happen to fall under.
+
+**The second is the one to be careful about**, because the largest miss is +22.1% against a
+tolerance of 25%: the model passes by 2.9 percentage points on a number chosen before this table
+was seen. That is not tuning — the order is on the record — but it is close enough that the width
+has to be defended on the interval's arithmetic rather than on the margin.
+
+No page is changed and no verdict is restated until the signatory has read this. `docs/windows.md`
+and the grade table publish both criteria side by side and the `judged_on` column says which
+judged each grade, so the evidence is on the record either way.

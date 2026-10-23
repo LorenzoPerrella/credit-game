@@ -25,13 +25,18 @@ every report a reporting module writes to the configuration -- with an exemption
 generation date, so it retires itself the moment a report is regenerated rather than needing
 somebody to remember.
 
-## Windows, anchoring and grades: still superseded
+## Windows, anchoring and grades: regenerated 23 October 2026
 
-[That report](windows.md) carries its own notice. Every fit behind it has a **scalar shape**,
-because the campaign never passed the ancillary formula to them, so its three regime cuts, its
-anchoring multiplier and its master scale are of a model the configuration does not declare.
-The third validation found it as N1 on 19 October 2026. It is regenerated once the corrected
-campaign has run.
+[That report](windows.md) was the one N1 was about: every fit behind it carried a **scalar
+shape**, because the campaign never passed the ancillary formula to them, so its three regime
+cuts, its anchoring multiplier and its master scale were of a model the configuration does not
+declare.
+
+**The corrected campaign has run.** The report states its formula, its shape and its date, and
+carries no notice. The multiplier is **1.0111** against the 0.9695 of the unshaped run, and on the
+declared test window the model reads anchored A/E **0.9065**, Gini **0.5461** and a master scale
+that **passes 8 of 8** — the first time it has. `views` computed the same multiplier independently
+two days earlier and agrees to four figures.
 
 ## The distribution family: still superseded
 
