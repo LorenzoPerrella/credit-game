@@ -777,3 +777,70 @@ a saddle and the shaped model is not identified at that cut, which is a finding 
 If it is within rounding of zero, the test gets a floor stated in the same terms as the distance
 tolerance it sits beside, and that is a change to the engine rather than to the model. No fit is
 published off either reading until the number is in hand.
+
+### The concavity test gets the floor the register declared, and the campaign is measured
+
+Measured 23 October 2026, the number first and the change after it, as the entry above required.
+
+**The eigenvalue, and it settles it.** On the 2018-12 cut the refused Hessian reads a smallest
+eigenvalue of **-9.175e-18** against a largest of **1.935e-01**, one of 42 negative. Against the
+tolerance `np.linalg.matrix_rank` itself uses to call a singular value zero -- the largest times
+the dimension times machine epsilon, **1.805e-15** here -- that is **0.0051 of the tolerance**,
+two hundred times under, on a Hessian whose condition number is 2.1e+16. One direction of 42 is
+flat beyond what double precision can resolve and the sign of its curvature is rounding.
+
+**So the second reading holds**: not a saddle, and not a model that fails to be identified at
+that cut. The change is to the engine, as declared.
+
+**What the strict test cost, measured rather than asserted.** Refused at 2.25e-06 standard errors
+from the optimum, the fit went into the method chain and SLSQP spent **77 evaluations** converging
+towards 0.005607 where Newton had already reached **0.005582**. Over 58 million rows that gap is
+about **1,450 log-likelihood units**, given up to read an arithmetic artefact as a saddle.
+
+**What changed, and what did not.** "Not positive" now means negative by more than the arithmetic
+can explain, at numpy's own rank tolerance. The refusal is kept where the curvature is genuinely
+negative, for the reason it was written: a vanishing gradient without upward curvature is a saddle
+and not a maximum. And a direction flatter than the tolerance is now **recorded rather than
+refused** -- along it the likelihood is constant, so the optimum is a set and the fit is a point in
+it, while the distance guarantee still holds in every direction that is determined. This is the
+discipline this document already carries for the Kaplan-Meier band and the crossing test, both of
+which fired on quantities smaller than their own noise until they were given floors.
+
+**An inference made mid-run and falsified by the number.** From SLSQP's trajectory alone -- it was
+converging to a point *worse* than Newton's -- it looked like Newton had walked onto the shallow
+edge of lifelines' clipped region, where the objective reads lower than the true maximum and the
+curvature is genuinely indefinite. That is a real phenomenon this document describes, it fitted the
+evidence available, and it was wrong. SLSQP converging to a worse point is a fact about SLSQP on an
+ill-conditioned design, which this document also records. The eigenvalue was the only thing that
+could tell the two apart, and recording the guess before the measurement is what made it checkable.
+
+### The campaign, run with the floor in place
+
+**One hour exactly** -- 3,599.74 s, maxrss 8.10 GB -- four shaped fits, **no `not concave` refusal
+anywhere**, and one flat-direction line on the cut that produced the finding.
+
+| cut | until | A/E | Gini | minutes |
+|---|---|---|---|---|
+| 2018-12 | 2020-12 | **0.4920** | 0.4507 | 8.0 |
+| 2020-12 | 2022-12 | **1.3211** | 0.5182 | 5.9 |
+| 2022-12 | 2024-12 | **0.9849** | 0.5463 | 4.5 |
+
+**The declared test window, anchored**: A/E **0.9065**, Gini **0.5461**, and the master scale
+**passes 8 of 8** -- the first time it has. The multiplier is **1.0111** on 2022-01 to 2024-12,
+agreeing to four figures with the one `views` computed independently two days earlier.
+
+**Against the predictions.** The register predicted the multiplier would not be 0.9695 and declined
+to predict its direction: it is 1.0111. It predicted the scale would be of the configured model
+rather than of a scalar-shape one, and it is. The deciles and the grades were predicted as a check
+on the validator and **both agree**: 10 of 10 at 0.803 to 1.150 from `views`, 8 of 8 grades here.
+
+**And the warm-start chain is what makes it an hour.** The first cut began **785 standard errors**
+from the optimum, cold, and took 8.0 minutes with the damping ladder. The development fit began
+**4.52** standard errors out and took two *undamped* Newton steps to 2.53e-05. The expensive cut is
+paid once.
+
+**The finding the campaign confirms is N6, and our own code now reads its number.** At the 2020-12
+cut the deciles run **1.033 to 8.123**, and 8.123 is the third validation's own figure for the
+safest decile over 2021-22 -- 1,335 defaults against 164 expected. Overall A/E at that cut is
+1.3211 and at the 2018-12 cut 0.4920, so the level across regimes is the open item it was, and the
+anchoring covers the window it is estimated on and not a regime it has not seen.
