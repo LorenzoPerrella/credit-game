@@ -316,8 +316,13 @@ the two appear.
         }
     )
 
+    # **The scenarios run to 36 months and the term structure to `horizon_months`**, so the two
+    # lifetime figures in this report are of different horizons. The label below says which;
+    # before 23 October 2026 neither did, and a reader comparing "lifetime PD (60m)" with
+    # "adverse lifetime PD" was comparing five years with three.
+    scenario_months = min(horizon_months, 36)
     scenarios = scenario_lifetime_pd(
-        fitted, loans, macro, covariates, horizon_months=min(horizon_months, 36)
+        fitted, loans, macro, covariates, horizon_months=scenario_months
     )
     scenario_figure = charts.scenario_comparison(scenarios, figures / "scenarios.png")
     uplift = _average(scenarios["adverse"], weights) / _average(scenarios["baseline"], weights)
@@ -345,7 +350,9 @@ date, so the projected macro path was never reached and both scenarios returned
 almost the same answer. The model looked stable when it was simply not being asked
 the question.
 
-**Adverse lifetime PD is {uplift:.2f}x the baseline.**
+**Adverse lifetime PD is {uplift:.2f}x the baseline, over {scenario_months} months.**
+The term structure above runs to {horizon_months} months, so the two lifetime figures in
+this report are of different horizons; this line says which.
 """
     ).table(
         scenario_legs(ADVERSE, {name: MACRO_SOURCES[name] for name in TIME_VARYING_CONTINUOUS}),
