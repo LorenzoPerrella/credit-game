@@ -121,15 +121,32 @@ class Fits:
     #: the aggregation key".
     calendar: Sequence[str] | None = None
     record: list[dict[str, object]] = field(default_factory=list)
-    #: One encoding per sample, kept for the life of the run. Three at most: the training half
-    #: and the two origination-year halves step 9 compares, against thirty readings.
-    held: dict[int | None, Encoding] = field(default_factory=dict, repr=False)
+    #: One encoding per sample, kept for the life of the run. Five at most since rule 9's
+    #: amendment: the training half, the two origination-year halves and the two time cuts step 9
+    #: compares, against thirty readings.
+    #:
+    #: Keyed by `(parity, months)` rather than by parity alone, because a sample is now either
+    #: a parity or a window and the two are different rows. `encoding_fingerprint` already
+    #: hashed both, so a time-cut reading was already cacheable and already distinguishable --
+    #: it was only this dictionary that could not tell them apart.
+    held: dict[tuple[int | None, tuple[int | None, int | None] | None], Encoding] = field(
+        default_factory=dict, repr=False
+    )
     #: Every covariate the run will ever read, which a reading has to cover because it is made
     #: once and before the first specification exists. `run_selection` decides it from its own
     #: candidate lists and takes a copy of these fits carrying it; without it the description's
     #: own covariates are all that is assumed, and a formula naming anything else fails where
     #: it is expanded rather than silently.
     covering: tuple[str, ...] | None = None
+    #: The shape's own formula, when rule 14's shape is part of the specification rather than a
+    #: candidate. Every fit of the run reads it -- a selection comparing a scale-only candidate
+    #: against a shaped parent would be comparing two models and calling one a removal.
+    #:
+    #: It is the **same** formula for every candidate, because rule 14 fixes it: the nine
+    #: covariates fixed at origination, in rule 12's forms. Backward elimination removes from the
+    #: scale; the shape does not move. `None` is the scalar shape every run before October 2026
+    #: made, and that path is untouched down to its summation order.
+    ancillary: str | None = None
 
     def fit(
         self,
@@ -138,6 +155,7 @@ class Fits:
         sample: str = "training half",
         where: np.ndarray | None = None,
         parity: int | None = None,
+        months: tuple[int | None, int | None] | None = None,
         start: FitResult | None = None,
         parent: Specification | None = None,
     ) -> FitResult:
@@ -160,6 +178,7 @@ class Fits:
             sample=sample,
             distribution=self.distribution,
             cause=self.cause,
+            ancillary=self.ancillary,
         )
         fingerprint = fit_fingerprint(**described)
         cached = load_fit(fingerprint)
@@ -179,6 +198,7 @@ class Fits:
             spec,
             where=where,
             parity=parity,
+            months=months,
             start=start if elsewhere is None else elsewhere,
             floor=_floor(spec, parent, start),
             speculative=elsewhere is not None,
@@ -192,16 +212,24 @@ class Fits:
         )
         return result
 
-    def reading(self, parity: int | None = None) -> Encoding:
+    def reading(
+        self,
+        parity: int | None = None,
+        months: tuple[int | None, int | None] | None = None,
+    ) -> Encoding:
         """This run's reading of one sample, made on the first call and kept after it.
 
         Public because the procedure takes the candidates' moments off it: steps 5 and 6 used to
         read the whole cell file for a covariance, which was the last pass the encoding had not
         replaced.
         """
-        return self._encoding(parity)
+        return self._encoding(parity, months)
 
-    def _encoding(self, parity: int | None) -> Encoding:
+    def _encoding(
+        self,
+        parity: int | None = None,
+        months: tuple[int | None, int | None] | None = None,
+    ) -> Encoding:
         """The rows of one sample, read once and kept for every fit that wants them.
 
         A reading involves no formula -- no design to expand, no moments over 26 columns,
@@ -220,7 +248,7 @@ class Fits:
         six readings between them where they used to pay twelve, and a job that stops picks up
         at the fit it was on instead of at the reading.
         """
-        held = self.held.get(parity)
+        held = self.held.get((parity, months))
         if held is not None:
             return held
         assert self.blocks is not None
@@ -229,7 +257,13 @@ class Fits:
         covering = self.covering or self.blocks.covariates
         loan = [name for name in covering if name not in calendar]
         macro = [name for name in covering if name in calendar]
-        source = replace(self.blocks, covariates=tuple(covering), vintage_parity=parity).prepared()
+        narrowed = replace(self.blocks, covariates=tuple(covering), vintage_parity=parity)
+        if months is not None:
+            # A window **inside** the window the run already reads: the run's own `until` stands
+            # and the cut narrows it, never widens it. A step-9 time cut that reached past the
+            # development window would score the model on months rule 1 keeps for the anchoring.
+            narrowed = replace(narrowed, months=_narrowed(narrowed.months, months))
+        source = narrowed.prepared()
         name = encoding_fingerprint(
             identity=self.identity,
             loan=loan,
@@ -274,7 +308,7 @@ class Fits:
             )
         else:
             log.info("the reading %s, mapped back: %s cells", name, f"{held.episodes:,}")
-        self.held[parity] = held
+        self.held[(parity, months)] = held
         return held
 
     def _elsewhere(self, described: dict[str, object]) -> FitResult | None:
@@ -313,6 +347,7 @@ class Fits:
         *,
         where: np.ndarray | None,
         parity: int | None,
+        months: tuple[int | None, int | None] | None = None,
         start: FitResult | None,
         floor: float | None = None,
         speculative: bool = False,
@@ -332,7 +367,9 @@ class Fits:
         another hour. It is raised through.
         """
         try:
-            return self._once(spec, where=where, parity=parity, start=start, floor=floor)
+            return self._once(
+                spec, where=where, parity=parity, months=months, start=start, floor=floor
+            )
         except Pinned:
             # Not a bad starting point but the shape of the surface: see blocks.Pinned. The
             # exception is a start borrowed from another cell table, which is a guess about
@@ -340,12 +377,16 @@ class Fits:
             if not speculative:
                 raise
             log.warning("a start from another table was pinned; refitting cold: %s", spec.formula)
-            return self._once(spec, where=where, parity=parity, start=None, floor=floor)
+            return self._once(
+                spec, where=where, parity=parity, months=months, start=None, floor=floor
+            )
         except exceptions.ConvergenceError:
             if start is None:
                 raise
             log.warning("warm start did not converge; refitting cold: %s", spec.formula)
-            return self._once(spec, where=where, parity=parity, start=None, floor=floor)
+            return self._once(
+                spec, where=where, parity=parity, months=months, start=None, floor=floor
+            )
 
     def _once(
         self,
@@ -353,6 +394,7 @@ class Fits:
         *,
         where: np.ndarray | None,
         parity: int | None,
+        months: tuple[int | None, int | None] | None = None,
         start: FitResult | None,
         floor: float | None = None,
     ) -> FitResult:
@@ -369,10 +411,11 @@ class Fits:
                 )
                 raise ValueError(message)
             fitted = fit_encoding(
-                self._encoding(parity),
+                self._encoding(parity, months),
                 spec.covariates,
                 spec.formula,
                 distribution=self.distribution,
+                ancillary=self.ancillary,
                 initial_point=initial_point,
                 prefer=self.preferred,
                 floor=floor,
@@ -501,6 +544,28 @@ def _check_nested(
 _NESTED_TOLERANCE: Final = 1.0
 
 
+def _terms_of(formula: str) -> frozenset[str]:
+    """A formula as the set of its terms, which is what decides whether two are one model.
+
+    The order is not: a design's columns are built in the formula's order, but an initial point
+    is a `pd.Series` and lifelines aligns it by index. Two formulas over the same terms are the
+    same model and one's optimum is the other's start.
+    """
+    return frozenset(term.strip() for term in formula.split(" + ") if term.strip())
+
+
+def _narrowed(
+    outer: tuple[int | None, int | None] | None,
+    inner: tuple[int | None, int | None],
+) -> tuple[int | None, int | None]:
+    """The intersection of two month windows, where `None` is open at that end."""
+    if outer is None:
+        return inner
+    opens = [edge for edge in (outer[0], inner[0]) if edge is not None]
+    closes = [edge for edge in (outer[1], inner[1]) if edge is not None]
+    return (max(opens) if opens else None, min(closes) if closes else None)
+
+
 def selection_description(
     *,
     identity: str,
@@ -510,11 +575,17 @@ def selection_description(
     sample: str = "training half",
     distribution: str = DISTRIBUTION,
     cause: str = DEFAULT_CAUSE,
+    ancillary: str | None = None,
 ) -> dict[str, object]:
     """What a selection fit is saved under, and so how it is found again.
 
     The cause enters only when it is not ``default``, so every fit made before the
-    prepayment model existed keeps the name it has.
+    prepayment model existed keeps the name it has. **The shape's formula enters the same
+    way, and it has to**: with rule 14's shape part of the specification, a fit of one scale
+    formula with the shape and a fit of it without are two different models, and a fingerprint
+    that did not separate them would hand a selection the wrong one out of the cache and call
+    it a hit. `fit_description` already took it; this one did not, which is the half of the
+    pair that would have failed silently.
     """
     described: dict[str, object] = {
         "purpose": "selection",
@@ -528,6 +599,8 @@ def selection_description(
     }
     if cause != DEFAULT_CAUSE:
         described["cause"] = cause
+    if ancillary is not None:
+        described["ancillary"] = ancillary
     return described
 
 
@@ -539,6 +612,7 @@ def selected_fit(
     formula: str,
     distribution: str = DISTRIBUTION,
     cause: str = DEFAULT_CAUSE,
+    ancillary: str | None = None,
 ) -> FitResult | None:
     """The selection's own fit of ``formula`` on the training half, if it made one.
 
@@ -555,6 +629,7 @@ def selected_fit(
                 formula=formula,
                 distribution=distribution,
                 cause=cause,
+                ancillary=ancillary,
             )
         )
     )
@@ -740,6 +815,7 @@ def fit_once(
     as_of: str,
     reuse: bool,
     moratorium: str = "exclude",
+    ancillary: str | None = None,
     start: pd.Series | None = None,
 ) -> object:
     """Fit the training half, reusing a cached model when one matches exactly.
@@ -761,7 +837,9 @@ def fit_once(
     from creditsurv.data.store import fit_fingerprint, load_fit, save_fit
     from creditsurv.models.aft import fit_aft
 
-    described = fit_description(train, formula, as_of=as_of, moratorium=moratorium)
+    described = fit_description(
+        train, formula, as_of=as_of, moratorium=moratorium, ancillary=ancillary
+    )
     fingerprint = fit_fingerprint(**described)
 
     if reuse:
@@ -771,7 +849,9 @@ def fit_once(
             return cached
         log.info("no cached fit %s; fitting", fingerprint)
 
-    fitted = fit_aft(train, covariates, formula, weights_col=WEIGHT, initial_point=start)
+    fitted = fit_aft(
+        train, covariates, formula, weights_col=WEIGHT, ancillary=ancillary, initial_point=start
+    )
     log.info("%.1f minutes", fitted.elapsed_seconds / 60)
     path = save_fit(fitted, fingerprint, {**described, "minutes": fitted.elapsed_seconds / 60})
     log.info("saved to %s", path)
@@ -834,13 +914,39 @@ def cached_fit(*, as_of: str, moratorium: str) -> Callable[..., FitResult]:
     return fit
 
 
-def selection_start(as_of: str, moratorium: str) -> pd.Series | None:
+def selection_start(
+    as_of: str,
+    moratorium: str,
+    ancillary: str | None = None,
+    formula: str | None = None,
+) -> pd.Series | None:
     """The coefficients the selection ended on, when it chose on the same half and table.
 
     ``None`` when no selection has been recorded, when it selected for another date or
     moratorium policy, or when its fit is no longer in the cache: the fit then starts from
     lifelines' own seed, as it always did. A record older than the cell table cannot match,
     because the fit is cached under the table's size and time of writing.
+
+    **And ``None`` when the formula the caller is about to fit is not the one the selection
+    fitted**, which is the check this was missing and which cost nine and a half hours. Rule 12
+    reads three banded covariates as factors, and steps 5 to 10 run on the linear form -- so a
+    selection's fit carries 36 parameters where a report's carries 43, and the two are different
+    models. lifelines aligns an initial point by index, so handing it the smaller one leaves
+    every band coefficient unset and the linear ones homeless: the polish opened **5.1e+03
+    standard errors out**, refused five damped steps, gave up, and the fit fell back to SLSQP
+    for 213 evaluations and nine and a half hours. **A warm start from the wrong model is worse
+    than no warm start**, because it is paid for before it is discovered.
+
+    This guard is the fix. The debt behind it is the one rule 12 declares owed -- a re-selection
+    under the band form -- after which the two formulas agree and the start is worth having.
+
+    **The comparison is on the set of terms, not on the string**, and the first version of this
+    guard got that wrong. After the band-form selection the two formulas held the same thirteen
+    terms in a different order -- the selection writes the banded covariates first,
+    `default_formula` writes the macro block first -- and a string comparison refused a start
+    that was perfectly good, which would have cost the ten hours this guard exists to save.
+    lifelines aligns an initial point **by index**, so the order of the terms is not a fact
+    about the model.
     """
     import json
 
@@ -853,11 +959,21 @@ def selection_start(as_of: str, moratorium: str) -> pd.Series | None:
     summary = json.loads(path.read_text())
     if summary.get("as_of") != as_of or summary.get("moratorium") != moratorium:
         return None
+    chose = str(summary["formula"])
+    if formula is not None and _terms_of(chose) != _terms_of(formula):
+        log.info(
+            "the selection fitted a different formula, so its coefficients are not a start: "
+            "it chose %r and this fit is of %r",
+            chose,
+            formula,
+        )
+        return None
     fitted = selected_fit(
         identity=cells_identity(moratorium),
         as_of=as_of,
         moratorium=moratorium,
-        formula=str(summary["formula"]),
+        formula=chose,
+        ancillary=ancillary,
     )
     if fitted is None:
         return None

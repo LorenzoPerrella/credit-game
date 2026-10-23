@@ -36,7 +36,24 @@ from typing import TYPE_CHECKING, Final, cast
 import numpy as np
 import pandas as pd
 
-from creditsurv.config import MACRO_LAG_MONTHS
+from creditsurv.config import MACRO_LAG_MONTHS, MORATORIUM_REGIME
+
+
+def month_ordinal(period: pd.Period) -> int:
+    """One monthly period as months since year zero: the inverse of `panel._months_to_periods`.
+
+    The cell key stores `origination_month` on this scale precisely so a loan age can be
+    added to a calendar month, and every caller that needs to cut the table at a reporting
+    date has to say the same thing. It was said in nine places, once as a closure and eight
+    times inline, which is eight chances for one of them to be off by a month.
+
+    It lives here rather than in `data.panel`, where it was, because `data.panel` imports this
+    module and the reverse would be a cycle -- and the moratorium regime indicator below is a
+    function of the observation month and needs it. `data.panel` re-exports it, so every caller
+    reads it from the same place it always did.
+    """
+    return int(period.year) * 12 + int(period.month) - 1
+
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -109,6 +126,13 @@ MACRO_SOURCES: Final[dict[str, tuple[str, ...]]] = {
     "housing_starts_growth": ("housing_starts",),
     "origination_spread": ("mortgage_rate_30y", "mortgage_rate_15y"),
     "refinance_incentive": ("mortgage_rate_30y", "mortgage_rate_15y"),
+    # The one member that reads **no series**: the observation month is the whole of it. An
+    # empty tuple rather than an absent key, because the test that holds this map to the builder
+    # compares key sets -- and because "reads nothing" is a fact about this covariate worth
+    # stating, not an omission. It also means a scenario cannot shock it, which is correct: a
+    # moratorium is a policy, not a macro path, and a stress scenario that turned one on would
+    # be asserting a policy response rather than a stress.
+    "moratorium_regime": (),
 }
 
 
@@ -418,6 +442,12 @@ MACRO_DERIVED: Final[tuple[str, ...]] = (
     # and cost no cells of their own.
     "origination_spread",
     "refinance_incentive",
+    # The one member that reads no macro series at all: an indicator on the months a payment
+    # moratorium suppressed the event, which is a function of the observation month and nothing
+    # else. Rule 1 of `docs/rules.md` says why it is needed and `config.MORATORIUM_REGIME` says
+    # which months. It belongs here because it travels the path every macro covariate travels --
+    # built after aggregation, from the observation date, costing no cells.
+    "moratorium_regime",
 )
 
 
@@ -534,6 +564,20 @@ def add_macro_family(
     ):
         if source in available and requested(name):
             store(name, build(source))
+
+    # The months a moratorium suppressed the event, as an indicator. No series is read: the
+    # observation month is the whole of it, which is what makes this the cheapest member of the
+    # family and the only one that cannot be missing because a cache is partial.
+    #
+    # Its purpose is to **absorb**, not to be tested. Under `exclude` those months carry the
+    # largest unemployment shock in the series with defaults suspended by law, so a macro
+    # coefficient read over them is read through a policy intervention -- measured at a
+    # threefold attenuation of `unemployment_change` between the 2018 and 2021 cuts. See
+    # `config.PROTECTED_MACRO`, which keeps the selection from removing it.
+    if requested("moratorium_regime"):
+        opens, closes = (month_ordinal(pd.Period(edge, freq="M")) for edge in MORATORIUM_REGIME)
+        months = observation.to_numpy(dtype=np.int64)
+        store("moratorium_regime", ((months >= opens) & (months <= closes)).astype(float))
 
     # The refinancing benchmark is switched by term, repeating what the source data
     # says rather than what is convenient: a fifteen-year loan is refinanced against

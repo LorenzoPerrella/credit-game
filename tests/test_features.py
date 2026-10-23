@@ -174,9 +174,13 @@ def test_binning_covers_every_modelled_continuous_covariate() -> None:
     aggregation does not carry into the cell key, which the loan-level path can still
     bin. An unused set of edges is harmless; a modelled covariate without any is not.
     """
-    from creditsurv.config import STATIC_CONTINUOUS, TIME_VARYING_CONTINUOUS
+    from creditsurv.config import PROTECTED_MACRO, STATIC_CONTINUOUS, TIME_VARYING_CONTINUOUS
 
-    assert set(STATIC_CONTINUOUS) | set(TIME_VARYING_CONTINUOUS) <= set(BIN_EDGES)
+    # An indicator is exempt, because banding a 0/1 column is not a thing to do. What this test
+    # protects against is a *continuous* covariate silently staying continuous, and
+    # `moratorium_regime` is already as coarse as a covariate gets.
+    modelled = (set(STATIC_CONTINUOUS) | set(TIME_VARYING_CONTINUOUS)) - set(PROTECTED_MACRO)
+    assert modelled <= set(BIN_EDGES)
 
 
 def test_binned_formula_rewrites_only_continuous_terms() -> None:

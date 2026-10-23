@@ -286,12 +286,12 @@ ORDINAL: Final[tuple[str, ...]] = ("term_years",)
 #: ``mortgage_rate_decline``, whose sign flips between even and odd vintages beside
 #: ``policy_rate_change``, and ``yield_curve_slope`` survived in its place.
 TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
+    # Rule 1's regime indicator, protected rather than selected: see PROTECTED_MACRO.
+    "moratorium_regime",
     "ltv_change",
     "unemployment_change",
-    "policy_rate_change",
-    "yield_curve_slope",
+    "financial_conditions",
     "consumer_sentiment",
-    "housing_starts_growth",
 )
 
 #: The macro block of the **prepayment** model, as `creditsurv select --cause prepayment`
@@ -345,21 +345,86 @@ MACRO_CANDIDATES: Final[tuple[str, ...]] = (
     "financial_conditions",
     "mortgage_rate_decline",
     "house_price_growth",
-    "policy_rate_change",
-    "yield_curve_slope",
     "corporate_bond_spread",
-    "inflation_rate",
-    "equity_return",
     "equity_volatility",
     "consumer_sentiment",
     "housing_starts_growth",
-    # Added for the validation's S5: ``equity_volatility`` and ``inflation_rate`` enter as levels at
-    # the observation date, identical for every loan in a month, so their coefficients are calendar
-    # effects by construction. Their moves since origination vary across loans in the same month.
-    # Both forms are candidates and the selection decides.
+    # Added for the validation's S5: ``equity_volatility`` entered as a level at the observation
+    # date, identical for every loan in a month, so its coefficient is a calendar effect by
+    # construction. Its move since origination varies across loans in the same month. Both forms
+    # are candidates and the selection decides.
     "volatility_change",
-    "inflation_change",
 )
+
+#: Five candidates withdrawn on 17 October 2026 under **rule 15**, which asks a declared expected
+#: sign of every candidate and says that the honest form of "theory commits to no direction" is
+#: **not a candidate** rather than an unsigned one. Kept here rather than deleted, because a
+#: covariate removed without its reason on the record is a covariate that comes back.
+#:
+#: Three of the five the selection had already eliminated for turning their own signs, so
+#: withdrawing them changes nothing in fact. **Two were in the published model**, and those two
+#: are why the rule exists.
+WITHDRAWN_CANDIDATES: Final[dict[str, str]] = {
+    # In the published model, and its second-largest macro effect. On a fixed-rate book the
+    # borrower's payment does not move with the policy rate, so the only channels are the
+    # market's -- lock-in and real-debt relief on one side, affordability and the cost of living
+    # on the other -- and which dominates depends on whether rates rose with growth or with
+    # inflation, which this model does not observe. Measured by the second validation: the term
+    # lowered the predicted hazard 33% in 2023 and 36% in 2024, is about 80% of the level drift
+    # from 2021, and on the 2022 regime cut is the difference between 1.420 and 0.959.
+    "policy_rate_change": "no committed direction: the sign depends on an unobserved regime",
+    # In the published model. A slope is a forward-looking cycle proxy whose entire relation to
+    # default runs through a cycle this model already carries in unemployment and house prices,
+    # so there is no direction left for theory to commit to. Measured: +0.083 at the 2018 cut and
+    # -0.032, -0.039, -0.048 at the three after it, and the September selection had removed it at
+    # step 9 for exactly that instability.
+    "yield_curve_slope": "no committed direction, and the sign flips across time cuts",
+    # Already eliminated at step 8 for turning its sign. Inflation erodes the real value of a
+    # fixed nominal debt, which is relief, and erodes real income, which is stress; which
+    # dominates depends on whether wages keep up.
+    "inflation_rate": "no committed direction: real debt against real income",
+    "inflation_change": "no committed direction, as the level",
+    # Already eliminated at step 8 for turning its sign. A wealth channel for a minority of
+    # these borrowers and a cycle proxy otherwise.
+    "equity_return": "no committed direction for a mortgage book",
+}
+
+#: The months a payment moratorium suppressed the event, and the indicator that absorbs them.
+#:
+#: Rule 1 of `docs/rules.md`, amended 17 October 2026 before the selection it governs. Under
+#: `exclude` a moratorium month is not an event and the loan stays at risk, which is right for the
+#: dependent variable -- but the largest unemployment shock in the series, over eleven points in
+#: two months, arrives with defaults suspended by law, and the coefficient records it. Measured
+#: across the declared cuts, `unemployment_change` reads **-0.0920 at 2018-12** and **-0.0305 at
+#: 2021-12**: four points of unemployment multiply the hazard by 1.67 on the first and 1.18 on the
+#: second, a **threefold** attenuation of the one sensitivity a mortgage stress test turns on.
+#:
+#: CARES Act forbearance ran from March 2020; the window closes at September 2021, when the
+#: enrolment and the reporting of it had wound down. It is a function of the **observation month
+#: alone**, so it costs zero cells -- the same argument every macro covariate rests on.
+MORATORIUM_REGIME: Final[tuple[str, str]] = ("2020-03", "2021-09")
+
+#: Where step 9's time cut falls, by arithmetic rather than by judgement.
+#:
+#: Rule 9 of `docs/rules.md`, amended 17 October 2026: step 9 compares sign stability across
+#: **time cuts** as well as across origination parity, because the second validation found a
+#: covariate reading +0.083 at the 2018 cut and -0.032, -0.039 and -0.048 at the three after it
+#: while the parity split called it stable.
+#:
+#: The **calendar midpoint of the development window**: 1999-01 to 2021-12 is 276 months, so the
+#: first half ends at month 138, which is 2010-06. Chosen this way on purpose -- a cut placed to
+#: put the crisis on one side would be a choice about results, and the midpoint is a number
+#: anyone can check. It happens to put the crisis and its immediate aftermath in the first half
+#: and the recovery and the pandemic in the second, which is a consequence and not the reason.
+STABILITY_CUT: Final = "2010-06"
+
+#: Macro covariates the selection may not remove, because their purpose is to absorb rather than
+#: to be tested. `moratorium_regime` is here for the reason `harp` is in
+#: `procedure.BASE_CATEGORICAL`: a selection free to drop it would be free to read the macro
+#: coefficients off a book in which a policy intervention is still unmarked. Rule 15 asks a
+#: declared sign of every *candidate*, and a protected covariate is not one -- it is not screened,
+#: not eliminated, and carries no prior.
+PROTECTED_MACRO: Final[tuple[str, ...]] = ("moratorium_regime",)
 
 #: The economic dimension each candidate measures, fixed before any selection result.
 #:
@@ -368,6 +433,11 @@ MACRO_CANDIDATES: Final[tuple[str, ...]] = (
 #: covariates share a dimension therefore has to be decided in advance: decided after the
 #: fits, the rule would be a way of dropping whatever came out inconvenient.
 ECONOMIC_DIMENSION: Final[dict[str, str]] = {
+    # Its own dimension, with nothing beside it: step 9 removes an unstable covariate only
+    # where a *larger* one of the same dimension sits next to it, and a regime indicator shares
+    # its information with nothing. Protected anyway by `PROTECTED_MACRO`, so this is the belt
+    # rather than the braces.
+    "moratorium_regime": "policy regime",
     "credit_score": "credit quality",
     "original_ltv": "leverage at origination",
     "debt_to_income": "debt burden",
@@ -404,42 +474,67 @@ ELIMINATED: Final[dict[str, str]] = {
     # remove. Why it is not one is in `procedure.CANDIDATE_CATEGORICAL` and rule 10 of
     # docs/rules.md, with the measurement.
     #
-    # --- step 6: collinearity, in the priority fixed before any fit ---
-    "corporate_bond_spread": (
-        "variance inflation 10.8, above 10 -- the first candidate over the threshold. The "
-        "first run had it at 8.41 and removed it by hand for a sign reversal"
-    ),
-    # --- step 8: backwards against a declared prior ---
-    "equity_volatility": (
-        "wrong sign: +0.009578 where - is expected. The first run's largest effect: part of "
-        "it was the 2020 moratoria, as the validation suspected (S5), and the rest is shared "
-        "with financial_conditions"
-    ),
-    "volatility_change": "wrong sign: +0.001721 where - is expected",
-    "house_price_growth": (
-        "wrong sign: -0.1456 where + is expected. It is built from the same house price index "
-        "as ltv_change, which survives"
-    ),
-    # --- step 8: its sign reversed against its own ---
-    "inflation_rate": (
-        "reversed: +7.972 beside the loan block alone, -8.929 in the full model -- with "
-        "inflation_change there the pair was reading inflation at origination"
-    ),
-    "equity_return": "reversed: +0.5614 beside the loan block alone, -0.004448 in the full model",
-    # --- step 9: not identified beside a larger covariate of the same dimension ---
-    "mortgage_rate_decline": (
-        "1 sd effect -0.030 on even and +0.034 on odd origination years, beside "
-        "policy_rate_change at +0.118, both interest rates"
-    ),
-    # --- step 10: material by the threshold declared in docs/rules.md ---
+    # **Five of the six removals are wrong signs**, where the run before this had one. That is
+    # rule 15 working rather than a worse model: every candidate now carries a declared prior,
+    # so the strongest filter in the procedure reaches covariates it could not touch before --
+    # and four of these five are a prior declared on 17 October 2026 meeting the data for the
+    # first time. Two of those four priors the data contradicted; they are not revised, because
+    # revising a prior after the fit is a retraction this project already carries.
     #
-    # The step the validation's objection asked for, firing where rule 3 said it would: it
-    # named financial_conditions in advance, at -0.004 on the model before this one.
-    "financial_conditions": (
-        "1 sd effect -0.0155 on log survival time, under the 0.02 of rule 3: its sign and "
-        "little else, and a covariate that small changes sign when the sample does"
+    # --- step 8: backwards against a declared prior ---
+    "corporate_bond_spread": (
+        "wrong sign: +0.1499 where - is expected. A wider spread is the price of credit risk "
+        "rising, so a positive coefficient says tighter credit lengthens survival. The run "
+        "before this removed it at step 6 for a variance inflation of 10.8, and the first run "
+        "by hand for a reversal: three procedures, three reasons, one covariate"
     ),
-    "inflation_change": "1 sd effect +0.0032 on log survival time, under the 0.02 of rule 3",
+    "equity_volatility": (
+        "wrong sign: +0.001269 where - is expected. Was +0.009578 on the previous macro block, "
+        "so the sign is not an artefact of this one: part of it was the 2020 moratoria, as the "
+        "validation suspected (S5), and the rest is shared with financial_conditions -- which "
+        "survives here where it did not before"
+    ),
+    "volatility_change": "wrong sign: +0.0004502 where - is expected",
+    "house_price_growth": (
+        "wrong sign: -0.7808 where + is expected. It is built from the same house price index "
+        "as ltv_change, which survives, so conditional on the movement the growth rate reads "
+        "backwards. -0.1456 on the previous block, five times larger here"
+    ),
+    "mortgage_rate_decline": (
+        "wrong sign: -0.1571 where + is expected -- a **prior declared on 17 October 2026 and "
+        "contradicted on its first fit**. The reasoning was that a market rate below the note "
+        "rate makes refinancing into a lower payment available, which is relief; the data says "
+        "otherwise conditional on the rest. The prior is not revised, and the covariate goes. "
+        "The run before this removed it at step 9 for parity instability instead"
+    ),
+    # --- step 7: nothing left to carry beside the loan block ---
+    #
+    # The one covariate the **band form** removed that the linear form kept, and the reason it
+    # is worth its own note: at this sample size the p-value arm of the procedure is otherwise
+    # inert -- every p-value in the screening table reads 0.0000 -- so a p of 0.177 is not a
+    # thin result, it is a covariate with nothing of its own left to say.
+    #
+    # What changed is the loan block around it. Under the linear form that block was three
+    # coefficients; read as rule 12's bands it is **twelve**, and with twelve coefficients
+    # describing underwriting risk, being a first-time buyer is no longer distinguishable from
+    # the score, the leverage and the debt burden that go with it. Rule 12 warned that "a
+    # covariate that survived on a straight line might not on a bend"; this is that, and it
+    # landed on a categorical rather than on the macro block, which came through unchanged.
+    "buyer_type": "step 7: p = 0.177 beside the loan block, where every other p-value reads 0.0000",
+    # --- step 9: not identified beside a larger covariate of the same dimension ---
+    #
+    # **Rule 9's time cut, firing on its first run and catching what parity could not.** Both
+    # origination halves and the first calendar half agree on the sign; the second does not.
+    "housing_starts_growth": (
+        "1 sd effect +0.040 on even vintages, +0.044 on odd vintages, +0.046 to 2010-06 and "
+        "**-0.003 after it**, beside ltv_change (-0.201), both housing. The parity split called "
+        "it stable -- which is why rule 9 was amended to compare time cuts, and this is the "
+        "first covariate the amendment removed"
+    ),
+    # --- step 10: nothing. Materiality removed no covariate on this block, where it removed
+    # two on the one before. financial_conditions read -0.0155 there, under the 0.02 of rule 3,
+    # and is above it here: a threshold does not move, but what a covariate is worth depends on
+    # what sits beside it, and five fewer macro series sit beside it now.
 }
 
 #: Order in which collinear macro covariates are given up, most expendable first.
@@ -488,12 +583,36 @@ DISTRIBUTION: Final = "weibull"
 #: missing for exactly the HARP refinances, and the constant that fills it is absorbed by this
 #: level. It is in the selection's protected block for that reason rather than on the strength of
 #: its coefficient -- rule 8 of `docs/rules.md`, and `features.NOT_REPORTED`.
-CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
+#: Every categorical **offered** at origination, with its reference level: the input, where
+#: `CATEGORICAL_REFERENCE` below is the selection's output.
+#:
+#: Rule 14's shape reads this one and not the output, and the difference is a defect found on 19
+#: October 2026 rather than a distinction drawn in advance. `default_shape` derived the shape
+#: from `CATEGORICAL_REFERENCE`, so when the band-form selection removed `buyer_type` from the
+#: **scale** it silently left the **shape** too -- and the report then fitted a different model
+#: from the one the selection chose, under the same name, with the warm start failing to find it
+#: because a fit's fingerprint carries its ancillary formula.
+#:
+#: Rule 14 defines its set by an identity -- what is fixed at origination -- and says a subset
+#: would be a pick. What the scale selected is not that identity. The two blocks are independent:
+#: a covariate may be in the shape and not in the scale, and coupling them is the kind of thing
+#: that is wrong quietly. `tests/test_procedure.py` holds this equal to `procedure`'s two blocks.
+ORIGINATION_CATEGORICAL: Final[dict[str, str]] = {
     "purpose": "purchase",
     "occupancy": "owner_occupied",
     "harp": "standard",
     "mortgage_insurance": "uninsured",
     "buyer_type": "repeat",
+}
+
+CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
+    "purpose": "purchase",
+    "occupancy": "owner_occupied",
+    "harp": "standard",
+    "mortgage_insurance": "uninsured",
+    # `buyer_type` was here until 19 October 2026 and the band-form selection removed it at
+    # step 7. It stays in `procedure.CANDIDATE_CATEGORICAL`, which is the **input** and is fixed
+    # before any fit; this is the **output**, so it is a subset of that input and not a copy.
 }
 
 
@@ -583,13 +702,56 @@ def record_name(*, distribution: str, cause: str, published: str = DISTRIBUTION)
 
 
 def default_covariates() -> list[str]:
-    """Every column the default formula is allowed to read.
+    """Every column the published model is allowed to read -- the **scale and the shape**.
 
-    Beside the formula that reads the same lists, because the two have to agree and because
+    Beside the formulas that read the same lists, because the three have to agree and because
     the package needs it: it lived in `cli.py` until the fits moved out of there, which made a
     model module reach up into the command line for the definition of its own design.
+
+    `ORIGINATION_CATEGORICAL` and not `CATEGORICAL_REFERENCE`, which is the same correction as
+    in `default_shape` and was found one layer further out: rule 14's shape reads every
+    categorical **offered** at origination, so the frame has to carry them whether or not the
+    scale's selection kept each one. With the output set here, the shape named
+    `C(buyer_type, Treatment('repeat'))` while nothing loaded the column, and the fit died on
+    `NameError: name 'buyer_type' is not defined` -- in 138 seconds rather than the ten hours
+    the two defects before it threatened, because a missing column fails where it is expanded.
+
+    A superset is safe and a subset is not: a column loaded and unread costs memory, a column
+    read and unloaded is a fit that cannot start.
     """
-    return [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL, *CATEGORICAL_REFERENCE]
+    return [
+        *STATIC_CONTINUOUS,
+        *TIME_VARYING_CONTINUOUS,
+        *ORDINAL,
+        *dict.fromkeys([*CATEGORICAL_REFERENCE, *ORIGINATION_CATEGORICAL]),
+    ]
+
+
+def default_shape() -> str:
+    """Rule 14's shape: every covariate fixed at origination, in rule 12's forms.
+
+    One source, for the reason `default_formula` is one: the shape is a property of the
+    specification rather than a model of its own, so the selection, the three regime cuts, the
+    report and the views all have to read the same string or they are fitting different models
+    and calling one a refit.
+
+    What is **not** here is any of the six covariates recomputed every loan-month. That is not a
+    judgement about them -- `ltv_change` is the strongest covariate in the model -- but an
+    identity: `period = cohort + age` holds, so a covariate that moves over a loan's life moves
+    with the age, and rule 14 refuses an age-dependent shape because the hazard would stop
+    integrating to a survival function. `Factorisation.expand` refuses it in code as well, so the
+    rule does not rest on this function being written correctly.
+    """
+    linear = [name for name in STATIC_CONTINUOUS + ORDINAL if name not in BANDED_REFERENCE]
+    banded = [f"C({name}, Treatment({band}))" for name, band in BANDED_REFERENCE.items()]
+    # `ORIGINATION_CATEGORICAL`, the set **offered**, not `CATEGORICAL_REFERENCE`, the set the
+    # scale's selection kept. Rule 14's admissible side is an identity -- what is fixed at
+    # origination -- and does not shrink when the scale's does.
+    categorical = [
+        f"C({name}, Treatment('{reference}'))"
+        for name, reference in ORIGINATION_CATEGORICAL.items()
+    ]
+    return " + ".join([*linear, *banded, *categorical])
 
 
 def default_formula() -> str:

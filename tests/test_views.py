@@ -657,7 +657,7 @@ def test_the_views_command_scores_from_the_cell_file(
     from typer.testing import CliRunner
 
     from creditsurv.cli import app
-    from creditsurv.config import default_covariates, default_formula
+    from creditsurv.config import default_covariates, default_formula, default_shape
     from creditsurv.data.panel import CellBlocks
     from creditsurv.data.store import cells_path, fit_fingerprint, save_cells, save_fit
     from creditsurv.models.aft import fit_streamed
@@ -672,7 +672,10 @@ def test_the_views_command_scores_from_the_cell_file(
     save_cells(pd.read_parquet(streamed_cells))
 
     as_of = "2014-06"
-    covariates, formula = default_covariates(), default_formula()
+    # The shape too, because the command asks for a fit of this specification **with** it:
+    # rule 14 made the shape part of the specification, so a scale-only fit is a different
+    # model and `views` is right to call it a miss rather than a near-enough hit.
+    covariates, formula, shape = default_covariates(), default_formula(), default_shape()
     cut = 2014 * 12 + 6 - 1
     source = CellBlocks(
         str(cells_path("exclude")),
@@ -681,7 +684,7 @@ def test_the_views_command_scores_from_the_cell_file(
         rows=20_000,
         months=(None, cut),
     ).prepared()
-    fitted = fit_streamed(source, covariates, formula, weights_col=WEIGHT)
+    fitted = fit_streamed(source, covariates, formula, weights_col=WEIGHT, ancillary=shape)
     record = fitted.blocks
     assert record is not None
     described = fit_description(
@@ -689,6 +692,7 @@ def test_the_views_command_scores_from_the_cell_file(
         formula,
         as_of=as_of,
         moratorium="exclude",
+        ancillary=shape,
     )
     save_fit(fitted, fit_fingerprint(**described), described)
 

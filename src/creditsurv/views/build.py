@@ -77,17 +77,24 @@ def model_views(
     moratorium: str,
     covariates: Sequence[str],
     formula: str,
+    ancillary: str | None = None,
     macro: pd.DataFrame,
     block_rows: int,
     loans: int,
     horizon: int,
 ) -> ModelViews:
     """Find the cached fit of this specification and build every view of it."""
+    # `ancillary` is named rather than left out, and a criterion of `None` means the key must be
+    # **absent** -- so this asks for a fit of this scale formula with exactly this shape, and a
+    # scale-only fit of the same formula is a miss rather than a near-enough hit. With rule 14's
+    # shape part of the specification the two are different models, and the site publishing the
+    # wrong one would say nothing about it.
     found = find_fits(
         as_of=as_of,
         moratorium=moratorium,
         formula=formula,
         distribution=DISTRIBUTION,
+        ancillary=ancillary,
         purpose=None,
     )
     if not found:

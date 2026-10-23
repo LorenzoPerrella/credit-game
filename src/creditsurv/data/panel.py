@@ -44,6 +44,14 @@ from creditsurv.config import (
 )
 from creditsurv.features import MACRO_DERIVED, absorb_not_reported, add_macro_family
 
+# `month_ordinal` is defined in `features` and re-exported here, with the redundant alias that
+# `no_implicit_reexport` requires -- a plain import is not an export under it, and the project has
+# been caught by that once before. It moved down a layer on 17 October 2026 so `features` could use
+# it: the moratorium regime indicator rule 1 declares is a function of the observation month, and
+# `features` cannot import this module because this module imports `features`. Thirty-six call
+# sites read it from here, and the point of the function is that the arithmetic is said once.
+from creditsurv.features import month_ordinal as month_ordinal
+
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
     from pathlib import Path
@@ -578,15 +586,13 @@ MAX_AGE_MONTHS: Final = 360
 _EPOCH_MONTHS: Final = 1970 * 12
 
 
-def month_ordinal(period: pd.Period) -> int:
-    """One monthly period as months since year zero: the inverse of :func:`_months_to_periods`.
-
-    The cell key stores `origination_month` on this scale precisely so a loan age can be
-    added to a calendar month, and every caller that needs to cut the table at a reporting
-    date has to say the same thing. It was said in nine places, once as a closure and eight
-    times inline, which is eight chances for one of them to be off by a month.
-    """
-    return int(period.year) * 12 + int(period.month) - 1
+#: One monthly period as months since year zero, **defined in `features`** and re-exported here.
+#:
+#: It moved down a layer on 17 October 2026 so that `features` could use it too: the moratorium
+#: regime indicator rule 1 declares is a function of the observation month, and `features` cannot
+#: import this module -- this module imports `features`. Re-exported rather than relocated,
+#: because thirty-six call sites read it from here and the point of the function is that the
+#: arithmetic is said **once**. See `features.month_ordinal`.
 
 
 def _months_to_periods(months: pd.Series) -> pd.PeriodIndex:

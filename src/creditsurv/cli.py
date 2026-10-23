@@ -24,6 +24,7 @@ from creditsurv.config import (
     TIME_VARYING_CONTINUOUS,
     default_covariates,
     default_formula,
+    default_shape,
     reports_dir,
 )
 
@@ -835,7 +836,9 @@ def report(
     reporting_date = pd.Period(as_of, freq="M")
     split, macro = _split(moratorium, reporting_date)
 
+    shape = default_shape()
     typer.echo(f"Fitting on {int(split.train[WEIGHT].sum()):,} loan-months up to {as_of}...")
+    typer.echo(f"  the shape reads: {shape}")
     fitted = cast(
         "FitResult",
         fit_once(
@@ -845,7 +848,11 @@ def report(
             as_of=as_of,
             reuse=reuse,
             moratorium=moratorium,
-            start=selection_start(as_of, moratorium),
+            # Rule 14's shape is part of the specification, so the published model carries it:
+            # a report fitting the scale alone would publish a different model from the one the
+            # selection chose, under the same name.
+            ancillary=shape,
+            start=selection_start(as_of, moratorium, shape, formula),
         ),
     )
 
@@ -877,6 +884,7 @@ def report(
             macro,
             covariates,
             [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS],
+            formula=formula,
             reports_dir=destination,
             horizon_months=horizon,
             weights=book.set_index("loan_id")[WEIGHT],
@@ -888,7 +896,7 @@ def report(
 
     typer.echo("Backtesting against what happened...")
     _, result = backtest_split(split, covariates, formula, fitted=fitted)
-    written.append(backtesting.generate(split, result, reports_dir=destination))
+    written.append(backtesting.generate(split, result, formula=formula, reports_dir=destination))
 
     typer.echo("\nWritten:")
     for path in [*written, coefficients]:
@@ -940,6 +948,7 @@ def views(
                 moratorium=moratorium,
                 covariates=default_covariates(),
                 formula=default_formula(),
+                ancillary=default_shape(),
                 macro=load_macro_panel(),
                 block_rows=block_rows,
                 loans=loans,
@@ -1024,7 +1033,7 @@ def select(
 
     import pandas as pd
 
-    from creditsurv.config import MACRO_CANDIDATES
+    from creditsurv.config import MACRO_CANDIDATES, PROTECTED_MACRO
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import month_ordinal
     from creditsurv.data.store import cells_identity
@@ -1045,6 +1054,9 @@ def select(
         *LOAN_CONTINUOUS,
         *LOAN_ORDINAL,
         *MACRO_CANDIDATES,
+        # Not a candidate -- rule 1 protects it from removal -- but the reading has to carry it,
+        # because every fit of the run reads it.
+        *PROTECTED_MACRO,
         *BASE_CATEGORICAL,
         *CANDIDATE_CATEGORICAL,
     ]
@@ -1085,7 +1097,15 @@ def select(
         # Declared in `config` before any fit, with its own argument: "a macro covariate is a
         # function of the vintage quarter and the loan age, both already in the aggregation
         # key". That is exactly the split the kernel needs.
-        calendar=None if traced else MACRO_CANDIDATES,
+        calendar=None if traced else (*MACRO_CANDIDATES, *PROTECTED_MACRO),
+        # Rule 14's shape is part of the specification, not a candidate, so every fit of the run
+        # reads it: a scale-only candidate measured against a shaped parent would be two models
+        # with one called a removal. The same string everywhere, from `config`.
+        #
+        # The **default** model only. Rule 14 was declared against the default model's decile
+        # calibration and says nothing about the other exit, so the prepayment model keeps its
+        # scalar shape until a rule says otherwise.
+        ancillary=default_shape() if cause == DEFAULT_CAUSE else None,
     )
     record = run_selection(
         None,
@@ -1095,7 +1115,11 @@ def select(
     )
     written = selection.generate(record, reports_dir=reports_dir())
 
-    time_varying = tuple(name for name in record.selected.continuous if name in MACRO_CANDIDATES)
+    time_varying = tuple(
+        name
+        for name in record.selected.continuous
+        if name in MACRO_CANDIDATES or name in PROTECTED_MACRO
+    )
     typer.echo(f"\nFormula: {record.selected.formula}")
     typer.echo(f"TIME_VARYING_CONTINUOUS = {time_varying}")
     typer.echo(f"Written: {written}")

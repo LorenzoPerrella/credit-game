@@ -17,21 +17,19 @@ whole population and its first 94%, which needs the test window.
 
 ## Chosen
 
-`credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))`
+`C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured'))`
 
 **Every candidate removed, with the step and the reason**
 
 | Covariate | Why it was removed |
 |---|---|
-| Corporate bond spread | step 6: variance inflation 10.8, above 10 |
-| Equity return | step 8: reversed sign: -0.004448 in the full model, +0.5614 beside the loan block alone |
-| Equity volatility | step 8: wrong sign: +0.009578 where - is expected |
-| Financial conditions | step 10: 1 sd effect -0.0155 on log survival time, under 0.02 |
-| House price growth | step 8: wrong sign: -0.1456 where + is expected |
-| Inflation change since origination | step 10: 1 sd effect +0.0032 on log survival time, under 0.02 |
-| Inflation | step 8: reversed sign: -8.929 in the full model, +7.972 beside the loan block alone |
-| Mortgage rate fall since origination | step 9: 1 sd effect -0.030 on even and +0.034 on odd origination years, beside policy_rate_change (+0.118), both interest rates |
-| Volatility change since origination | step 8: wrong sign: +0.001721 where - is expected |
+| Buyer type | step 7: p = 0.177 beside the loan block |
+| Corporate bond spread | step 8: wrong sign: +0.15 where - is expected |
+| Equity volatility | step 8: wrong sign: +0.001257 where - is expected |
+| House price growth | step 8: wrong sign: -0.7799 where + is expected |
+| Housing starts growth | step 9: 1 sd effect +0.040 on even vintages, +0.044 on odd vintages, +0.046 on to 2010 06, -0.003 on after 2010 06, beside ltv_change (-0.201), both housing |
+| Mortgage rate fall since origination | step 8: wrong sign: -0.1572 where + is expected |
+| Volatility change since origination | step 8: wrong sign: +0.0004447 where - is expected |
 
 ### 5. Weighted correlation
 
@@ -39,11 +37,7 @@ No pair of candidates is correlated beyond 0.8.
 
 ### 6. Variance inflation
 
-**Removed one at a time, in the fixed priority**
-
-| Step | Removed | Variance inflation | Remaining |
-|---|---|---|---|
-| 1 | Corporate bond spread | 10.7764 | 18 |
+No candidate's variance inflation reaches 10.
 
 ### 7. Univariate screening
 
@@ -54,22 +48,18 @@ time, and the likelihood ratio the candidate earns.
 
 | Covariate | Term | Coefficient | Se | Z | p-value | Effect of one sd | Expected sign | Sign as expected | Likelihood ratio |
 |---|---|---|---|---|---|---|---|---|---|
-| Loan-to-value change since origination | Loan-to-value change since origination | -0.0298 | 4.38e-05 | -681.7329 | 0.0000 | -0.2988 | -1 | True | 491209.9571 |
-| Unemployment change since origination | Unemployment change since origination | -0.1389 | 0.0002 | -559.4565 | 0.0000 | -0.3491 | -1 | True | 361543.5649 |
-| Financial conditions | Financial conditions | -0.2708 | 0.0007 | -401.1969 | 0.0000 | -0.1608 | -1 | True | 137321.5892 |
-| Mortgage rate fall since origination | Mortgage rate fall since origination | -0.2642 | 0.0009 | -281.1003 | 0.0000 | -0.2425 | 0 | True | 110191.7853 |
-| House price growth | House price growth | 4.5354 | 0.0094 | 482.4491 | 0.0000 | 0.3133 | 1 | True | 270334.0136 |
-| Policy rate change since origination | Policy rate change since origination | 0.2029 | 0.0004 | 543.5537 | 0.0000 | 0.3734 | 0 | True | 419911.9538 |
-| Yield curve slope | Yield curve slope | -0.3752 | 0.0008 | -483.7776 | 0.0000 | -0.3219 | 0 | True | 271721.2213 |
-| Inflation | Inflation | 7.9717 | 0.0459 | 173.7905 | 0.0000 | 0.1062 | 0 | True | 31226.7950 |
-| Equity return | Equity return | 0.5614 | 0.0027 | 210.2075 | 0.0000 | 0.1232 | 0 | True | 42587.6343 |
-| Equity volatility | Equity volatility | -0.0184 | 5.28e-05 | -348.1404 | 0.0000 | -0.1581 | -1 | True | 106883.7257 |
-| Consumer sentiment | Consumer sentiment | 0.0282 | 5.48e-05 | 515.2441 | 0.0000 | 0.3318 | 0 | True | 313851.7423 |
-| Housing starts growth | Housing starts growth | 0.7194 | 0.0028 | 258.8245 | 0.0000 | 0.1474 | 0 | True | 66473.6310 |
-| Volatility change since origination | Volatility change since origination | -0.0166 | 4.53e-05 | -367.3580 | 0.0000 | -0.1947 | -1 | True | 129711.8370 |
-| Inflation change since origination | Inflation change since origination | 13.4383 | 0.0369 | 363.7523 | 0.0000 | 0.2237 | 0 | True | 144875.0600 |
-| Mortgage insurance | Mortgage insurance: Insured (against Not insured) | -0.1006 | 0.0019 | -54.1877 | 0.0000 | - | 0 | True | 2929.2059 |
-| Buyer type | Buyer type: First-time buyer (against Repeat buyer) | 0.0466 | 0.0023 | 19.9092 | 3.38e-88 | - | 0 | True | 399.3905 |
+| Loan-to-value change since origination | Loan-to-value change since origination | -0.0308 | 4.68e-05 | -658.2089 | 0.0000 | -0.3081 | -1 | True | 483109.6329 |
+| Unemployment change since origination | Unemployment change since origination | -0.1727 | 0.0003 | -569.9362 | 0.0000 | -0.4341 | -1 | True | 467004.5824 |
+| Financial conditions | Financial conditions | -0.2461 | 0.0007 | -377.9140 | 0.0000 | -0.1461 | -1 | True | 122590.0387 |
+| Mortgage rate fall since origination | Mortgage rate fall since origination | -0.2907 | 0.0010 | -304.1226 | 0.0000 | -0.2668 | 1 | False | 134621.2023 |
+| House price growth | House price growth | 4.2317 | 0.0094 | 449.6722 | 0.0000 | 0.2923 | 1 | True | 233827.9590 |
+| Corporate bond spread | Corporate bond spread | -0.2505 | 0.0006 | -421.3237 | 0.0000 | -0.1883 | -1 | True | 164711.3370 |
+| Equity volatility | Equity volatility | -0.0202 | 5.02e-05 | -403.0108 | 0.0000 | -0.1742 | -1 | True | 139771.3669 |
+| Consumer sentiment | Consumer sentiment | 0.0274 | 5.3e-05 | 516.5801 | 0.0000 | 0.3214 | 1 | True | 317130.5814 |
+| Housing starts growth | Housing starts growth | 0.6010 | 0.0028 | 217.6009 | 0.0000 | 0.1231 | 1 | True | 46464.1177 |
+| Volatility change since origination | Volatility change since origination | -0.0187 | 4.34e-05 | -430.1066 | 0.0000 | -0.2183 | -1 | True | 174879.9593 |
+| Mortgage insurance | Mortgage insurance: Insured (against Not insured) | -0.2495 | 0.0086 | -28.9954 | 7.52e-185 | - | 0 | True | 850.3870 |
+| Buyer type | Buyer type: First-time buyer (against Repeat buyer) | 0.0055 | 0.0041 | 1.3511 | 0.1767 | - | 0 | True | 1.8288 |
 
 ### 8. Backward elimination
 
@@ -77,11 +67,11 @@ time, and the likelihood ratio the candidate earns.
 
 | Step | Removed | Coefficient | p-value | Reason | Remaining |
 |---|---|---|---|---|---|
-| 1 | House price growth | -0.1456 | 1.06e-17 | wrong sign: -0.1456 where + is expected | 22 |
-| 2 | Volatility change since origination | 0.0017 | 1.13e-84 | wrong sign: +0.001721 where - is expected | 21 |
-| 3 | Equity volatility | 0.0096 | 0.0000 | wrong sign: +0.009578 where - is expected | 20 |
-| 4 | Inflation | -8.9290 | 0.0000 | reversed sign: -8.929 in the full model, +7.972 beside the loan block alone | 19 |
-| 5 | Equity return | -0.0044 | 0.2314 | reversed sign: -0.004448 in the full model, +0.5614 beside the loan block alone | 18 |
+| 1 | Volatility change since origination | 0.0004 | 3.28e-08 | wrong sign: +0.0004447 where - is expected | 18 |
+| 2 | Equity volatility | 0.0013 | 1.4e-20 | wrong sign: +0.001257 where - is expected | 17 |
+| 3 | House price growth | -0.7799 | 0.0000 | wrong sign: -0.7799 where + is expected | 16 |
+| 4 | Mortgage rate fall since origination | -0.1572 | 0.0000 | wrong sign: -0.1572 where + is expected | 15 |
+| 5 | Corporate bond spread | 0.1500 | 0.0000 | wrong sign: +0.15 where - is expected | 14 |
 
 ### 9. Stability
 
@@ -90,33 +80,21 @@ whose standardised effect changes sign between them, beside a larger covariate o
 economic dimension, carries information the model already has and is not identified.
 An unstable covariate with no such partner is kept, and left visible here.
 
-| Covariate | Dimension | Whole training half | Even vintage years | Odd vintage years | Stable | Round |
-|---|---|---|---|---|---|---|
-| Credit score | credit quality | 0.4323 | 0.4409 | 0.4159 | True | 1 |
-| Loan-to-value at origination | leverage at origination | -0.2173 | -0.2108 | -0.2174 | True | 1 |
-| Debt-to-income at origination | debt burden | -0.1684 | -0.1718 | -0.1608 | True | 1 |
-| Original term | term | -0.2516 | -0.2665 | -0.2338 | True | 1 |
-| Loan-to-value change since origination | housing | -0.1735 | -0.1662 | -0.1710 | True | 1 |
-| Unemployment change since origination | labour | -0.0829 | -0.0971 | -0.0700 | True | 1 |
-| Financial conditions | financial stress | -0.0163 | -0.0219 | -0.0083 | True | 1 |
-| Mortgage rate fall since origination | interest rates | -0.0099 | -0.0299 | 0.0342 | False | 1 |
-| Policy rate change since origination | interest rates | 0.1184 | 0.0821 | 0.1656 | True | 1 |
-| Yield curve slope | interest rates | -0.0394 | -0.0762 | -0.0058 | True | 1 |
-| Consumer sentiment | confidence | 0.0440 | 0.0408 | 0.0476 | True | 1 |
-| Housing starts growth | housing | 0.0950 | 0.0908 | 0.0929 | True | 1 |
-| Inflation change since origination | prices | 0.0017 | 0.0204 | -0.0178 | False | 1 |
-| Credit score | credit quality | 0.4309 | 0.4377 | 0.4220 | True | 2 |
-| Loan-to-value at origination | leverage at origination | -0.2163 | -0.2080 | -0.2210 | True | 2 |
-| Debt-to-income at origination | debt burden | -0.1678 | -0.1697 | -0.1630 | True | 2 |
-| Original term | term | -0.2503 | -0.2622 | -0.2378 | True | 2 |
-| Loan-to-value change since origination | housing | -0.1721 | -0.1605 | -0.1749 | True | 2 |
-| Unemployment change since origination | labour | -0.0823 | -0.0965 | -0.0733 | True | 2 |
-| Financial conditions | financial stress | -0.0148 | -0.0178 | -0.0143 | True | 2 |
-| Policy rate change since origination | interest rates | 0.1235 | 0.0978 | 0.1470 | True | 2 |
-| Yield curve slope | interest rates | -0.0371 | -0.0700 | -0.0145 | True | 2 |
-| Consumer sentiment | confidence | 0.0464 | 0.0467 | 0.0387 | True | 2 |
-| Housing starts growth | housing | 0.0920 | 0.0820 | 0.1032 | True | 2 |
-| Inflation change since origination | prices | 0.0032 | 0.0248 | -0.0225 | False | 2 |
+| Covariate | Dimension | Whole training half | Even vintage years | Odd vintage years | To 2010-06 | After 2010-06 | Stable | Round |
+|---|---|---|---|---|---|---|---|---|
+| Original term | term | -0.2921 | -0.3043 | -0.2830 | -0.2741 | -0.2795 | True | 1 |
+| Moratorium regime | policy regime | 0.1286 | 0.1431 | 0.1206 | 0.1286 | 0.0717 | True | 1 |
+| Loan-to-value change since origination | housing | -0.2013 | -0.1929 | -0.2035 | -0.1956 | -0.2280 | True | 1 |
+| Unemployment change since origination | labour | -0.1834 | -0.1908 | -0.1795 | -0.2498 | -0.1220 | True | 1 |
+| Financial conditions | financial stress | -0.0398 | -0.0371 | -0.0420 | 0.0072 | 0.0565 | False | 1 |
+| Consumer sentiment | confidence | 0.0376 | 0.0522 | 0.0257 | 0.0601 | 0.0538 | True | 1 |
+| Housing starts growth | housing | 0.0425 | 0.0402 | 0.0436 | 0.0461 | -0.0034 | False | 1 |
+| Original term | term | -0.2965 | -0.3083 | -0.2875 | -0.2718 | -0.2790 | True | 2 |
+| Moratorium regime | policy regime | 0.1387 | 0.1530 | 0.1308 | 0.1387 | 0.0710 | True | 2 |
+| Loan-to-value change since origination | housing | -0.1933 | -0.1850 | -0.1956 | -0.1953 | -0.2286 | True | 2 |
+| Unemployment change since origination | labour | -0.1945 | -0.2019 | -0.1902 | -0.2421 | -0.1210 | True | 2 |
+| Financial conditions | financial stress | -0.0662 | -0.0621 | -0.0691 | -0.0135 | 0.0573 | False | 2 |
+| Consumer sentiment | confidence | 0.0355 | 0.0497 | 0.0240 | 0.0659 | 0.0542 | True | 2 |
 
 ### 10. Materiality
 
@@ -126,12 +104,7 @@ that small changes sign when the sample does. The threshold is fixed in `docs/ru
 before any of these fits, and the removals are made one at a time because each one moves
 every other coefficient.
 
-**One covariate a step, the smallest first**
-
-| Step | Removed | Effect of one sd | Threshold | Remaining |
-|---|---|---|---|---|
-| 1 | Inflation change since origination | 0.0032 | 0.0200 | 16 |
-| 2 | Financial conditions | -0.0155 | 0.0200 | 15 |
+Every covariate that survived step 9 clears the threshold.
 
 ## Fits
 
@@ -139,38 +112,41 @@ every other coefficient.
 
 | Sample | Formula | Minutes | Evaluations | Cached |
 |---|---|---|---|---|
-| training half | credit_score + original_ltv + debt_to_income + term_years + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + unemployment_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + financial_conditions + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + mortgage_rate_decline + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + house_price_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + policy_rate_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + yield_curve_slope + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + inflation_rate + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + equity_return + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + equity_volatility + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + volatility_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(buyer_type, Treatment('repeat')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + house_price_growth + policy_rate_change + yield_curve_slope + inflation_rate + equity_return + equity_volatility + consumer_sentiment + housing_starts_growth + volatility_change + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 53.6 | 15.0 | False |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + policy_rate_change + yield_curve_slope + inflation_rate + equity_return + equity_volatility + consumer_sentiment + housing_starts_growth + volatility_change + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 19.2 | 3.0 | False |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + policy_rate_change + yield_curve_slope + inflation_rate + equity_return + equity_volatility + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 23.6 | 4.0 | False |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + policy_rate_change + yield_curve_slope + inflation_rate + equity_return + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 27.6 | 5.0 | False |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + policy_rate_change + yield_curve_slope + equity_return + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 33.8 | 11.0 | False |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 15.9 | 3.0 | False |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 0.0 | - | True |
-| even origination years | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 10.3 | 4.0 | False |
-| odd origination years | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 11.6 | 4.0 | False |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 12.7 | 3.0 | False |
-| even origination years | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 8.4 | 4.0 | False |
-| odd origination years | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 11.1 | 4.0 | False |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + inflation_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 0.0 | - | True |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + financial_conditions + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 14.5 | 3.0 | False |
-| training half | credit_score + original_ltv + debt_to_income + term_years + ltv_change + unemployment_change + policy_rate_change + yield_curve_slope + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat')) | 13.6 | 3.0 | False |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + unemployment_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + financial_conditions + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + mortgage_rate_decline + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + house_price_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + corporate_bond_spread + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + equity_volatility + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + volatility_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(buyer_type, Treatment('repeat')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + house_price_growth + corporate_bond_spread + equity_volatility + consumer_sentiment + housing_starts_growth + volatility_change + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + house_price_growth + corporate_bond_spread + equity_volatility + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 4.7 | 3.0 | False |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + house_price_growth + corporate_bond_spread + equity_volatility + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + house_price_growth + corporate_bond_spread + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 6.2 | 4.0 | False |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + house_price_growth + corporate_bond_spread + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + corporate_bond_spread + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 6.2 | 4.0 | False |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + mortgage_rate_decline + corporate_bond_spread + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + corporate_bond_spread + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 12.4 | 13.0 | False |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + corporate_bond_spread + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 10.8 | 7.0 | False |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 0.0 | - | True |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 0.0 | - | True |
+| even origination years | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 2.6 | 4.0 | False |
+| odd origination years | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 3.0 | 4.0 | False |
+| to 2010-06 | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 18.0 | 177.0 | False |
+| after 2010-06 | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 5.1 | 5.0 | False |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 6.2 | 4.0 | False |
+| even origination years | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 2.5 | 4.0 | False |
+| odd origination years | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 2.9 | 4.0 | False |
+| to 2010-06 | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 2.6 | 7.0 | False |
+| after 2010-06 | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 4.9 | 5.0 | False |
+| training half | C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) | 0.0 | - | True |
 
 ---
 

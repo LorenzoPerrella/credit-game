@@ -43,11 +43,15 @@ import pandas as pd
 from lifelines import exceptions
 
 from creditsurv.config import (
+    BANDED_REFERENCE,
     MACRO_CANDIDATES,
     MACRO_ELIMINATION_PRIORITY,
+    PROTECTED_MACRO,
+    STABILITY_CUT,
 )
 from creditsurv.data.panel import (
     WEIGHT,
+    month_ordinal,
 )
 from creditsurv.explore import collinear_pairs
 from creditsurv.models.fits import _terms
@@ -141,7 +145,9 @@ class SelectionRecord:
             "cause": self.cause,
             "static_continuous": [name for name in continuous if name in LOAN_CONTINUOUS],
             "ordinal": [name for name in continuous if name in LOAN_ORDINAL],
-            "time_varying_continuous": [name for name in continuous if name in MACRO_CANDIDATES],
+            "time_varying_continuous": [
+                name for name in continuous if name in MACRO_CANDIDATES or name in PROTECTED_MACRO
+            ],
             "categorical": dict(self.selected.categorical),
             "eliminated": self.eliminated,
             "formula": self.selected.formula,
@@ -155,7 +161,9 @@ def run_selection(
     static: Sequence[str] = LOAN_CONTINUOUS,
     ordinal: Sequence[str] = LOAN_ORDINAL,
     macro: Sequence[str] = MACRO_CANDIDATES,
+    protected_macro: Sequence[str] = PROTECTED_MACRO,
     base_categorical: Mapping[str, str] = BASE_CATEGORICAL,
+    banded: Mapping[str, float] = BANDED_REFERENCE,
     candidate_categorical: Mapping[str, str] = CANDIDATE_CATEGORICAL,
     stability: np.ndarray | bool | None = None,
     moments: Moments | None = None,
@@ -182,7 +190,12 @@ def run_selection(
     read one map for both would eliminate every covariate of the second model for
     disagreeing with the first model's economics.
     """
-    loan = [*static, *ordinal]
+    # The protected block is not "the loan block" any more: rule 1's moratorium regime indicator
+    # is a macro covariate the selection may not remove, because its purpose is to absorb a policy
+    # intervention so the other macro coefficients are read off a book without one -- not to be
+    # tested. So it joins what steps 7 to 10 never consider, for the reason `harp` joins
+    # `BASE_CATEGORICAL`.
+    loan = [*static, *ordinal, *protected_macro]
     continuous = [*loan, *macro]
     eliminated: dict[str, str] = {}
     # What a reading has to cover, said before the first specification exists: a reading is
@@ -240,6 +253,11 @@ def run_selection(
         *(name for name in macro if name not in MACRO_ELIMINATION_PRIORITY),
         *ordinal,
         *static,
+        # Last, so it is the last thing variance inflation would reach: dropping it would leave
+        # the macro coefficients read through the moratorium, which is the whole reason it is in
+        # the model. If it ever does collide, something else goes first -- which is what
+        # protection means.
+        *protected_macro,
     ]
     inflation, surviving = stepwise_vif(
         None,
@@ -257,6 +275,10 @@ def run_selection(
     base = Specification(
         continuous=tuple(name for name in loan if name in surviving),
         categorical=tuple(base_categorical.items()),
+        # Rule 12's bands, carried from here through every `plus` and `minus` of the run, so
+        # the formula the record writes is the formula a report fits. Leaving the two to differ
+        # cost nine and a half hours on one fit: see `Specification.formula`.
+        banded=tuple((name, level) for name, level in banded.items() if name in surviving),
     )
 
     # 7. Each candidate beside the loan block, started from the loan block's fit.
@@ -322,7 +344,16 @@ def run_selection(
     unfittable: set[str] = set()
     while True:
         result = fits.fit(current, start=previous, parent=previous_spec)
-        removal = worst(_terms(result), current, alone=alone, signs=signs, skip=unfittable)
+        removal = worst(
+            _terms(result),
+            current,
+            alone=alone,
+            signs=signs,
+            skip=unfittable,
+            # Rule 12's factors are not judged by a rule that reads one coefficient: they have
+            # one per band and no single sign. `screen` reads them band by band instead.
+            banded=set(banded),
+        )
         if removal is None:
             break
         name, reason = removal.covariate, removal.reason
@@ -358,29 +389,63 @@ def run_selection(
         current, previous, previous_spec = candidate, fitted, candidate
     elimination = pd.DataFrame(steps, columns=_ELIMINATION_COLUMNS)
 
-    # 9. Stability, on two halves of the book.
+    # 9. Stability, on four splits of the book: two by origination parity and two by calendar.
+    #
+    # Rule 9 compared parity alone until 17 October 2026. A parity split holds the calendar
+    # fixed and varies the cohort; a **time cut** does the opposite, and the second validation
+    # found a covariate reading +0.083 at the 2018 cut and -0.032, -0.039, -0.048 at the three
+    # after it while parity called it stable. The cut is `config.STABILITY_CUT`, the calendar
+    # midpoint of the development window -- arithmetic rather than a choice about results.
+    #
+    # And the rule states that the two are not interchangeable: `period = cohort + age` holds,
+    # so the macro block is identified only through the calendar and a time cut removes some of
+    # the variation it is identified from. A covariate the second half cannot measure looks the
+    # same as one that moves, which is why the elimination reason names every split.
     rounds: list[pd.DataFrame] = []
     if stability is not None and stability is not False:
-        log.info("step 9: stability on two halves")
+        log.info("step 9: stability on four splits")
         mask = None if isinstance(stability, bool) else stability
+        cut = month_ordinal(pd.Period(STABILITY_CUT, freq="M"))
         while True:
             whole = fits.fit(current, start=previous, parent=previous_spec)
-            even = fits.fit(
-                current,
-                sample="even origination years",
-                where=mask,
-                parity=0,
-                start=whole,
-            )
-            odd = fits.fit(
-                current,
-                sample="odd origination years",
-                where=None if mask is None else ~mask,
-                parity=1,
-                start=whole,
-            )
+            splits = {
+                "even_vintages": fits.fit(
+                    current,
+                    sample="even origination years",
+                    where=mask,
+                    parity=0,
+                    start=whole,
+                ),
+                "odd_vintages": fits.fit(
+                    current,
+                    sample="odd origination years",
+                    where=None if mask is None else ~mask,
+                    parity=1,
+                    start=whole,
+                ),
+            }
+            # A time cut is a property of the reading, not a mask, so it is taken only where the
+            # rows are read from the cell file. On a held frame the parity split stands alone and
+            # the record says which splits it carries.
+            if mask is None:
+                splits["to_" + STABILITY_CUT.replace("-", "_")] = fits.fit(
+                    current,
+                    sample=f"to {STABILITY_CUT}",
+                    months=(None, cut),
+                    start=whole,
+                )
+                splits["after_" + STABILITY_CUT.replace("-", "_")] = fits.fit(
+                    current,
+                    sample=f"after {STABILITY_CUT}",
+                    months=(cut + 1, None),
+                    start=whole,
+                )
             table = stability_table(
-                current, _terms(whole), _terms(even), _terms(odd), deviations
+                current,
+                _terms(whole),
+                {k: _terms(v) for k, v in splits.items()},
+                deviations,
+                banded=set(banded),
             ).assign(round=len(rounds) + 1)
             rounds.append(table)
             verdict = not_identified(table)

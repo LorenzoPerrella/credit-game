@@ -467,6 +467,17 @@ _VARIABLES: Final[tuple[Variable, ...]] = (
         former="sentiment",
     ),
     _macro(
+        "moratorium_regime",
+        "Moratorium regime",
+        "One in the months a payment moratorium suppressed the event, zero otherwise: "
+        "2020-03 to 2021-09. It reads no series -- the observation month is the whole of it -- "
+        "and it is in the model to absorb the regime rather than to be tested, so that the other "
+        "macro coefficients are read off a book in which a policy intervention is marked. "
+        "Rule 1 of docs/rules.md, and config.MORATORIUM_REGIME for the window.",
+        unit="indicator",
+        source="CARES Act and Freddie Mac forbearance reporting",
+    ),
+    _macro(
         "housing_starts_growth",
         "Housing starts growth",
         "The year-on-year change in housing units started.",
@@ -783,6 +794,13 @@ HEADERS: Final[dict[str, str]] = {
     "effect_all": "Whole training half",
     "effect_even": "Even vintage years",
     "effect_odd": "Odd vintage years",
+    "effect_even_vintages": "Even vintage years",
+    "effect_odd_vintages": "Odd vintage years",
+    # Rule 9's time cuts, named after `config.STABILITY_CUT` so a reader can see which window
+    # each column is. The header map is keyed by column name, so a cut moved in config would
+    # want these moved with it -- which is the cost of naming a window in a column.
+    "effect_to_2010_06": "To 2010-06",
+    "effect_after_2010_06": "After 2010-06",
 }
 
 #: Columns whose values are variable names or formula terms, and how each is read.

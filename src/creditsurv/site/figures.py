@@ -840,17 +840,39 @@ def selection_screening(views: Mapping[str, pd.DataFrame]) -> go.Figure:
     return figure
 
 
+#: How a stability split is drawn. Discovered from the table rather than written out, because
+#: rule 9's amendment of 17 October 2026 added time cuts beside the origination parity and the
+#: cut itself is `config.STABILITY_CUT` -- a figure that named its columns would have to be
+#: edited whenever that constant moved, and would silently draw nothing if it were not.
+_SPLIT_MARKS: Final[tuple[tuple[str, str], ...]] = (
+    ("triangle-right", "triangle-left"),
+    ("square", "diamond"),
+)
+
+
 def selection_stability(views: Mapping[str, pd.DataFrame]) -> go.Figure:
     table = views["selection_stability"]
     figure = _base("Effect of one standard deviation on log survival time", "", height=560)
+    splits = [
+        column
+        for column in table.columns
+        if column.startswith("effect_") and column != "effect_all"
+    ]
+    marks = [symbol for pair in _SPLIT_MARKS for symbol in pair]
+    series = [("effect_all", "training half", "#333333", "circle")]
+    for position, column in enumerate(splits):
+        series.append(
+            (
+                column,
+                column.removeprefix("effect_").replace("_", " "),
+                PALETTE[position % len(PALETTE)],
+                marks[position % len(marks)],
+            )
+        )
     choices = []
     for round_number, rows in table.groupby("round", sort=True):
         members = []
-        for column, name, colour, symbol in (
-            ("effect_all", "training half", "#333333", "circle"),
-            ("effect_even", "even vintage years", PALETTE[0], "triangle-right"),
-            ("effect_odd", "odd vintage years", PALETTE[1], "triangle-left"),
-        ):
+        for column, name, colour, symbol in series:
             members.append(len(figure.data))
             figure.add_trace(
                 go.Scatter(

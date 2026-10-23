@@ -15,12 +15,13 @@ model.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-from creditsurv.config import TIME_VARYING_CONTINUOUS
+from creditsurv.config import BANDED_REFERENCE, TIME_VARYING_CONTINUOUS
 from creditsurv.features import MACRO_DERIVED, MACRO_SOURCES
 from creditsurv.models.aft import coefficient_table
 from creditsurv.models.lifetime_pd import (
@@ -33,6 +34,7 @@ from creditsurv.models.lifetime_pd import (
     scenario_lifetime_pd,
     survival_along_path,
 )
+from creditsurv.models.selection import EXPECTED_SIGNS
 from creditsurv.reporting import charts
 from creditsurv.reporting.builder import Report, provenance
 
@@ -109,6 +111,21 @@ def marginal_effects(
     read from ``MACRO_DERIVED``; the validation found an older, pre-selection list in
     its place, so ``inflation_rate`` was shocked on the record and reported as exactly zero.
 
+    **A banded covariate moves one band, not one standard deviation.** Rule 12 reads
+    ``credit_score``, ``original_ltv`` and ``debt_to_income`` as factors, so a value between two
+    bands is not a level the design knows: adding a standard deviation to a 790 score gives
+    733.78, formulaic casts it to ``nan``, and the row reports the effect of **erasing the band**
+    rather than of moving the score. That is what this table published for all three of them,
+    with ``credit_score`` -- the primary risk dimension -- coming out as the smallest effect in
+    it. The defect arrived with rule 12 in September 2026 and went unseen for a month because the
+    reports were not regenerated, which is the second validation's C1 biting harder than it
+    could see.
+
+    So each banded covariate moves **one band towards risk**, and which direction that is comes
+    from its declared prior rather than from a choice made here: a positive prior means higher is
+    safer, so risk is the band below. Loans already in the riskiest band do not move, which makes
+    the effect a little smaller than a full band and is stated rather than hidden.
+
     **The size of the move comes from the fitting data, not from the projection.**
     Under the random-walk baseline a macro *level* such as ``equity_volatility`` is flat across the
     whole projection and identical for every loan, so its deviation there is exactly
@@ -118,6 +135,7 @@ def marginal_effects(
     :func:`covariate_steps`); the projected panel is used only when it is not supplied.
     """
     derived = set(MACRO_DERIVED)
+    banded = _bands(loans)
     extended = extend_macro(macro, horizon_months + 2)
     baseline_panel = project_panel(loans, extended, horizon_months=horizon_months)
     baseline = _average(
@@ -128,6 +146,28 @@ def marginal_effects(
     for name in continuous:
         if name not in baseline_panel.columns:
             continue
+        if name in banded:
+            moved = loans[name].map(banded[name])
+            panel = project_panel(
+                loans.assign(**{name: moved.fillna(loans[name])}),
+                extended,
+                horizon_months=horizon_months,
+            )
+            shocked = _average(
+                conditional_pd(survival_along_path(fitted, panel, covariates)), weights
+            )
+            rows.append(
+                {
+                    "covariate": name,
+                    "kind": "banded",
+                    "one_sd": float(moved.notna().mean()),
+                    "baseline_pd": baseline,
+                    "shocked_pd": shocked,
+                    "change_pp": (shocked - baseline) * 100.0,
+                }
+            )
+            continue
+
         if steps is not None and name in steps:
             step = float(steps[name])
         else:
@@ -160,6 +200,25 @@ def marginal_effects(
     return table.reindex(table["change_pp"].abs().sort_values(ascending=False).index)
 
 
+def _bands(loans: pd.DataFrame) -> dict[str, dict[float, float]]:
+    """For each banded covariate, the map from one band to the next one towards risk.
+
+    The direction is the declared prior's, not a choice: a positive prior means higher is safer,
+    so risk is the band below it. The riskiest band maps to nothing and those loans stay where
+    they are, which is why the table reports the **share that moved** beside the effect.
+    """
+    maps: dict[str, dict[float, float]] = {}
+    for name in BANDED_REFERENCE:
+        if name not in loans.columns:
+            continue
+        order = sorted(float(value) for value in pd.unique(loans[name].dropna()))
+        if len(order) < 2:
+            continue
+        towards_risk = order if EXPECTED_SIGNS.get(name, -1) < 0 else order[::-1]
+        maps[name] = dict(pairwise(towards_risk))
+    return maps
+
+
 def generate(
     fitted: FitResult,
     loans: pd.DataFrame,
@@ -167,6 +226,7 @@ def generate(
     covariates: Sequence[str],
     continuous: Sequence[str],
     *,
+    formula: str,
     reports_dir: Path,
     horizon_months: int = 60,
     weights: pd.Series | None = None,
@@ -299,6 +359,11 @@ the question.
         provenance(
             [
                 "`uv run creditsurv report`",
+                # The formula, because a generated report that does not name the model it
+                # describes cannot be told from one describing a model that no longer exists --
+                # which is how three of them sat in the site's navigation for a month.
+                # `tests/test_site.py` holds this line to `config.default_formula()`.
+                f"Formula: `{formula}`",
                 f"Distribution: {fitted.distribution}; likelihood: {fitted.likelihood.value}",
                 f"Book scored: {len(loans):,} rows"
                 + ("" if weights is None else f" standing for {weights.sum():,.0f} loans")

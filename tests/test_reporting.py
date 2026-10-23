@@ -137,13 +137,35 @@ def test_psi_handles_categorical_variables() -> None:
     assert population_stability_index(reference, shifted) > 0.25
 
 
-def test_default_covariates_match_the_formula() -> None:
-    from creditsurv.config import default_formula
+def test_default_covariates_cover_the_scale_and_the_shape() -> None:
+    """The frame carries every column either formula names, and nothing it names is missing.
 
-    formula = default_formula()
+    There are **two** formulas since rule 14 made the shape part of the specification, and the
+    direction that matters is this one: a column named and not loaded is a fit that cannot
+    start, which is how a report died on `NameError: name 'buyer_type' is not defined` when
+    `default_covariates` read the scale's selected set while `default_shape` read the set
+    offered at origination.
 
-    for name in default_covariates():
-        assert name in formula
+    The reverse direction is **not** asserted, and that is deliberate. A column loaded and
+    unread costs memory; a column read and unloaded costs the fit. `buyer_type` is loaded for
+    the shape and absent from the scale, which the band-form selection decided at step 7, and
+    requiring the two to agree would force one of the blocks to carry the other's answer.
+    """
+    import re
+
+    from creditsurv.config import default_formula, default_shape
+
+    loaded = set(default_covariates())
+    # The names inside `C(name, Treatment(level))` and the bare terms, which is what a design
+    # actually reads -- `Treatment` and the levels are not columns.
+    named = {
+        match
+        for formula in (default_formula(), default_shape())
+        for match in re.findall(r"C\((\w+),|(?:^|\+ )\s*(\w+)\s*(?:$|\+)", formula)
+        for match in ([match] if isinstance(match, str) else match)
+        if match
+    }
+    assert named <= loaded, sorted(named - loaded)
 
 
 def test_cli_exposes_every_command() -> None:

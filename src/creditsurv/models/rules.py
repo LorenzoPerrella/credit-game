@@ -127,6 +127,7 @@ def worst(
     alone: Mapping[str, float] | None = None,
     signs: Mapping[str, int] = EXPECTED_SIGNS,
     skip: Collection[str] = (),
+    banded: Collection[str] = (),
 ) -> Removal | None:
     """The covariate step 8 removes next, and why -- or ``None`` when every one stays.
 
@@ -151,11 +152,24 @@ def worst(
 
     ``skip`` names covariates whose removal step 8 has tried and found to leave a model that
     cannot be fitted. They stay in the model and are not offered again.
+
+    ``banded`` names covariates rule 12 reads as **factors**, and they are not judged here at
+    all. The three rules above each read one coefficient, one z and one p-value; a banded
+    covariate has one of each **per band** -- four for `credit_score` -- and no single sign. The
+    first band-form selection discovered this by raising `KeyError: 'credit_score'` two hours
+    into step 8, because `spec.continuous` holds covariate names while a fitted table holds
+    design columns.
+
+    Skipping them loses nothing that is not reported elsewhere. They are the protected loan
+    block, so step 8 was never going to remove them; and `screen` already reads a banded
+    covariate band by band and publishes `sign_agrees` for each, which is where a backwards
+    band would be visible. A joint test across the bands would be a different rule and would
+    have to be declared before the fit rather than written here.
     """
     backwards: list[tuple[float, str, float, float]] = []
     reversed_: list[tuple[float, str, float, float]] = []
     thin: list[tuple[float, str, float, float]] = []
-    for name in (term for term in spec.continuous if term not in skip):
+    for name in (term for term in spec.continuous if term not in skip and term not in banded):
         coefficient = number(terms, name, "coef")
         z = coefficient / number(terms, name, "se(coef)")
         p_value = number(terms, name, "p")
@@ -201,25 +215,60 @@ def worst(
 def stability_table(
     spec: Specification,
     whole: pd.DataFrame,
-    even: pd.DataFrame,
-    odd: pd.DataFrame,
+    splits: Mapping[str, pd.DataFrame],
     deviations: pd.Series,
+    banded: Collection[str] = (),
 ) -> pd.DataFrame:
-    """Each continuous covariate's standardised effect on the whole and on each half."""
+    """Each continuous covariate's standardised effect on the whole and on each split.
+
+    ``splits`` is named rather than positional, and there may be more than two. Rule 9 compared
+    loans originated in **even and in odd years** and nothing else; amended 17 October 2026 it
+    also compares **time cuts**, because the second validation found a covariate reading +0.083
+    at the 2018 cut and -0.032, -0.039 and -0.048 at the three after it while the parity split
+    called it stable. A parity split holds the calendar fixed and varies the cohort; a time cut
+    does the opposite, so the two see different instabilities and neither substitutes for the
+    other.
+
+    **And the two are not interchangeable diagnostics**, which the rule says in as many words:
+    `period = cohort + age` holds identically, so the macro block is identified only through
+    the calendar, and a time cut removes some of the very variation it is identified from. A
+    covariate called unstable by a time cut may be one the half could not measure rather than
+    one that moves.
+
+    ``banded`` is skipped for the reason `worst` gives: a covariate rule 12 reads as a factor
+    has one effect per band and no single standardised effect to compare across splits. They are
+    the protected loan block, so `not_identified` was never going to remove them.
+    """
     rows = []
     for name in spec.continuous:
-        effects = [effect_of(terms, name, deviations) for terms in (whole, even, odd)]
+        if name in banded:
+            continue
+        effects = {label: effect_of(terms, name, deviations) for label, terms in splits.items()}
+        whole_effect = effect_of(whole, name, deviations)
+        signs = {bool(effect > 0) for effect in (whole_effect, *effects.values())}
         rows.append(
             {
                 "covariate": name,
                 "dimension": ECONOMIC_DIMENSION.get(name, name),
-                "effect_all": effects[0],
-                "effect_even": effects[1],
-                "effect_odd": effects[2],
-                "stable": len({bool(effect > 0) for effect in effects}) == 1,
+                "effect_all": whole_effect,
+                **{f"effect_{label}": effect for label, effect in effects.items()},
+                "stable": len(signs) == 1,
             }
         )
     return pd.DataFrame(rows)
+
+
+def _across(indexed: pd.DataFrame, name: str, table: pd.DataFrame) -> str:
+    """One covariate's effect on each split, named, for an elimination reason."""
+    labels = [
+        column.removeprefix("effect_")
+        for column in table.columns
+        if column.startswith("effect_") and column != "effect_all"
+    ]
+    return ", ".join(
+        f"{number(indexed, name, f'effect_{label}'):+.3f} on {label.replace('_', ' ')}"
+        for label in labels
+    )
 
 
 def not_identified(table: pd.DataFrame) -> Removal | None:
@@ -245,9 +294,11 @@ def not_identified(table: pd.DataFrame) -> Removal | None:
         return Removal(
             covariate=name,
             reason=(
-                f"1 sd effect {number(indexed, name, 'effect_even'):+.3f} on even "
-                f"and {number(indexed, name, 'effect_odd'):+.3f} on odd origination years, "
-                f"beside {partner} ({number(indexed, partner, 'effect_all'):+.3f}), both "
+                # Every split by name, because which one disagreed is the finding: a parity
+                # split and a time cut see different instabilities, and a reason that said
+                # only "unstable" would leave the reader unable to tell them apart.
+                f"1 sd effect {_across(indexed, name, table)}, beside {partner} "
+                f"({number(indexed, partner, 'effect_all'):+.3f}), both "
                 f"{indexed.loc[name, 'dimension']}"
             ),
             partner=partner,
