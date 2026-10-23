@@ -214,6 +214,6 @@ along each loan's realised covariate path instead.
 
 - `uv run creditsurv report`
 - Formula: `moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured'))`
-- Shape: `scalar`
-- Generated: 2026-10-21
+- Shape: `term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))`
+- Generated: 2026-10-23
 - Loan data: Freddie Mac Single-Family Loan-Level Dataset. Macro: FRED; see `docs/data_dictionary.md`.

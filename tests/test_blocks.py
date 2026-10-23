@@ -1350,3 +1350,37 @@ def test_the_engines_old_module_name_still_resolves_for_the_cached_fits() -> Non
     # unpickler meeting the old module path calls `find_class` on it.
     resolver = pickle.Unpickler(io.BytesIO(b""))
     assert resolver.find_class("creditsurv.models.blocks", "BlockFit") is BlockFit
+
+
+def test_a_curvature_direction_flat_to_the_arithmetic_is_recorded_and_not_refused() -> None:
+    """The floor rule 5's neighbour got on 23 October 2026, and the cost it was given for.
+
+    `_newton_from` accepts a polished fit only where the final Hessian is positive definite,
+    which is right: a vanishing gradient without upward curvature is a saddle and not a maximum.
+    The test for it was a strict `> 0` on a computed eigenvalue, while the distance condition
+    beside it has a 1e-3 tolerance -- and on the 2018-12 cut of the shaped model that refused a
+    fit **2.25e-06 standard errors** from the optimum on a smallest eigenvalue of **-9.175e-18**
+    against a largest of 1.935e-01. One direction of 42, at 0.0051 of numpy's own rank tolerance:
+    rounding, not curvature. SLSQP then spent 77 evaluations converging to a point about 1,450
+    log-likelihood units worse than the one already found.
+
+    So the comparison is against `largest * n * eps`, which is the tolerance
+    `np.linalg.matrix_rank` uses to decide the same question, and a direction flatter than that
+    is recorded rather than refused.
+    """
+    import numpy as np
+
+    # The production numbers, as a matrix: one direction flat to the arithmetic, the rest sound.
+    eigenvalues = np.array([-9.175e-18, *np.linspace(1e-3, 1.935e-01, 41)])
+    tolerance = float(eigenvalues.max()) * eigenvalues.size * float(np.finfo(float).eps)
+
+    assert abs(eigenvalues.min()) < tolerance, "the production case must clear the floor"
+    assert abs(eigenvalues.min()) / tolerance < 0.01, "and clear it by two orders, not by a hair"
+    assert bool(np.all(eigenvalues > -tolerance)), "so the fit is accepted"
+    assert not bool(np.all(eigenvalues > 0)), "where the strict test refused it"
+
+    # And a genuinely negative direction is still refused: the floor is a floor, not a waiver.
+    saddle = eigenvalues.copy()
+    saddle[0] = -1e-4
+    assert abs(saddle.min()) > tolerance
+    assert not bool(np.all(saddle > -tolerance)), "a real saddle is still a saddle"
