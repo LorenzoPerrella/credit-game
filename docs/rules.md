@@ -617,13 +617,33 @@ reverses with the monetary regime.
 Declared 17 October 2026, before the fit.
 
 **Why.** For a lifetime PD the shape along age *is* the product. The **scalar-shape** model held
-**2 of 7** age bands inside 0.80 to 1.25 out of sample: it under-predicted the 12-to-35-month hump
-by up to 44% and over-predicted the seasoned book by a third. The published model's own
-out-of-sample profile is not yet measured, for the reason section 5 now records, and in sample it
-holds 6 of 7 with the first year at 0.727. **This rule therefore rests on a shape defect measured
-on a predecessor**, and the first thing the branch that implements it owes is the same table for
-the published model: if the first year is the only band out, the remedy is narrower than a free
-baseline in log-time, and the rule says so before the fit rather than after. One shape is a compromise across vintages
+**2 of 7** age bands inside 0.80 to 1.25 out of sample, and this rule was declared on that figure
+-- a defect measured on a predecessor -- with the table for the published model named as the first
+thing the implementing branch owed.
+
+**That table exists as of 21 October 2026, and it holds 2 of 7 as well.** Measured on the declared
+test window, anchored, by the view section 5 had declared and nothing could compute:
+
+| band | A/E | | band | A/E |
+|---|---|---|---|---|
+| 0 to 11 | 0.814 | | 36 to 59 | 0.911 |
+| 12 to 23 | **1.480** | | 60 to 119 | **0.621** |
+| 24 to 35 | **1.347** | | 120 to 239 | **0.647** |
+| | | | 240 to 399 | **0.725** |
+
+**And it answers the question this rule asked before the fit, in the direction that justifies the
+remedy rather than narrowing it.** The first year is *not* the only band out, and the misses do not
+share a sign: the model **under-predicts the 12-to-35-month hump** by 48% and 35% and
+**over-predicts the seasoned book** by a third to a half. A defect in one direction could be met by
+something narrower than a free baseline -- a floor, a single factor. One that reverses cannot: no
+monotone reparameterisation of a single shape fixes a curve that is too low at two years and too
+high at eight. So the flexible baseline in log-time is admitted on its measured premise and not on
+its predecessor's.
+
+Two things this does not license. It is still **one shape per loan**, not a hazard that bends with
+calendar time, because `period = cohort + age` holds identically. And the in-sample profile holds
+**6 of 7** with only the first year out at 0.727, so the gain is out of sample and any in-sample
+improvement is not the evidence. One shape is a compromise across vintages
 -- 1999-2008 read 1.33 to 1.34 at 12 to 35 months where 2009-2018 read 0.90 to 0.95, and the 2022
 vintage out of sample reads 1.75 -- and in the aggregate those cancel, while in the cumulative PD
 of a new loan they move the losses through time. For an expected loss, *when* matters as much as
