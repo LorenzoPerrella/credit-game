@@ -24,9 +24,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from creditsurv.backtest.metrics import master_scale_passed
+from creditsurv.backtest.metrics import GRADE_TOLERANCE, master_scale_passed
 from creditsurv.backtest.runner import ACCEPTANCE, BACKTEST_WINDOW_MONTHS
-from creditsurv.reporting.builder import Report, provenance
+from creditsurv.reporting.builder import Report, provenance, specification
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
     import pandas as pd
 
+    from creditsurv.models.aft import FitResult
     from creditsurv.models.anchoring import Anchor
 
 
@@ -45,9 +46,17 @@ def generate(
     level: pd.DataFrame,
     grades: pd.DataFrame,
     acceptance: Sequence[pd.DataFrame],
+    development: FitResult,
     reports_dir: Path,
 ) -> Path:
-    """Write ``windows.md`` under ``reports_dir``."""
+    """Write ``windows.md`` under ``reports_dir``.
+
+    ``development`` is the model the anchoring and the grades are of, and it is here so the
+    report can name it. The campaign has always carried it -- the field's own comment said "so
+    a caller can report on it" -- and no caller read it, so this report stated no formula, no
+    shape and no date at all. That is how four scalar-shape fits published every out-of-sample
+    number in the project without anything being able to notice.
+    """
     reports_dir.mkdir(parents=True, exist_ok=True)
     report = Report(
         "Windows, anchoring and grades",
@@ -87,12 +96,17 @@ months the level never saw.
     ).table(level, caption="The test window before and after the multiplier")
 
     passed = master_scale_passed(grades)
+    tolerance = GRADE_TOLERANCE
     report.heading("Twelve-month PD by grade").text(
         f"""
 Eight grades on geometric thresholds of predicted twelve-month PD, each floor twice the one
-before. A grade passes when its predicted PD falls inside the 95% Jeffreys interval around
-the rate its loans realised -- Jeffreys because the top grades hold few defaults and
-sometimes none, where a normal interval has no width and no grade can fail.
+before. A grade passes when its predicted twelve-month PD is within **{tolerance:.0%}** of the
+rate its loans realised, and the magnitude of every miss is published whether it passes or not.
+
+Rule 5 asked for the 95% Jeffreys interval until 17 October 2026, and the interval is still
+shown beside the tolerance. What replaced it is that at five million obligor-years in a grade
+the interval is a few parts in a thousand wide, so it tests the arithmetic of the average rather
+than the model -- which is what this project already says about the Kaplan-Meier band.
 
 **The scale {"passes" if passed else "fails"}**: {int(grades["passed"].sum())} of
 {len(grades)} populated grades hold, against the seven of eight the rule asks for.
@@ -107,6 +121,7 @@ sometimes none, where a normal interval has no width and no grade can fail.
         provenance(
             [
                 "`uv run creditsurv windows`",
+                *specification(development.formula, getattr(development, "ancillary", None)),
                 "Rules: `docs/rules.md`, sections 1, 4, 5 and 7",
                 f"Criteria: actual over expected {ACCEPTANCE.ae_low:.2f} to "
                 f"{ACCEPTANCE.ae_high:.2f}, Gini above {ACCEPTANCE.gini_min:.2f}",

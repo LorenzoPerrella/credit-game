@@ -69,6 +69,11 @@ class Comparison:
     signs: dict[str, list[str]]
     #: The formula each family's own selection ended on.
     formulas: dict[str, str]
+    #: The ancillary formula each family's selection was fitted with, or ``None`` for a
+    #: scalar shape. Read from the record beside the formula, because the two together are
+    #: what a family's model *is*: comparing two families on the scale alone would compare
+    #: whichever shapes their selections happened to carry.
+    shapes: dict[str, str | bool | None]
     #: Covariates of the **prepayment** model that turn rule 6's prior. Reported rather than
     #: acted on: rule 11 names the ones kept because their removal left an unfittable model.
     prepayment_against_prior: list[str]
@@ -113,12 +118,15 @@ def compare_families(
     gaps: dict[str, pd.DataFrame] = {}
     signs: dict[str, list[str]] = {}
     formulas: dict[str, str] = {}
+    shapes: dict[str, str | bool | None] = {}
     for distribution in CONVERGENT_DISTRIBUTIONS:
         described = _record(DEFAULT_CAUSE, distribution=distribution)
         if described is None:
             log.info("%s: no selection record on these cells; skipped", distribution)
             continue
         formulas[distribution] = str(described["formula"])
+        ancillary = described.get("ancillary")
+        shapes[distribution] = None if ancillary is None else str(ancillary)
         fitted, defaults = _fit_and_hazards(
             described,
             DEFAULT_CAUSE,
@@ -139,7 +147,11 @@ def compare_families(
         message = "No selection has been run on these cells; there is nothing to compare."
         raise NotSelected(message)
     return Comparison(
-        gaps=gaps, signs=signs, formulas=formulas, prepayment_against_prior=against_prior
+        gaps=gaps,
+        signs=signs,
+        formulas=formulas,
+        shapes=shapes,
+        prepayment_against_prior=against_prior,
     )
 
 

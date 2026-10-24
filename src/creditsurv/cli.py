@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Annotated, Final, cast
 import typer
 
 from creditsurv.config import (
+    BOOK_WINDOW_MONTHS,
     CATEGORICAL_REFERENCE,
     DEFAULT_CAUSE,
     DISTRIBUTION,
@@ -714,6 +715,10 @@ def windows(
             development_cut=pd.Period(as_of, freq="M"),
             anchor_window=(first, last),
             block_rows=block_rows,
+            # Rule 14's shape is part of the specification, so the campaign carries it. Without
+            # it every number this command published -- three cuts, the multiplier, the master
+            # scale -- was of a scalar-shape model, which is what the third validation found.
+            shape=default_shape(),
         )
     except NoExposure as empty:
         # A window with no rows is a fact about the book, and the campaign raises it as one.
@@ -727,6 +732,7 @@ def windows(
         level=campaign.level,
         grades=campaign.grades,
         acceptance=campaign.acceptance,
+        development=campaign.development,
         reports_dir=reports_dir(),
     )
     _echo_table(campaign.windows)
@@ -776,6 +782,7 @@ def family(
         comparison.gaps,
         comparison.signs,
         formulas=comparison.formulas,
+        shapes=comparison.shapes,
         reports_dir=reports_dir(),
     )
     typer.echo(f"\nThe rule chooses: {chosen}")
@@ -792,7 +799,9 @@ def family(
 def report(
     horizon: Annotated[int, typer.Option(help="Months for the PD term structure.")] = 60,
     as_of: Annotated[str, typer.Option(help="Reporting date for the backtest.")] = DEFAULT_AS_OF,
-    loans: Annotated[int, typer.Option(help="Origination profiles to score.")] = 500,
+    book_months: Annotated[
+        int, typer.Option(help="Months of originations the projection book is.")
+    ] = BOOK_WINDOW_MONTHS,
     extra_fits: Annotated[
         bool, typer.Option(help="Also compare distributions and test the shape.")
     ] = True,
@@ -821,7 +830,8 @@ def report(
     import pandas as pd
 
     from creditsurv.backtest.runner import backtest_split
-    from creditsurv.data.panel import WEIGHT
+    from creditsurv.data.panel import WEIGHT, cells_to_episodes, month_ordinal
+    from creditsurv.data.store import load_originations
     from creditsurv.models.aft import coefficient_table
     from creditsurv.models.fits import cached_fit, fit_once, selection_start
     from creditsurv.models.lifetime_pd import origination_book
@@ -871,12 +881,26 @@ def report(
             reports_dir=destination,
             weights_col=WEIGHT,
             extra_fits=extra_fits,
+            published_shape=shape,
             fit=cached_fit(as_of=as_of, moratorium=moratorium),
         )
     ]
 
     typer.echo("Writing calibration report...")
-    book = origination_book(split.train, macro, loans)
+    # The declared book, read from the cell file rather than taken out of `split.train`: the
+    # training half is half the loans, so the heaviest profiles in it were a truncation of a
+    # sample. `config.BOOK_WINDOW_MONTHS` says what the book is and why, declared before it
+    # was rebuilt.
+    book_last = month_ordinal(reporting_date)
+    book = origination_book(
+        cells_to_episodes(
+            load_originations(moratorium, first=book_last - (book_months - 1), last=book_last),
+            macro,
+            covariates=covariates,
+        ),
+        macro,
+    )
+    typer.echo(f"  the book: {len(book):,} profiles standing for {book[WEIGHT].sum():,.0f} loans")
     written.append(
         calibration.generate(
             fitted,
@@ -885,6 +909,7 @@ def report(
             covariates,
             [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS],
             formula=formula,
+            shape=shape,
             reports_dir=destination,
             horizon_months=horizon,
             weights=book.set_index("loan_id")[WEIGHT],
@@ -896,11 +921,26 @@ def report(
 
     typer.echo("Backtesting against what happened...")
     _, result = backtest_split(split, covariates, formula, fitted=fitted)
-    written.append(backtesting.generate(split, result, formula=formula, reports_dir=destination))
+    written.append(
+        backtesting.generate(split, result, formula=formula, shape=shape, reports_dir=destination)
+    )
 
     typer.echo("\nWritten:")
     for path in [*written, coefficients]:
         typer.echo(f"  {path}")
+
+
+def _anchor_window(given: str) -> tuple[str, str]:
+    """Rule 1's anchoring window, or the one a caller named. Two months, comma-separated."""
+    from creditsurv.models.anchoring import ANCHOR_WINDOW
+
+    if not given:
+        return ANCHOR_WINDOW
+    first, _, last = given.partition(",")
+    if not last:
+        message = "An anchor window is two months, comma-separated, e.g. 2022-01,2024-12."
+        raise typer.BadParameter(message)
+    return first.strip(), last.strip()
 
 
 @app.command()
@@ -909,11 +949,16 @@ def views(
         str, typer.Option(help="The reporting date the fit was made at.")
     ] = DEFAULT_AS_OF,
     moratorium: MoratoriumOption = "exclude",
-    loans: Annotated[int, typer.Option(help="Origination profiles for the projections.")] = 500,
+    book_months: Annotated[
+        int, typer.Option(help="Months of originations the projection book is.")
+    ] = BOOK_WINDOW_MONTHS,
     horizon: Annotated[int, typer.Option(help="Months for the term structure.")] = 60,
     model: Annotated[bool, typer.Option(help="The views that need the fitted model.")] = True,
     portfolio: Annotated[bool, typer.Option(help="The views of the book itself.")] = True,
     block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
+    anchor_window: Annotated[
+        str, typer.Option(help="First and last month the level is anchored on, comma-separated.")
+    ] = "",
 ) -> None:
     """Compute the tables behind the documentation site, and write them to ``docs/tables``.
 
@@ -951,7 +996,8 @@ def views(
                 ancillary=default_shape(),
                 macro=load_macro_panel(),
                 block_rows=block_rows,
-                loans=loans,
+                book_months=book_months,
+                anchor_window=_anchor_window(anchor_window),
                 horizon=horizon,
             )
         except NoCachedFit as missing:

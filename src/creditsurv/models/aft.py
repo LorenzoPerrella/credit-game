@@ -113,6 +113,24 @@ class FitResult:
     #: What the block engine recorded, for an interval-censored fit. Absent from models
     #: cached before the engine existed, so read it with ``getattr``.
     blocks: BlockFit | None = None
+    #: The ancillary formula the shape was fitted with, or ``None`` for a scalar shape.
+    #:
+    #: Carried because a fit that does not say which shape it has cannot be told from one that
+    #: has none, and that is exactly what happened: `windows` fitted four scalar-shape models,
+    #: published every number of them, and nothing in the package could state or compare the
+    #: shape to notice. Absent from models cached before this field existed, so read it with
+    #: ``getattr`` the way ``blocks`` is read. Typed as lifelines accepts it, which includes
+    #: ``True`` for "the scale's own formula".
+    #:
+    #: **Do not read this off a fit that came out of the cache.** A pickle written before the
+    #: field existed unpickles with the dataclass default, so a shaped fit from the cache reports
+    #: ``None`` and is indistinguishable from a genuinely scalar one -- and the first report
+    #: generated after this field was added duly stated ``Shape: scalar`` for the published
+    #: shaped model, which is a *wrong* statement where there had been none. The description JSON
+    #: beside the pickle carries the truth, and a caller that asked for a shape already knows it:
+    #: pass what was asked for. ``reporting.builder.specification`` therefore takes the shape as
+    #: an argument and never discovers it.
+    ancillary: str | bool | None = None
 
     @property
     def aic(self) -> float:
@@ -276,6 +294,7 @@ def fit_aft(
         n_events=n_events,
         elapsed_seconds=elapsed,
         blocks=record,
+        ancillary=ancillary,
     )
 
 
@@ -332,6 +351,7 @@ def fit_encoding(
         n_events=int(record.events),
         elapsed_seconds=time.perf_counter() - started,
         blocks=record,
+        ancillary=ancillary,
     )
 
 
@@ -395,6 +415,7 @@ def fit_streamed(
         n_events=int(record.events),
         elapsed_seconds=time.perf_counter() - started,
         blocks=record,
+        ancillary=ancillary,
     )
 
 

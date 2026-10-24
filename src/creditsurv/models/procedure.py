@@ -134,6 +134,10 @@ class SelectionRecord:
     selected: Specification
     eliminated: dict[str, str]
     fits: list[dict[str, object]]
+    #: The ancillary formula every fit of this selection carried, read off ``Fits`` so it
+    #: cannot disagree with what was actually fitted. ``None`` is a scalar shape, and that
+    #: is what the prepayment selection runs with by rule 14.
+    ancillary: str | None = None
 
     def summary(self) -> dict[str, object]:
         """What the configuration should say, as data a test can compare it with."""
@@ -151,6 +155,7 @@ class SelectionRecord:
             "categorical": dict(self.selected.categorical),
             "eliminated": self.eliminated,
             "formula": self.selected.formula,
+            "ancillary": self.ancillary,
         }
 
 
@@ -504,6 +509,7 @@ def run_selection(
         selected=current,
         eliminated=eliminated,
         fits=fits.record,
+        ancillary=fits.ancillary,
     )
 
 

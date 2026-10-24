@@ -30,7 +30,7 @@ from creditsurv.models.selection import (
 )
 from creditsurv.names import DISTRIBUTIONS, label
 from creditsurv.reporting import charts
-from creditsurv.reporting.builder import Report, provenance
+from creditsurv.reporting.builder import Report, provenance, specification
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -138,6 +138,7 @@ def generate(
     reports_dir: Path,
     weights_col: str | None = None,
     extra_fits: bool = True,
+    published_shape: str | bool | None = None,
     fit: Callable[..., FitResult] | None = None,
 ) -> Path:
     """Write ``methodology.md`` and its figures.
@@ -360,8 +361,14 @@ loan-level right-censored one by AIC is not a comparison at all.
             decimals=2,
         )
 
+    # `shape_test` and `published_shape` are two different objects and were briefly one name,
+    # which mypy caught by type rather than by meaning. This is the **test**: one covariate
+    # relaxed into the shape parameter at a time, a diagnostic that answers whether the
+    # hazard's shape varies at all. `published_shape` is rule 14's declared ancillary
+    # formula, which the model this report describes actually carries. A report that named
+    # both "shape" would appear to state two contradictory ones.
     relaxed, ancillary = shape_formula(covariates, CATEGORICAL_REFERENCE)
-    shape = (
+    shape_test = (
         shape_depends_on_covariates(
             encoded,
             covariates,
@@ -393,10 +400,10 @@ the timing of losses even when it gets the total right.
 Tested on *{label(relaxed)}*{why}:
 """
     )
-    if shape is None:
+    if shape_test is None:
         report.text(_SKIPPED.format(what="testing the shape", flag="--extra-fits"))
     else:
-        report.table(shape, decimals=4)
+        report.table(shape_test, decimals=4)
 
     predicted = predicted_survival_curve(fitted, encoded, covariates, weights_col=weights_col)
     band = km_band_contains(curve, predicted)
@@ -455,7 +462,14 @@ along each loan's realised covariate path instead.
         provenance(
             [
                 "`uv run creditsurv report`",
-                f"Formula: `{formula}`",
+                # The published shape, **passed in and not read off the fit**: a cached fit
+                # unpickled from before `FitResult.ancillary` existed reports `None`, and the
+                # first run after that field was added stated `Shape: scalar` for the shaped
+                # published model -- a wrong statement where there had been none. Distinct from
+                # the *relaxed* shape of the section above, which tests one covariate at a time
+                # and is a diagnostic rather than a specification: naming both "shape" would
+                # make this report appear to state two contradictory ones.
+                *specification(formula, published_shape),
                 "Loan data: Freddie Mac Single-Family Loan-Level Dataset. Macro: FRED; "
                 "see `docs/data_dictionary.md`.",
             ]

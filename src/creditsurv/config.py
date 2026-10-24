@@ -418,6 +418,28 @@ MORATORIUM_REGIME: Final[tuple[str, str]] = ("2020-03", "2021-09")
 #: and the recovery and the pandemic in the second, which is a consequence and not the reason.
 STABILITY_CUT: Final = "2010-06"
 
+#: How many months of originations the projection book is, ending at the reporting date.
+#:
+#: Declared 19 October 2026, before the book was rebuilt, because the third validation found that
+#: there was no declared book at all. What the projections had been scored on was the 500 heaviest
+#: age-zero cells **ever written**, which is a mode and not a portfolio: 87.8% rate-term refinance
+#: against the 15.6% Freddie Mac wrote in 2025-26, 0.59% purchase against 71.1%, 95.9% inside one
+#: credit-score band, and **no first-time buyers and no investors at all** where the real book is
+#: a third first-time buyers. The site's headline 12-month PD, both lifetime PDs and the adverse
+#: multiple were of that book.
+#:
+#: Twelve months, and the reasons are both declared here so neither can be chosen afterwards. It
+#: is **a year** because a mortgage book is written through a seasonal cycle -- purchase lending
+#: peaks in spring and refinancing moves with rates -- so any shorter window is a season rather
+#: than a book. And it is **the last** year because the question the projection asks is what
+#: today's lending is worth, which makes the most recent complete year the only window that
+#: answers it. Nothing is ordered and nothing is truncated: every profile written in the window
+#: is in the book, at the weight it carries.
+#:
+#: The composition is published beside the projections, against `lending_by_segment`, which is
+#: the check that would have caught the old book on the day it was written.
+BOOK_WINDOW_MONTHS: Final = 12
+
 #: Macro covariates the selection may not remove, because their purpose is to absorb rather than
 #: to be tested. `moratorium_regime` is here for the reason `harp` is in
 #: `procedure.BASE_CATEGORICAL`: a selection free to drop it would be free to read the macro

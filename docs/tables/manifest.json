@@ -1,7 +1,7 @@
 {
   "acceptance_by_segment": {
     "title": "Acceptance criteria by segment",
-    "description": "Actual over expected 0.80 to 1.25 overall and in every decile, Gini above 0.45, for every group. On the months after 2021-12, which the model never saw.",
+    "description": "Actual over expected 0.80 to 1.25 overall and in every decile, Gini above 0.45, for every group. On the test window rule 1 declares -- the months after 2024-12, which neither the fit nor the anchoring saw -- at the anchored level, multiplier 1.0111.",
     "source": "fit",
     "rows": 31,
     "columns": [
@@ -19,7 +19,7 @@
       "deciles_passed"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "ae_by_age_band": {
     "title": "Actual against expected by loan age",
@@ -38,7 +38,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "ae_by_decile": {
     "title": "Actual against expected by decile of predicted risk",
@@ -57,7 +57,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "ae_by_vintage": {
     "title": "Actual against expected by vintage year",
@@ -76,7 +76,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "ae_by_year": {
     "title": "Actual against expected by calendar year",
@@ -95,11 +95,30 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
+  },
+  "backtest_by_age_band": {
+    "title": "Backtest by seasoning band",
+    "description": "Defaults against expectation by seasoning band. On the test window rule 1 declares -- the months after 2024-12, which neither the fit nor the anchoring saw -- at the anchored level, multiplier 1.0111.",
+    "source": "fit",
+    "rows": 192,
+    "columns": [
+      "segment",
+      "group",
+      "age_band",
+      "exposure",
+      "events",
+      "expected",
+      "actual_rate",
+      "expected_rate",
+      "actual_over_expected"
+    ],
+    "fit": "bc016657b2b40bfc",
+    "generated": "2026-10-21 09:34 UTC"
   },
   "backtest_by_decile": {
     "title": "Backtest by decile of predicted risk",
-    "description": "Deciles of the test window's exposure. On the months after 2021-12, which the model never saw.",
+    "description": "Deciles of the test window's exposure. On the test window rule 1 declares -- the months after 2024-12, which neither the fit nor the anchoring saw -- at the anchored level, multiplier 1.0111.",
     "source": "fit",
     "rows": 303,
     "columns": [
@@ -114,13 +133,13 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "backtest_by_month": {
     "title": "Backtest by month",
-    "description": "Defaults against expectation by month of observation. On the months after 2021-12, which the model never saw.",
+    "description": "Defaults against expectation by month of observation. On the test window rule 1 declares -- the months after 2024-12, which neither the fit nor the anchoring saw -- at the anchored level, multiplier 1.0111.",
     "source": "fit",
-    "rows": 1581,
+    "rows": 465,
     "columns": [
       "segment",
       "group",
@@ -133,7 +152,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "book_by_segment": {
     "title": "The book by month and segment",
@@ -152,7 +171,7 @@
       "cpr"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "coefficients": {
     "title": "Coefficients",
@@ -172,7 +191,7 @@
       "effect_1sd"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "covariates_over_time": {
     "title": "Macro covariates over time",
@@ -185,7 +204,7 @@
       "mean"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "km_vs_model": {
     "title": "Kaplan-Meier against the model, by segment",
@@ -208,7 +227,7 @@
       "deviation"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "lending_by_segment": {
     "title": "Lending by vintage year and segment",
@@ -225,7 +244,7 @@
       "amount_share"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "macro_series": {
     "title": "Macroeconomic series",
@@ -238,7 +257,7 @@
       "value"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "scenarios_by_segment": {
     "title": "Scenarios by segment",
@@ -255,7 +274,7 @@
       "adverse_multiple"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "selection_collinear": {
     "title": "Selection: collinear",
@@ -268,7 +287,7 @@
       "correlation"
     ],
     "fit": null,
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "selection_correlation": {
     "title": "Selection: correlation",
@@ -281,7 +300,7 @@
       "correlation"
     ],
     "fit": null,
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "selection_elimination": {
     "title": "Selection: elimination",
@@ -297,7 +316,7 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "selection_fits": {
     "title": "Selection: fits",
@@ -319,7 +338,7 @@
       "cached"
     ],
     "fit": null,
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "selection_inflation": {
     "title": "Selection: inflation",
@@ -333,7 +352,7 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "selection_materiality": {
     "title": "Selection: materiality",
@@ -348,7 +367,7 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "selection_screening": {
     "title": "Selection: screening",
@@ -368,7 +387,7 @@
       "lr_statistic"
     ],
     "fit": null,
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "selection_stability": {
     "title": "Selection: stability",
@@ -387,7 +406,7 @@
       "round"
     ],
     "fit": null,
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "term_structure_by_segment": {
     "title": "PD term structure by segment",
@@ -403,7 +422,7 @@
       "marginal_pd"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-19 04:10 UTC"
+    "generated": "2026-10-21 09:34 UTC"
   },
   "underwriting_by_vintage": {
     "title": "Underwriting by vintage",
@@ -419,7 +438,7 @@
       "q75"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   },
   "vintage_curves": {
     "title": "Cumulative default by vintage",
@@ -437,6 +456,6 @@
       "cumulative_default_pct"
     ],
     "fit": null,
-    "generated": "2026-10-09 10:35 UTC"
+    "generated": "2026-10-21 10:43 UTC"
   }
 }

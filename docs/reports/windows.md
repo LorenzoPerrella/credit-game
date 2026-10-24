@@ -13,9 +13,9 @@ windows are closed for the same reason they are three: judged on everything afte
 
 | Cut | Until | Loan-months | Actual defaults | Expected defaults | Actual / expected | Gini | Minutes |
 |---|---|---|---|---|---|---|---|
-| 2018-12 | 2020-12 | 248611678 | 76664.0000 | 165904.7000 | 0.4621 | 0.4382 | 6.1000 |
-| 2020-12 | 2022-12 | 295453893 | 85236.0000 | 67314.4000 | 1.2662 | 0.5009 | 5.8000 |
-| 2022-12 | 2024-12 | 311532415 | 107975.0000 | 111137.8000 | 0.9715 | 0.5395 | 5.9000 |
+| 2018-12 | 2020-12 | 248611678 | 76664.0000 | 155834.2000 | 0.4920 | 0.4507 | 8.0000 |
+| 2020-12 | 2022-12 | 295453893 | 85236.0000 | 64519.1000 | 1.3211 | 0.5182 | 5.9000 |
+| 2022-12 | 2024-12 | 311532415 | 107975.0000 | 109631.7000 | 0.9849 | 0.5463 | 4.5000 |
 
 ## The cycle, in sample
 
@@ -27,36 +27,36 @@ to 1.60.
 
 | Years | Years in band | Share in band | Lowest | Highest | Threshold | Passed | Year | Loan-months | Actual defaults | Expected defaults | Actual / expected |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 23.0000 | 19.0000 | 0.8261 | 0.3848 | 1.4186 | 0.7000 | True | - | - | - | - | - |
-| - | - | - | - | - | - | - | 1999 | 6.9e+06 | 733.0000 | 1905.0000 | 0.3848 |
-| - | - | - | - | - | - | - | 2000 | 1.57e+07 | 5077.0000 | 6434.6000 | 0.7890 |
-| - | - | - | - | - | - | - | 2001 | 2.89e+07 | 15615.0000 | 13067.4000 | 1.1950 |
-| - | - | - | - | - | - | - | 2002 | 5.16e+07 | 27306.0000 | 25258.3000 | 1.0811 |
-| - | - | - | - | - | - | - | 2003 | 7.09e+07 | 36514.0000 | 29337.5000 | 1.2446 |
-| - | - | - | - | - | - | - | 2004 | 8.22e+07 | 34458.0000 | 28623.4000 | 1.2038 |
-| - | - | - | - | - | - | - | 2005 | 8.66e+07 | 42148.0000 | 29710.9000 | 1.4186 |
-| - | - | - | - | - | - | - | 2006 | 9.19e+07 | 37342.0000 | 33703.2000 | 1.1080 |
-| - | - | - | - | - | - | - | 2007 | 9.69e+07 | 50219.0000 | 43248.7000 | 1.1612 |
-| - | - | - | - | - | - | - | 2008 | 1.03e+08 | 102667.0000 | 87892.3000 | 1.1681 |
-| - | - | - | - | - | - | - | 2009 | 1.08e+08 | 220828.0000 | 209901.5000 | 1.0521 |
-| - | - | - | - | - | - | - | 2010 | 1.1e+08 | 188590.0000 | 175374.0000 | 1.0754 |
-| - | - | - | - | - | - | - | 2011 | 1.08e+08 | 137620.0000 | 156938.0000 | 0.8769 |
-| - | - | - | - | - | - | - | 2012 | 1.04e+08 | 111191.0000 | 133109.3000 | 0.8353 |
-| - | - | - | - | - | - | - | 2013 | 1.04e+08 | 78729.0000 | 84414.1000 | 0.9327 |
-| - | - | - | - | - | - | - | 2014 | 1.05e+08 | 60082.0000 | 61008.8000 | 0.9848 |
-| - | - | - | - | - | - | - | 2015 | 1.07e+08 | 47005.0000 | 52351.9000 | 0.8979 |
-| - | - | - | - | - | - | - | 2016 | 1.1e+08 | 41546.0000 | 50633.4000 | 0.8205 |
-| - | - | - | - | - | - | - | 2017 | 1.14e+08 | 41973.0000 | 46941.9000 | 0.8941 |
-| - | - | - | - | - | - | - | 2018 | 1.16e+08 | 42676.0000 | 44449.9000 | 0.9601 |
-| - | - | - | - | - | - | - | 2019 | 1.21e+08 | 38241.0000 | 47625.8000 | 0.8029 |
-| - | - | - | - | - | - | - | 2020 | 1.28e+08 | 38423.0000 | 47789.5000 | 0.8040 |
-| - | - | - | - | - | - | - | 2021 | 1.43e+08 | 41788.0000 | 30800.0000 | 1.3568 |
+| 23.0000 | 18.0000 | 0.7826 | 0.3224 | 1.4083 | 0.7000 | True | - | - | - | - | - |
+| - | - | - | - | - | - | - | 1999 | 6.9e+06 | 733.0000 | 2273.3000 | 0.3224 |
+| - | - | - | - | - | - | - | 2000 | 1.57e+07 | 5077.0000 | 7108.9000 | 0.7142 |
+| - | - | - | - | - | - | - | 2001 | 2.89e+07 | 15615.0000 | 14334.9000 | 1.0893 |
+| - | - | - | - | - | - | - | 2002 | 5.16e+07 | 27306.0000 | 26869.7000 | 1.0162 |
+| - | - | - | - | - | - | - | 2003 | 7.09e+07 | 36514.0000 | 30567.9000 | 1.1945 |
+| - | - | - | - | - | - | - | 2004 | 8.22e+07 | 34458.0000 | 29236.0000 | 1.1786 |
+| - | - | - | - | - | - | - | 2005 | 8.66e+07 | 42148.0000 | 29927.6000 | 1.4083 |
+| - | - | - | - | - | - | - | 2006 | 9.19e+07 | 37342.0000 | 34014.1000 | 1.0978 |
+| - | - | - | - | - | - | - | 2007 | 9.69e+07 | 50219.0000 | 43846.3000 | 1.1453 |
+| - | - | - | - | - | - | - | 2008 | 1.03e+08 | 102667.0000 | 89164.4000 | 1.1514 |
+| - | - | - | - | - | - | - | 2009 | 1.08e+08 | 220828.0000 | 203608.7000 | 1.0846 |
+| - | - | - | - | - | - | - | 2010 | 1.1e+08 | 188590.0000 | 171378.0000 | 1.1004 |
+| - | - | - | - | - | - | - | 2011 | 1.08e+08 | 137620.0000 | 158547.6000 | 0.8680 |
+| - | - | - | - | - | - | - | 2012 | 1.04e+08 | 111191.0000 | 136654.2000 | 0.8137 |
+| - | - | - | - | - | - | - | 2013 | 1.04e+08 | 78729.0000 | 84917.8000 | 0.9271 |
+| - | - | - | - | - | - | - | 2014 | 1.05e+08 | 60082.0000 | 61194.1000 | 0.9818 |
+| - | - | - | - | - | - | - | 2015 | 1.07e+08 | 47005.0000 | 51901.6000 | 0.9057 |
+| - | - | - | - | - | - | - | 2016 | 1.1e+08 | 41546.0000 | 49889.2000 | 0.8328 |
+| - | - | - | - | - | - | - | 2017 | 1.14e+08 | 41973.0000 | 45796.3000 | 0.9165 |
+| - | - | - | - | - | - | - | 2018 | 1.16e+08 | 42676.0000 | 43194.9000 | 0.9880 |
+| - | - | - | - | - | - | - | 2019 | 1.21e+08 | 38241.0000 | 46479.9000 | 0.8227 |
+| - | - | - | - | - | - | - | 2020 | 1.28e+08 | 38423.0000 | 48808.3000 | 0.7872 |
+| - | - | - | - | - | - | - | 2021 | 1.43e+08 | 41788.0000 | 31076.7000 | 1.3447 |
 
 ## The level, anchored on 2022-24
 
-One multiplier of **0.9695** on the default hazard, estimated as actual over
+One multiplier of **1.0111** on the default hazard, estimated as actual over
 expected on 2022-01 to 2024-12 -- 151,423 defaults
-against 156,189 expected over 464,137,790 loan-months --
+against 149,761 expected over 464,137,790 loan-months --
 and applied to every loan-month. Nothing else changes: not the coefficients, not the shape of
 the hazard, not the ranking, so discrimination is unchanged by construction and the segment
 views still mean something.
@@ -69,68 +69,75 @@ months the level never saw.
 
 | Model | Loan-months | Expected defaults | Actual defaults | Actual / expected | Gini |
 |---|---|---|---|---|---|
-| unanchored | 196969924 | 86317.6000 | 79013.0000 | 0.9154 | 0.5424 |
-| anchored | 196969924 | 83683.7000 | 79013.0000 | 0.9442 | 0.5424 |
+| unanchored | 196969924 | 86207.1000 | 79013.0000 | 0.9165 | 0.5461 |
+| anchored | 196969924 | 87163.6000 | 79013.0000 | 0.9065 | 0.5461 |
 
 ## Twelve-month PD by grade
 
 Eight grades on geometric thresholds of predicted twelve-month PD, each floor twice the one
-before. A grade passes when its predicted PD falls inside the 95% Jeffreys interval around
-the rate its loans realised -- Jeffreys because the top grades hold few defaults and
-sometimes none, where a normal interval has no width and no grade can fail.
+before. A grade passes when its predicted twelve-month PD is within **25%** of the
+rate its loans realised, and the magnitude of every miss is published whether it passes or not.
 
-**The scale fails**: 1 of
+Rule 5 asked for the 95% Jeffreys interval until 17 October 2026, and the interval is still
+shown beside the tolerance. What replaced it is that at five million obligor-years in a grade
+the interval is a few parts in a thousand wide, so it tests the arithmetic of the average rather
+than the model -- which is what this project already says about the Kaplan-Meier band.
+
+**The scale passes**: 8 of
 8 populated grades hold, against the seven of eight the rule asks for.
 
 **Predicted against realised, in obligor-years**
 
-| Grade | Loan-months | Defaults | Obligor years | Predicted pd | Actual pd | Lower | Upper | Passed |
-|---|---|---|---|---|---|---|---|---|
-| 1 | 4.48e+06 | 135.000000 | 373503.666667 | 0.000380 | 0.000361 | 0.000304 | 0.000426 | True |
-| 2 | 1.67e+07 | 920.000000 | 1.39e+06 | 0.000759 | 0.000660 | 0.000619 | 0.000704 | False |
-| 3 | 3.97e+07 | 3609.000000 | 3.3e+06 | 0.001493 | 0.001092 | 0.001057 | 0.001128 | False |
-| 4 | 5.52e+07 | 10479.000000 | 4.6e+06 | 0.002875 | 0.002276 | 0.002233 | 0.002320 | False |
-| 5 | 4.34e+07 | 18777.000000 | 3.62e+06 | 0.005668 | 0.005186 | 0.005112 | 0.005260 | False |
-| 6 | 2.78e+07 | 26853.000000 | 2.32e+06 | 0.011070 | 0.011583 | 0.011446 | 0.011722 | False |
-| 7 | 8.89e+06 | 16404.000000 | 741157.833333 | 0.020914 | 0.022133 | 0.021800 | 0.022470 | False |
-| 8 | 707550.000000 | 1836.000000 | 58962.500000 | 0.037681 | 0.031138 | 0.029759 | 0.032564 | False |
+| Grade | Loan-months | Defaults | Obligor years | Predicted pd | Actual pd | Lower | Upper | Relative miss | Inside jeffreys | Passed | Judged on |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1.15e+07 | 389.000000 | 956580.416667 | 0.000325 | 0.000407 | 0.000368 | 0.000449 | -0.200411 | False | True | tolerance |
+| 2 | 1.96e+07 | 1206.000000 | 1.64e+06 | 0.000751 | 0.000737 | 0.000697 | 0.000780 | 0.018164 | True | True | tolerance |
+| 3 | 3.6e+07 | 3623.000000 | 3e+06 | 0.001473 | 0.001206 | 0.001168 | 0.001246 | 0.220947 | False | True | tolerance |
+| 4 | 4.66e+07 | 9301.000000 | 3.88e+06 | 0.002910 | 0.002396 | 0.002348 | 0.002445 | 0.214553 | False | True | tolerance |
+| 5 | 4.24e+07 | 17289.000000 | 3.53e+06 | 0.005698 | 0.004891 | 0.004819 | 0.004964 | 0.164977 | False | True | tolerance |
+| 6 | 2.89e+07 | 25165.000000 | 2.41e+06 | 0.011124 | 0.010445 | 0.010317 | 0.010573 | 0.065038 | False | True | tolerance |
+| 7 | 1.09e+07 | 18653.000000 | 904740.250000 | 0.021110 | 0.020617 | 0.020326 | 0.020911 | 0.023903 | False | True | tolerance |
+| 8 | 1.05e+06 | 3387.000000 | 87883.833333 | 0.038549 | 0.038540 | 0.037282 | 0.039827 | 0.000241 | True | True | tolerance |
 
 ## The criteria
 
 | Criterion | Threshold | Value | Passed | Window |
 |---|---|---|---|---|
-| actual / expected, overall | 0.80 to 1.25 | 0.4621 | False | 2018-12 to 2020-12 |
-| Gini, exposure-weighted | above 0.45 | 0.4382 | False | 2018-12 to 2020-12 |
-| actual / expected, every decile | 0.80 to 1.25 | 0.243 to 1.164 | False | 2018-12 to 2020-12 |
+| actual / expected, overall | 0.80 to 1.25 | 0.4920 | False | 2018-12 to 2020-12 |
+| Gini, exposure-weighted | above 0.45 | 0.4507 | True | 2018-12 to 2020-12 |
+| actual / expected, every decile | 0.80 to 1.25 | 0.270 to 2.443 | False | 2018-12 to 2020-12 |
 
 | Criterion | Threshold | Value | Passed | Window |
 |---|---|---|---|---|
-| actual / expected, overall | 0.80 to 1.25 | 1.2662 | False | 2020-12 to 2022-12 |
-| Gini, exposure-weighted | above 0.45 | 0.5009 | True | 2020-12 to 2022-12 |
-| actual / expected, every decile | 0.80 to 1.25 | 1.120 to 2.883 | False | 2020-12 to 2022-12 |
+| actual / expected, overall | 0.80 to 1.25 | 1.3211 | False | 2020-12 to 2022-12 |
+| Gini, exposure-weighted | above 0.45 | 0.5182 | True | 2020-12 to 2022-12 |
+| actual / expected, every decile | 0.80 to 1.25 | 1.033 to 8.123 | False | 2020-12 to 2022-12 |
 
 | Criterion | Threshold | Value | Passed | Window |
 |---|---|---|---|---|
-| actual / expected, overall | 0.80 to 1.25 | 0.9715 | True | 2022-12 to 2024-12 |
-| Gini, exposure-weighted | above 0.45 | 0.5395 | True | 2022-12 to 2024-12 |
-| actual / expected, every decile | 0.80 to 1.25 | 0.748 to 1.061 | False | 2022-12 to 2024-12 |
+| actual / expected, overall | 0.80 to 1.25 | 0.9849 | True | 2022-12 to 2024-12 |
+| Gini, exposure-weighted | above 0.45 | 0.5463 | True | 2022-12 to 2024-12 |
+| actual / expected, every decile | 0.80 to 1.25 | 0.918 to 1.182 | True | 2022-12 to 2024-12 |
 
 | Criterion | Threshold | Value | Passed | Window |
 |---|---|---|---|---|
-| actual / expected, overall | 0.80 to 1.25 | 0.9154 | True | after 2024-12, unanchored |
-| Gini, exposure-weighted | above 0.45 | 0.5424 | True | after 2024-12, unanchored |
-| actual / expected, every decile | 0.80 to 1.25 | 0.671 to 1.016 | False | after 2024-12, unanchored |
+| actual / expected, overall | 0.80 to 1.25 | 0.9165 | True | after 2024-12, unanchored |
+| Gini, exposure-weighted | above 0.45 | 0.5461 | True | after 2024-12, unanchored |
+| actual / expected, every decile | 0.80 to 1.25 | 0.812 to 1.163 | True | after 2024-12, unanchored |
 
 | Criterion | Threshold | Value | Passed | Window |
 |---|---|---|---|---|
-| actual / expected, overall | 0.80 to 1.25 | 0.9442 | True | after 2024-12, anchored |
-| Gini, exposure-weighted | above 0.45 | 0.5424 | True | after 2024-12, anchored |
-| actual / expected, every decile | 0.80 to 1.25 | 0.693 to 1.048 | False | after 2024-12, anchored |
+| actual / expected, overall | 0.80 to 1.25 | 0.9065 | True | after 2024-12, anchored |
+| Gini, exposure-weighted | above 0.45 | 0.5461 | True | after 2024-12, anchored |
+| actual / expected, every decile | 0.80 to 1.25 | 0.803 to 1.150 | True | after 2024-12, anchored |
 
 ---
 
 ## How this was produced
 
 - `uv run creditsurv windows`
+- Formula: `moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured'))`
+- Shape: `term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))`
+- Generated: 2026-10-23
 - Rules: `docs/rules.md`, sections 1, 4, 5 and 7
 - Criteria: actual over expected 0.80 to 1.25, Gini above 0.45

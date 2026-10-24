@@ -201,14 +201,46 @@ def load_cells_window(
     return _categorised(cells)
 
 
+def load_originations(policy: str = DEFAULT_POLICY, *, first: int, last: int) -> pd.DataFrame:
+    """Every origination profile written between two month ordinals, with its true weight.
+
+    The book a projection is scored on, and a replacement for :func:`load_largest_cells`,
+    which took the heaviest profiles **ever** written and is a mode rather than a portfolio:
+    measured against the project's own lending table it was 87.8% rate-term refinance where
+    Freddie Mac wrote 15.6%, 0.59% purchase where it wrote 71.1%, and no first-time buyers at
+    all where a third of the book is first-time buyers. Every published lifetime and scenario
+    PD was of that.
+
+    A declared window needs no new arithmetic because ``EPISODE_MONTHS = 1``, so the
+    observation month is ``origination_month + age`` exactly: the cells at age zero observed
+    in a window **are** the originations of that window, all of them, at the weights they
+    carry. No truncation, no ordering, nothing to choose.
+
+    Bounds are ``year * 12 + month - 1``, inclusive, on the origination month -- which here is
+    a real column, so unlike :func:`load_cells_window` this filter does push down.
+    """
+
+    path = _cells_or_say_how(policy)
+    with _reader() as con:
+        cells: pd.DataFrame = con.execute(
+            f"""
+            SELECT * FROM read_parquet('{path}')
+            WHERE age = 0
+              AND origination_month >= {int(first)}
+              AND origination_month <= {int(last)}
+            """
+        ).df()
+    return _categorised(cells)
+
+
 def load_largest_cells(
     policy: str = DEFAULT_POLICY, *, age: int = 0, limit: int = 500
 ) -> pd.DataFrame:
     """The ``limit`` heaviest cells at one loan age, read without the rest of the table.
 
-    At age zero these are the origination profiles the book was written in, and their weights
-    say how much of it each accounts for -- which is what the projections are scored on. A
-    few hundred rows out of 91.6 million: the ordering and the limit belong in the reader.
+    **Not the book any more**: see :func:`load_originations` for why the heaviest profiles ever
+    written are a mode and not a portfolio. Kept because "the largest cells at an age" is a
+    legitimate question for a profile table, and because the origination profiles page asks it.
     """
 
     path = _cells_or_say_how(policy)

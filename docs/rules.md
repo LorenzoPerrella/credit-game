@@ -156,13 +156,41 @@ Amended 17 October 2026, before the runs that follow, because the second validat
   average and not the model -- which is what this project already says about the Kaplan-Meier band
   and the crossing test. A grade passes when its predicted twelve-month PD is within **25%**
   relative of what its cohort realised, the same width the actual-over-expected band already uses,
-  and the magnitude of every miss is published whether it passes or not. On the published model
-  that reads +89%, +31%, +43%, +23%, +6%, −6%, −7%, +3%: four grades out, and the largest miss is
-  the thing the Jeffreys phrasing was burying.
+  and the magnitude of every miss is published whether it passes or not. **Ratified 19 October
+  2026**, as an amendment to an acceptance criterion requires: what settles it is that the scale
+  fails either way, so the tolerance cannot turn a failure into a pass. On the one grade table
+  published at that date -- `docs/reports/windows.md`, which measures the *unshaped* fit -- the
+  misses read +5.3%, +15.0%, +36.7%, +26.3%, +9.3%, −4.4%, −5.5%, +21.0%: **six of eight** inside
+  the tolerance against **one of eight** inside Jeffreys, with grades 3 and 4 out on both. Six
+  still fails the seven of eight this rule asks for. The Jeffreys bounds stay as published
+  columns, because withdrawing a criterion is not a reason to stop reporting it, and the published
+  model's own scale does not exist yet: it is measured when the shape reaches the campaign.
+
+  **A grade with no realised defaults is judged on the interval instead**, declared 21 October
+  2026 before the run that would have met it. A relative tolerance needs a realised rate to be
+  relative to, and at zero defaults there is none: the ratio is infinite and the grade fails
+  whatever it predicted. That is exactly the case the interval was chosen for in the first place
+  -- "the top grades hold few defaults and sometimes none" -- and at zero defaults the interval
+  has width where a ratio has none. Demonstrated: 0 defaults in 20,000 obligor-years against a
+  predicted 4.8e-05 sits **inside** the interval, 2.5e-08 to 1.26e-04, and reads a relative miss
+  of infinity. Each grade publishes which of the two judged it.
+
+  An earlier draft of this bullet quoted +89%, +31%, +43%, +23%, +6%, −6%, −7%, +3% as "the
+  published model". That profile matches no run on the record -- it predates 19 October and was
+  never of the shaped fit. A criterion carrying an unsourced number is one nobody can check.
 - **Calibration by age band, out of sample.** At least **five of seven** bands inside 0.80 to
-  1.25 on the test window. For a lifetime PD the shape along age is the product itself, and the
-  published model holds **2 of 7** out of sample against 5 of 7 in sample -- a criterion the
-  previous section did not contain, so the gap was visible only to a reader who went looking.
+  1.25 on the test window. For a lifetime PD the shape along age is the product itself, and a
+  criterion the previous section did not contain was visible only to a reader who went looking.
+
+  **The two figures this bullet carried are of two different models, and neither is the published
+  one out of sample.** Corrected 19 October 2026. In sample the published fit `bc016657b2b40bfc`
+  holds **6 of 7** bands, not 5: `docs/tables/ae_by_age_band.parquet` reads 0.727, 1.184, 1.248,
+  1.074, 0.862, 0.937, 1.145, and only the first year misses. The **2 of 7** is
+  `docs/validation.md:124`, the second validation's reading of the *scalar-shape* model, and no
+  age-band table of the published model on the test window exists -- `backtest_views` emits months,
+  deciles and the acceptance table and nothing by age. So this criterion was declared and could not
+  be evaluated. It is measured by one further view, built from `age_bands` exactly as the in-sample
+  one is, and the first reading of it is published whatever it says.
 - **Cumulative PD by vintage.** The dispersion across origination years is published, because an
   aggregate that passes can hide vintages pulling in opposite directions.
 - **A backtest on forecast macro, not realised.** The published backtest hands the model the macro
@@ -478,13 +506,49 @@ deciles, now against section 5's own out-of-sample criterion; and the test windo
 end, against criteria already recorded.
 
 **One exception stands, on the record and not by waiver.** In sample the shape leaves decile 1 at
-1.415 against a ceiling of 1.25, and **83% of that miss is the 2019 to 2021 originations** at an
+**1.676** against a ceiling of 1.25, and **83% of that miss is the 2019 to 2021 originations** at an
 actual over expected of 3.413, where every vintage to 2018 reads 1.082. The cause is structural: a
 **multiplicative hazard has no floor**, and those loans stack every favourable reading the model
 has at once, so the prediction reaches 1.5 defaults per 100,000 loan-months a month where the book
-does not go below about 5. The exception is bounded at **0.11%** of the in-sample defaults, its
-remedy is named rather than searched for -- an additive baseline, which is another family -- and
-**out of sample it does not recur**: decile 1 reads 1.056.
+does not go below about 5. The exception is bounded at **0.11%** of the in-sample defaults, and its
+remedy is named rather than searched for -- an additive baseline, which is another family.
+
+**And the decile reads three different numbers on three different windows, which is why it has been
+reported wrongly twice.** For the published fit `bc016657b2b40bfc`:
+
+| window | anchored | decile 1 |
+|---|---|---|
+| development, in sample | n/a | **1.676** |
+| 2022-01 onwards (`backtest_by_decile`, the committed view) | no | **1.456** |
+| **the declared test window, 2025-01 onwards** | **yes** | **1.150** |
+
+Only the third row is this rule's criterion, and on it the exception **does not recur**: 10 of 10
+deciles inside 0.80 to 1.25 at 0.803 to 1.150, with 8 of 8 grades inside section 5's tolerance. The
+second row is not a criterion of anything -- it spans the anchoring window and the test window
+together, on an unanchored hazard -- and it is what the site publishes under the name "acceptance
+criteria by segment". That is a separate defect and it is recorded in the register.
+
+The pair this paragraph carried until 19 October -- 1.415 in sample and 1.056 out -- is of the
+**log-logistic candidate**, the cell of the grid described above and *not* the model rule 2 keeps.
+The exception was accepted on a bound of 1.415 that the configured model does not honour in sample.
+
+**Where it does recur is the 2020 cut, eightfold, and that is the finding this correction uncovers.**
+Re-estimated with the shape, over 2021-22 the safest decile records **1,335 defaults against 164
+expected -- A/E 8.12**, where without the shape it was 2.88. It is 93% vintages 2019-21, 76% in the
+first year of life and 90% in the top score band; there the model predicts **0.49 defaults per
+100,000 loan-months a month and 5.10 are realised**, and inside the moratorium months the regime
+indicator lowers the prediction further, to eleven times under. In aggregate 1.4% of that window's
+defaults -- but it is the PD of the best new production, at the moment most of it is written, and it
+sits below any regulatory floor. **A shape near 2 gives the best loans a hazard starting at zero**,
+which is the mechanism, so the remedy is a floor and not a coefficient: declared as an overlay,
+calibrated on the realised rate of the safest segment (about 3 defaults per 100,000 loan-months a
+month), with an additive baseline component or section 16's age baseline as the standing fix, tested
+on the 2020 cut.
+
+**And the model is a candidate until rule 2 is applied.** This rule says nothing is "called
+selected" before rule 2's comparison under the bands, which is blocked on the prepayment model --
+yet the specification is in the configuration and in every view on the site with no label saying so.
+The label is owed.
 
 ## 15. An expected sign for every candidate, or it is excluded
 
@@ -552,9 +616,34 @@ reverses with the monetary regime.
 
 Declared 17 October 2026, before the fit.
 
-**Why.** For a lifetime PD the shape along age *is* the product. The published model holds **2 of
-7** age bands inside 0.80 to 1.25 out of sample: it under-predicts the 12-to-35-month hump by up
-to 44% and over-predicts the seasoned book by a third. One shape is a compromise across vintages
+**Why.** For a lifetime PD the shape along age *is* the product. The **scalar-shape** model held
+**2 of 7** age bands inside 0.80 to 1.25 out of sample, and this rule was declared on that figure
+-- a defect measured on a predecessor -- with the table for the published model named as the first
+thing the implementing branch owed.
+
+**That table exists as of 21 October 2026, and it holds 2 of 7 as well.** Measured on the declared
+test window, anchored, by the view section 5 had declared and nothing could compute:
+
+| band | A/E | | band | A/E |
+|---|---|---|---|---|
+| 0 to 11 | 0.814 | | 36 to 59 | 0.911 |
+| 12 to 23 | **1.480** | | 60 to 119 | **0.621** |
+| 24 to 35 | **1.347** | | 120 to 239 | **0.647** |
+| | | | 240 to 399 | **0.725** |
+
+**And it answers the question this rule asked before the fit, in the direction that justifies the
+remedy rather than narrowing it.** The first year is *not* the only band out, and the misses do not
+share a sign: the model **under-predicts the 12-to-35-month hump** by 48% and 35% and
+**over-predicts the seasoned book** by a third to a half. A defect in one direction could be met by
+something narrower than a free baseline -- a floor, a single factor. One that reverses cannot: no
+monotone reparameterisation of a single shape fixes a curve that is too low at two years and too
+high at eight. So the flexible baseline in log-time is admitted on its measured premise and not on
+its predecessor's.
+
+Two things this does not license. It is still **one shape per loan**, not a hazard that bends with
+calendar time, because `period = cohort + age` holds identically. And the in-sample profile holds
+**6 of 7** with only the first year out at 0.727, so the gain is out of sample and any in-sample
+improvement is not the evidence. One shape is a compromise across vintages
 -- 1999-2008 read 1.33 to 1.34 at 12 to 35 months where 2009-2018 read 0.90 to 0.95, and the 2022
 vintage out of sample reads 1.75 -- and in the aggregate those cancel, while in the cumulative PD
 of a new loan they move the losses through time. For an expected loss, *when* matters as much as

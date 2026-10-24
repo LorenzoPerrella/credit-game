@@ -1419,6 +1419,17 @@ def test_a_scalar_shape_reaches_the_same_numbers_through_the_table_path() -> Non
     the shape's derivative over rows and the table path sums it per loan combination first, and
     floating-point addition is not associative -- so what is asserted is the tolerance this
     project holds two orderings of the same sum to.
+
+    **And it compares two orderings, not two backends, which it used to do by accident.**
+    `Kernel.__call__` routes a scalar shape to the compiled backend when one is installed and a
+    shape table always to the written-out path, so calling both kernels was comparing Rust
+    against NumPy across two libm -- a different claim, with a different tolerance, which
+    `test_the_compiled_backend_and_the_port_agree_where_the_curvature_is_a_number` already holds
+    at 1e-12. Measured, the conflation cost a red CI on a green tree: this fixture at this
+    evaluation point reads **3.693e-16** between the two orderings on macOS and **1.686e-12**
+    between the two *backends* on `ubuntu-latest`, against a tolerance of 1e-13 set at the
+    project's own declared cross-backend figure with no margin. Both kernels are therefore
+    evaluated through `_written`, and no tolerance was widened to make this pass.
     """
     frame = _book(range(0, 5), range(0, 7))
     design = _design(frame)
@@ -1449,7 +1460,7 @@ def test_a_scalar_shape_reaches_the_same_numbers_through_the_table_path() -> Non
     )
 
     x = np.concatenate([[7.0], np.full(position - 1, 0.1), [0.35]])
-    one, other = scalar(x, curvature=True), tabled(x, curvature=True)
+    one, other = scalar._written(x, curvature=True), tabled._written(x, curvature=True)
     assert one.value == pytest.approx(other.value, rel=1e-14)
     np.testing.assert_allclose(one.gradient, other.gradient, rtol=1e-13, atol=1e-15)
     assert one.curvature is not None

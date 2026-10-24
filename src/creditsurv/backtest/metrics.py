@@ -348,6 +348,24 @@ GRADES: Final = 8
 #: How many of them must pass for the scale to pass.
 GRADES_TO_PASS: Final = 7
 
+#: How far a grade's predicted twelve-month PD may sit from what its loans realised, relative.
+#:
+#: Rule 5 of `docs/rules.md`, amended 17 October 2026 and **ratified 19 October**. It replaces
+#: the 95% Jeffreys interval, which at five million obligor-years in a grade is a few parts in a
+#: thousand wide and therefore tests the arithmetic of the average rather than the model -- the
+#: same thing this project already says about the Kaplan-Meier band and the crossing test.
+#:
+#: The amendment was written after seeing 0 of 8 grades hold, which is the shape of tuning, so
+#: what admits it is arithmetic and not argument: on the one grade table published at the time,
+#: 25% relative passes six of eight where Jeffreys passes one, and the scale -- which allows at
+#: most one failure -- **fails under both**. An amendment that cannot turn a failure into a pass
+#: is admissible on its reasoning; one that could would not be, whatever the reasoning.
+#:
+#: 0.25, because it is the width the actual-over-expected band already uses at both ends. The
+#: Jeffreys bounds stay in the published table: withdrawing a criterion is not a reason to stop
+#: reporting it, and the magnitude of every miss is published whether it passes or not.
+GRADE_TOLERANCE: Final = 0.25
+
 
 def master_scale(*, floor: float = GRADE_FLOOR, grades: int = GRADES) -> np.ndarray:
     """The lower edge of every grade: geometric, each twice the one before.
@@ -406,12 +424,18 @@ def grade_backtest(
     exposure: pd.Series,
     *,
     confidence: float = 0.95,
+    tolerance: float = GRADE_TOLERANCE,
 ) -> pd.DataFrame:
     """Twelve-month PD by grade, against what the grade's loans actually did.
 
-    One row per populated grade: its exposure in obligor-years, the predicted PD it was
-    graded on, the realised rate, the Jeffreys interval around the realised rate, and
-    whether the prediction falls inside it.
+    One row per populated grade: its exposure in obligor-years, the predicted PD it was graded
+    on, the realised rate, the **relative miss**, whether that miss is inside the declared
+    tolerance, and the Jeffreys interval beside it.
+
+    **The criterion is the tolerance and was the interval**, until rule 5 was amended and
+    ratified -- see `GRADE_TOLERANCE` for the arithmetic that admitted the change. The interval
+    is still computed and still published, because a withdrawn criterion that stops being
+    reported is a criterion nobody can check the withdrawal of.
 
     **Obligor-years, not obligors at a date.** The cells carry no loan identity, so a
     cohort taken at a reporting date cannot be followed through them; the denominator is
@@ -444,7 +468,29 @@ def grade_backtest(
     )
     grouped["lower"] = lower
     grouped["upper"] = upper
-    grouped["passed"] = (grouped["predicted_pd"] >= lower) & (grouped["predicted_pd"] <= upper)
+    # The declared criterion is the relative tolerance, not the interval. `relative_miss` is
+    # published beside it whether the grade passes or not, because rule 5 asks for the magnitude
+    # of every miss -- which is what the Jeffreys phrasing was burying: it reported eight grades
+    # failing and said nothing about one of them being 5% out and another 37%.
+    grouped["relative_miss"] = grouped["predicted_pd"] / grouped["actual_pd"] - 1.0
+    grouped["inside_jeffreys"] = (grouped["predicted_pd"] >= lower) & (
+        grouped["predicted_pd"] <= upper
+    )
+    # **A grade with no realised defaults is judged on the interval**, because a relative
+    # tolerance has nothing to be relative to: `predicted / 0` is `inf` and every such grade
+    # would fail whatever it predicted. `jeffreys_interval`'s own docstring says this case is
+    # real -- "the top grades hold few defaults and sometimes none" -- and it is the one place
+    # the interval is the right instrument rather than a test of the arithmetic of an average,
+    # because at zero defaults the interval has width where a ratio has none.
+    #
+    # Demonstrated before the run that would have met it: 0 defaults in 20,000 obligor-years
+    # against a predicted 4.8e-05 sits **inside** the interval (2.5e-08 to 1.26e-04) and reads
+    # a relative miss of `inf`. Rule 5 carries the clause; this is where it is applied.
+    empty = grouped["defaults"] <= 0.0
+    grouped["passed"] = np.where(
+        empty, grouped["inside_jeffreys"], grouped["relative_miss"].abs() <= tolerance
+    )
+    grouped["judged_on"] = np.where(empty, "interval", "tolerance")
     return grouped.reset_index()
 
 

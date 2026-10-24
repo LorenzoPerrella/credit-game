@@ -528,3 +528,369 @@ scores 2025 onwards, where the young loans are the 2022 to 2024 originations. Th
 therefore **predicts** that an out-of-time decile 1 will under-predict too, and says so before the
 window is read rather than after.
 
+
+### The document splits, and five amendments that were made the same day
+
+Entered **19 October 2026**, two days late, and the lateness is itself the finding. The second
+validation's remedy C5 was that an amendment to an acceptance criterion needs a second signatory and
+a dated entry here; the amendments below were made on 17 October in commit `dc0dec4` and **none of
+them was entered**. By this document's own rule they were inadmissible for two days, including the
+25% tolerance that the third validation then found the code had never adopted. A register nobody
+writes to is a governance control that exists only in prose.
+
+**What was amended on 17 October 2026, before the selection and the fits it governs:**
+
+- **Rule 1 — a moratorium regime indicator**, 2020-03 to 2021-09, in the *protected* block rather
+  than among the candidates. Its purpose is to absorb the moratorium so the macro coefficients read
+  cleanly, not to test whether it belongs -- the argument rule 8 already makes for `harp`. Measured
+  to cost **zero cells**, because it is built after aggregation from the observation month, and
+  measured not to split a calendar key, because the level-form candidates already pin the month
+  down.
+- **Rule 4 — the level is monitored, because one multiplier cannot correct a slope.** The anchored
+  **monthly** actual over expected falls from **1.386 in January 2025 to 0.771 in March 2026**, with
+  the last month already outside a band the overall figure passes at 0.959; by vintage, anchored,
+  2022 reads 1.49 and 2023 reads 1.31 while 2005-2007 read 0.46 to 0.54. So the monthly figure is
+  published beside the overall one, and a six-month rolling ratio outside **0.90 to 1.10 for three
+  consecutive months** triggers a re-anchoring -- a new multiplier on a new window, recorded with its
+  date, never a coefficient change.
+- **Rule 5 — the Jeffreys interval is replaced by a 25% relative tolerance, and four criteria are
+  added**: out-of-sample calibration by age band, cumulative PD by vintage, a backtest on *forecast*
+  macro, and the monthly level figure. See the 19 October entry below for what the replacement cost
+  and when it was ratified.
+- **Rule 7 — the order was broken once, and saying so is the correction.** Raising the ceiling to
+  admit the finer bands first did reorder the give-up list, and the earlier text's claim that it
+  "reorders nothing" is the inverse of what the order means.
+- **Rule 10 — split in two rather than forbidding both cases.** The payment state stays out of the
+  *origination* model, on the behavioural-score argument, measured at 28.45% monthly for a loan two
+  payments behind. A module conditioned on the state at the *valuation date* is permitted and
+  declared out of current scope, because conditioning does not require projecting. The scope is
+  performing pools, **not** the ECL of past-due credits.
+- **Rule 15 — an expected sign for every candidate, or it is not one.** Declared because the
+  selection's strongest filter is the sign against the prior, and four of the six macro covariates
+  in the published model carried none. Applied uniformly to all fifteen: four gained a sign, five
+  lost candidacy, three of those five the selection had already eliminated on its own. It takes
+  effect at the next selection, not before, because `TIME_VARYING_CONTINUOUS` is the selection's
+  output and `MACRO_CANDIDATES` its input and a test holds the first inside the second.
+- **Rule 16 — the baseline along age may be flexible**, under two conditions declared before the
+  fit: one basis column dropped for the collinearity with `rho * log t`, and `g(log t)` checked for
+  monotonicity over the ages carrying exposure. Admissible where rule 14 appears to forbid it
+  because a basis in log(age) in the *scale* block is a single monotone-if-checked function of time
+  per loan, which `exp(rho(t) * (log t - log lambda))` is not.
+
+## 19 October 2026
+
+### Rule 14 — The citation was of another model, so a confirmed prediction was recorded as retracted
+
+The third independent validation found that `docs/reports/windows.md` measures a **scalar-shape**
+model, because `backtest/campaign.py` never passes the ancillary formula to its fits. Checking which
+numbers in this document are of which model found that rule 14's exception paragraph was one of them.
+
+**What it said.** Decile 1 at 1.415 in sample, and "out of sample it does not recur: decile 1 reads
+1.056". Both figures are of the **log-logistic candidate**, the cell of the grid recorded above --
+not of the Weibull the family rule keeps.
+
+**What the published model reads**, fit `bc016657b2b40bfc`, on three windows -- which is the whole
+difficulty, because the three were read interchangeably:
+
+| window | anchored | decile 1 | deciles in band |
+|---|---|---|---|
+| development, in sample (`ae_by_decile`) | n/a | **1.676** | 9 of 10 |
+| 2022-01 onwards (`backtest_by_decile`) | no | **1.456** | 9 of 10 |
+| **the declared test window** (section 1) | **yes** | **1.150** | **10 of 10**, 0.803 to 1.150 |
+
+Only the third is a criterion of this project, and on it the published model **passes**, with 8 of 8
+grades inside section 5's tolerance. So the exception does not transfer and does not need to: the
+bound of 1.415 it was granted is not honoured in sample by the configured model, which reads 1.676.
+
+**A defect of the same class falls out of the second row.** `views.build` scores its "backtest"
+tables from `as_of + 1`, which is 2022-01 -- the **anchoring window and the test window together**,
+on an **unanchored** hazard. Section 1 declares the anchoring window to be for the level adjustment
+"and nothing else" and the test window to begin 2025-01. So `acceptance_by_segment`, published under
+that name with a `deciles_passed` column, **does not evaluate the criteria it is named after**, and
+reads False where the declared criterion reads True. Two of the three corrections this register
+records today are of numbers read off that table.
+
+**And where the exception does recur is the 2020 cut, eightfold.** Re-estimated with the shape, over
+2021-22 the safest decile records **1,335 defaults against 164 expected -- A/E 8.12**, against 2.88
+without the shape. 93% vintages 2019-21, 76% in the first year of life, 90% in the top score band;
+the model predicts **0.49 defaults per 100,000 loan-months a month where 5.10 are realised**, and
+inside the moratorium months the regime indicator takes it eleven times under. In aggregate 1.4% of
+that window's defaults, and it is the PD of the best new production at the moment most of it is
+written. A shape near 2 gives the best loans a hazard starting at zero: the mechanism is the one the
+17 October cross named, and it is confirmed on a window that cross never saw.
+
+**What the correction leaves standing** is an input to rule 2's comparison, still owed under the
+bands, and a label: nothing is "called selected" before that comparison, yet the specification is in
+the configuration and in every view on the site with nothing saying it is provisional.
+
+### Rule 5 — The 25% tolerance is ratified, and two of its numbers were of other models
+
+**Ratified 19 October 2026**, on the second signature C5 requires. What settles it is not the
+argument but the arithmetic: on the one grade table published at that date the tolerance passes
+**six of eight** grades against Jeffreys' **one of eight**, and the master scale, which allows at
+most one failure, **fails either way**. An amendment that cannot turn a failure into a pass is
+admissible on its argument; one that could would not be, whatever the argument. The Jeffreys bounds
+stay as published columns.
+
+The misses, for the record: +5.3%, +15.0%, +36.7%, +26.3%, +9.3%, -4.4%, -5.5%, +21.0%, with grades
+3 and 4 out under both criteria. These are of the **unshaped** fit, because that is the only grade
+table that exists; the published model's scale is measured when the shape reaches the campaign.
+
+**Two numbers in this rule were of other models and are replaced.** The per-grade profile it quoted
+(+89%, +31%, +43%, +23%, +6%, -6%, -7%, +3%) matches no run on the record. And the age-band bullet
+quoted "2 of 7 out of sample against 5 of 7 in sample": the first is the second validation's reading
+of the scalar-shape model, the second is wrong for the published model, which holds **6 of 7** in
+sample with only the first year out at 0.727.
+
+**And the criterion could not be evaluated.** `views.backtest_views` emits months, deciles and the
+acceptance table and nothing by age, so an out-of-sample age-band criterion was declared in this rule
+on 17 October with nothing in the package able to measure it. One further view fixes it, built from
+`age_bands` exactly as the in-sample one is. A declared criterion that nothing computes is the same
+defect as a rule nobody enters here, in the other half of the system.
+
+### Rule 16 — The rule rests on a defect measured on a predecessor, and says so
+
+The flexible baseline was declared on "2 of 7 age bands out of sample", which the entry above places
+on the scalar-shape model. The published model's out-of-sample age profile is not measured at all,
+and in sample it holds 6 of 7. The rule is **kept** -- the argument for why *when* matters as much as
+*how much* in a lifetime PD does not depend on the count -- but the branch implementing it now owes
+that table first: if the first year is the only band out, the remedy is narrower than a free
+baseline in log-time, and the rule should say so before the fit rather than after.
+
+### The measurement round, predicted before it is read
+
+Written **21 October 2026**, before `report`, `views` and `windows` are run on the corrected code,
+because this document already carries one case of a prediction being read off the wrong model and
+recorded as retracted. Each line below is checked against the run and published either way.
+
+**The book.** Measured already, which is why it is not a prediction: the declared window is
+**20,465 profiles standing for 4,130,251 loans**, read in 1.3 seconds, against the old book's 500
+profiles standing for 3,564,607. What *is* predicted is the direction of what it does to the
+published figures. The old book was the safest mix the table can produce -- 95.9% in the top
+credit band, 87.8% rate-term refinance, **no** first-time buyers and **no** investment properties
+-- where the window itself is 32.2% purchase, 13.0% first-time and 4.6% investor. So the site's
+headline twelve-month PD should rise from **0.01%** by something nearer a factor than a margin,
+and both lifetime PDs with it. The adverse multiple is **not** predicted in either direction: a
+riskier book has more hazard to multiply and less room before the clip, and which dominates is
+what the run says.
+
+**The gap covariates.** `ltv_change` and `unemployment_change` are exactly zero in the book's
+first projected month, and the book is one `vintage_era` group rather than five. Both are asserted
+by a test, so this is a statement that the test is the right test and not a prediction about the
+data.
+
+**The deciles, and this one is a check on the validator as well as on us.** The third round
+reports the published model holding **10 of 10 deciles between 0.803 and 1.150** and **8 of 8
+grades** on the declared test window, anchored, measured with its own scorer. Our corrected
+`views` scores the same thing for the first time. If it agrees, the finding is confirmed from two
+implementations and rule 14's exception paragraph is settled. **If it disagrees, one of the two is
+wrong and the disagreement is the finding** -- and it is worth more than the agreement, because
+three rounds have now found zero discrepancies and a first one would say where to look.
+
+**The campaign.** The four fits carry the shape for the first time, so the multiplier will not be
+0.9695 and the master scale will be of the configured model rather than of a scalar-shape one. No
+prediction on the direction of either: the whole point of N1 is that nobody has measured them.
+
+**What would falsify the correction itself**, as opposed to the model: a book whose first
+projected month is not zero in the gaps; a `views` run whose anchoring window and test window
+overlap; a report that still states no shape; or a campaign fit whose description carries no
+`ancillary` key. Each is a defect in the change rather than a fact about the book, and each is
+checked before any number is read off the run.
+
+### Rule 5 — A grade with no realised defaults has no denominator, found before the run
+
+Declared **21 October 2026**, while checking the ratified tolerance against the code that now
+applies it, and before the measurement round it would have met.
+
+`grade_backtest` passed a grade on `|predicted / actual - 1| <= 0.25`. A grade with exposure and
+**zero** realised defaults has `actual = 0`, so the ratio is infinite and the grade fails whatever
+it predicted -- including when it is right. `jeffreys_interval`'s own docstring names this case as
+the reason the interval was chosen: *"the top grades hold few defaults and sometimes none, where a
+normal interval has no width and no grade can fail."*
+
+**Demonstrated** rather than argued, on three constructed grades:
+
+| grade | obligor years | defaults | predicted | interval | relative miss | inside | tolerance says |
+|---|---|---|---|---|---|---|---|
+| 1 | 20,000 | **0** | 4.8e-05 | 2.5e-08 to 1.26e-04 | **inf** | **yes** | fail |
+| 6 | 5,000 | 40 | 1.07e-02 | 5.81e-03 to 1.076e-02 | +34.3% | yes | fail |
+
+The first row is the defect: inside the interval and refused by the tolerance. The second is the
+tolerance working as intended and being *stricter* than the interval, which is the direction the
+amendment was made for.
+
+**So the clause is narrow and its scope is exactly the degenerate case**: no realised defaults,
+judge on the interval; otherwise judge on the tolerance. Each grade publishes which judged it, in
+a `judged_on` column, because a criterion that varies by row has to say so per row. This is not a
+weakening -- at zero defaults the tolerance is undefined, not lenient -- and it cannot be used to
+excuse a grade that has defaults.
+
+**Why this is in the register at all**: the amendment of 17 October was ratified on the arithmetic
+that six of eight grades pass where one does, and that arithmetic was computed on a table in which
+every grade had defaults. A ratification measured on the non-degenerate case does not license the
+degenerate one, and the two days between the rule and the code are what gave this time to be
+found rather than published.
+
+### The campaign's first cut refuses its own converged fit, and the test that refuses it has no tolerance
+
+Measured 22-23 October 2026, on the 2018-12 cut of the shaped model, in the first `creditsurv
+windows` run that carries rule 14's shape.
+
+**What happened.** Damped Newton walked the fit in exactly as this engine's record says it should
+-- 785 standard errors from the optimum at step 1, then 169, then down the damping ladder to
+**2.25e-06 at step 8**, three orders inside the 1e-3 this engine promises, at an objective of
+**0.005581852089**. It was then refused by `_newton_from`'s third condition, that the final
+Hessian be positive definite, and the method chain started from the same point. Twenty-eight
+SLSQP evaluations later the objective was **0.005745**, still worse than the point Newton had
+already found, and climbing back towards it.
+
+**The refusal's reasoning is sound and is not in question**: a point where the gradient vanishes
+and the curvature does not bend upwards is a saddle or a ridge, not a maximum, and publishing it
+would be publishing a non-maximum as an optimum.
+
+**What is in question is that the test has no tolerance while the distance beside it has one.**
+`solution[5] > POLISH_TOLERANCE_SE` admits anything inside 1e-3 standard errors; `np.all(eigvalsh
+(H) > 0)` is a strict inequality on a computed eigenvalue of a 44-parameter Hessian. Two readings
+fit the evidence and they call for opposite responses:
+
+- the point is **genuinely a saddle**, and then no optimiser and no starting point will certify
+  it -- the lesson this document already records about the parent's floor;
+- the smallest eigenvalue is **floating-point noise around zero**, and then a strict `> 0` is the
+  knife-edge this project refuses elsewhere for exactly this reason: the Kaplan-Meier band
+  collapses to a hundredth of a point at this scale, the crossing test fired on gaps of 0.00002,
+  and both were given floors.
+
+**What was ruled out first.** Not a rank deficiency: the shape's design on that cut is **full
+rank, 19 of 19** over 2,997 loan combinations, and its thinnest column -- the HARP level -- still
+carries 293 of them. So the shape is identified on the shorter window and the non-concavity is
+not a missing band.
+
+**What was done.** The refusal now logs the smallest and largest eigenvalue and how many are
+non-positive, because which of the two readings holds cannot be told from the message and the
+message is all a run leaves behind. The chain was stopped rather than left to run: it was
+demonstrably walking back towards a point already found, and this document already prices that
+path at over twelve hours for one candidate -- here, for one cut of four.
+
+**Declared before the next run**: the question is settled by the eigenvalue and by nothing else.
+If the smallest is negative by more than the Hessian's own conditioning can explain, the point is
+a saddle and the shaped model is not identified at that cut, which is a finding about the model.
+If it is within rounding of zero, the test gets a floor stated in the same terms as the distance
+tolerance it sits beside, and that is a change to the engine rather than to the model. No fit is
+published off either reading until the number is in hand.
+
+### The concavity test gets the floor the register declared, and the campaign is measured
+
+Measured 23 October 2026, the number first and the change after it, as the entry above required.
+
+**The eigenvalue, and it settles it.** On the 2018-12 cut the refused Hessian reads a smallest
+eigenvalue of **-9.175e-18** against a largest of **1.935e-01**, one of 42 negative. Against the
+tolerance `np.linalg.matrix_rank` itself uses to call a singular value zero -- the largest times
+the dimension times machine epsilon, **1.805e-15** here -- that is **0.0051 of the tolerance**,
+two hundred times under, on a Hessian whose condition number is 2.1e+16. One direction of 42 is
+flat beyond what double precision can resolve and the sign of its curvature is rounding.
+
+**So the second reading holds**: not a saddle, and not a model that fails to be identified at
+that cut. The change is to the engine, as declared.
+
+**What the strict test cost, measured rather than asserted.** Refused at 2.25e-06 standard errors
+from the optimum, the fit went into the method chain and SLSQP spent **77 evaluations** converging
+towards 0.005607 where Newton had already reached **0.005582**. Over 58 million rows that gap is
+about **1,450 log-likelihood units**, given up to read an arithmetic artefact as a saddle.
+
+**What changed, and what did not.** "Not positive" now means negative by more than the arithmetic
+can explain, at numpy's own rank tolerance. The refusal is kept where the curvature is genuinely
+negative, for the reason it was written: a vanishing gradient without upward curvature is a saddle
+and not a maximum. And a direction flatter than the tolerance is now **recorded rather than
+refused** -- along it the likelihood is constant, so the optimum is a set and the fit is a point in
+it, while the distance guarantee still holds in every direction that is determined. This is the
+discipline this document already carries for the Kaplan-Meier band and the crossing test, both of
+which fired on quantities smaller than their own noise until they were given floors.
+
+**An inference made mid-run and falsified by the number.** From SLSQP's trajectory alone -- it was
+converging to a point *worse* than Newton's -- it looked like Newton had walked onto the shallow
+edge of lifelines' clipped region, where the objective reads lower than the true maximum and the
+curvature is genuinely indefinite. That is a real phenomenon this document describes, it fitted the
+evidence available, and it was wrong. SLSQP converging to a worse point is a fact about SLSQP on an
+ill-conditioned design, which this document also records. The eigenvalue was the only thing that
+could tell the two apart, and recording the guess before the measurement is what made it checkable.
+
+### The campaign, run with the floor in place
+
+**One hour exactly** -- 3,599.74 s, maxrss 8.10 GB -- four shaped fits, **no `not concave` refusal
+anywhere**, and one flat-direction line on the cut that produced the finding.
+
+| cut | until | A/E | Gini | minutes |
+|---|---|---|---|---|
+| 2018-12 | 2020-12 | **0.4920** | 0.4507 | 8.0 |
+| 2020-12 | 2022-12 | **1.3211** | 0.5182 | 5.9 |
+| 2022-12 | 2024-12 | **0.9849** | 0.5463 | 4.5 |
+
+**The declared test window, anchored**: A/E **0.9065**, Gini **0.5461**, and the master scale
+**passes 8 of 8** -- the first time it has. The multiplier is **1.0111** on 2022-01 to 2024-12,
+agreeing to four figures with the one `views` computed independently two days earlier.
+
+**Against the predictions.** The register predicted the multiplier would not be 0.9695 and declined
+to predict its direction: it is 1.0111. It predicted the scale would be of the configured model
+rather than of a scalar-shape one, and it is. The deciles and the grades were predicted as a check
+on the validator and **both agree**: 10 of 10 at 0.803 to 1.150 from `views`, 8 of 8 grades here.
+
+**And the warm-start chain is what makes it an hour.** The first cut began **785 standard errors**
+from the optimum, cold, and took 8.0 minutes with the damping ladder. The development fit began
+**4.52** standard errors out and took two *undamped* Newton steps to 2.53e-05. The expensive cut is
+paid once.
+
+**The finding the campaign confirms is N6, and our own code now reads its number.** At the 2020-12
+cut the deciles run **1.033 to 8.123**, and 8.123 is the third validation's own figure for the
+safest decile over 2021-22 -- 1,335 defaults against 164 expected. Overall A/E at that cut is
+1.3211 and at the 2018-12 cut 0.4920, so the level across regimes is the open item it was, and the
+anchoring covers the window it is estimated on and not a regime it has not seen.
+
+### Rule 5 — The argument that admitted the 25% tolerance is falsified by the model it governs
+
+Found **23 October 2026**, reading the corrected campaign's grade table against the ratification
+written four days earlier. It needs a second look from the signatory, and this entry is written
+before any page is changed to reflect it.
+
+**What the ratification said.** The tolerance replaced the Jeffreys interval on 17 October and the
+amendment was written *after* seeing 0 of 8 grades hold, which is the shape of tuning. What
+admitted it was declared to be arithmetic rather than argument: on the grade table published at
+the time, 25% relative passed **six of eight** where Jeffreys passed **one**, and the master scale
+— which allows at most one failing grade — **failed under both**. An amendment that cannot turn a
+failure into a pass is admissible on its reasoning; one that could would not be.
+
+**That table was of the scalar-shape fit, because it was the only one that existed.** The
+corrected campaign produced the configured model's own grade table on 23 October:
+
+| | grades holding | master scale |
+|---|---|---|
+| 25% relative tolerance | **8 of 8** | **passes** |
+| 95% Jeffreys interval | **2 of 8** (grades 2 and 8) | fails |
+
+**So on the model that counts, the tolerance does turn a failure into a pass**, and the sentence
+that admitted it is false. The criterion change is now **decisive for a published verdict**, which
+is precisely the case the second signatory requirement exists for.
+
+**What has not changed is the substance.** At 956,580 to 3.88 million obligor-years a grade, the
+interval is a few parts in ten thousand wide — grade 5 runs 0.004819 to 0.004964, a width of 3% of
+its own value — so it continues to test the arithmetic of an average rather than the model, which
+is the same argument this document carries for the Kaplan-Meier band and the crossing test. The
+relative misses are real and are published: −20.0%, +1.8%, +22.1%, +21.5%, +16.5%, +6.5%, +2.4%,
++0.02%. Three grades sit above 16% and none above 25%.
+
+**What this entry does not do is decide.** Two readings are open and they are not symmetric:
+
+- the tolerance is **right on its merits and was ratified on the wrong arithmetic** — then the
+  ratification is re-signed on the correct table, with the sentence about failing either way struck
+  and replaced by the interval-width argument, which stands on its own;
+- the tolerance is **right only where it does not matter** — then a criterion that flips a verdict
+  cannot rest on a width argument alone, and what is owed is a declared per-grade materiality that
+  is not 25% because 25% is what the misses happen to fall under.
+
+**The second is the one to be careful about**, because the largest miss is +22.1% against a
+tolerance of 25%: the model passes by 2.9 percentage points on a number chosen before this table
+was seen. That is not tuning — the order is on the record — but it is close enough that the width
+has to be defended on the interval's arithmetic rather than on the margin.
+
+No page is changed and no verdict is restated until the signatory has read this. `docs/windows.md`
+and the grade table publish both criteria side by side and the `judged_on` column says which
+judged each grade, so the evidence is on the record either way.

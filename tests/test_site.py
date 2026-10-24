@@ -427,14 +427,57 @@ def test_no_figure_or_table_shows_a_name_the_code_uses(published: Sources) -> No
     assert leaks == []
 
 
-#: Reports `creditsurv report` generates, which carry a `- Formula:` line naming the
-#: specification they were run on. A report whose formula is not the configured one describes a
-#: model that no longer exists.
-GENERATED_REPORTS = ("methodology", "calibration", "backtesting")
+#: Every generated report, against the scale formula and the **shape** it should carry.
+#:
+#: A tuple of three was the blind spot the third validation found twice over. It covered
+#: `methodology`, `calibration` and `backtesting`, so `windows.md` and `family.md` -- the two
+#: that showed their formula in a table column instead of a provenance line -- could drift with
+#: nothing comparing them; and it compared the scale formula alone, so four fits of a **scalar
+#: shape** published every out-of-sample number in the project and no test could see it.
+#:
+#: It is a mapping and not a longer tuple because the expectation is not uniform. The prepayment
+#: selection is deliberately unshaped (rule 14 is about the default hazard) and the log-logistic
+#: record is of another family, so each report says which formula and which shape it owes.
+#: ``...`` means "whatever the configuration says", and ``None`` means "a scalar shape, and say
+#: so" -- an absent line is the ambiguity the provenance helper exists to remove.
+EXPECTED_SPECIFICATION: dict[str, tuple[object, object]] = {
+    "methodology": (..., ...),
+    "calibration": (..., ...),
+    "backtesting": (..., ...),
+    "windows": (..., ...),
+    "selection": (..., ...),
+    "moratorium": (..., ...),
+    # Another family and another cause: both are records of their own run, and holding them to
+    # the configured formula would fail for being what they are.
+    "selection_loglogistic": (None, None),
+    "selection_weibull_prepayment": (None, None),
+    "family": (None, None),
+}
+
+#: Kept for the reports whose formula is held to the configuration.
+GENERATED_REPORTS = tuple(
+    name for name, (formula, _) in EXPECTED_SPECIFICATION.items() if formula is ...
+)
 
 #: The marker a superseded report carries in its first lines, so that the test below can tell
 #: "stale and said so" from "stale and silent". The second is the failure this test exists for.
 SUPERSEDED_MARKER = "Superseded: this report describes a model that no longer exists"
+
+
+def _predates_the_provenance(text: str) -> bool:
+    """Whether a report was written before the provenance stated what it is.
+
+    A self-retiring exemption, and the reason it is safe: a report written by today's package
+    carries a ``Generated:`` line, so one without it cannot be held to lines that did not exist
+    when it was written. The moment it is regenerated it gains the date **and** the formula and
+    the shape, and from then on the checks bind. Nothing new can slip through, because nothing
+    new is written without the date.
+
+    Preferred over widening the exemption by name. A list of excused reports is a list somebody
+    has to shorten; this one shortens itself, which is the difference between an exemption and
+    a hole.
+    """
+    return not re.search(r"^[-*]?\s*Generated:\s*\d{4}-\d{2}-\d{2}", text, re.MULTILINE)
 
 
 def test_a_generated_report_states_the_formula_it_was_run_on_or_says_it_is_superseded() -> None:
@@ -462,7 +505,7 @@ def test_a_generated_report_states_the_formula_it_was_run_on_or_says_it_is_super
         if not report.exists():
             continue
         text = report.read_text()
-        if SUPERSEDED_MARKER in text[:4000]:
+        if SUPERSEDED_MARKER in text[:4000] or _predates_the_provenance(text):
             continue
         stated = re.search(r"^[-*]?\s*Formula:\s*`(?P<formula>[^`]+)`", text, re.MULTILINE)
         assert stated is not None, (
@@ -475,6 +518,71 @@ def test_a_generated_report_states_the_formula_it_was_run_on_or_says_it_is_super
             f"{sorted(named - configured)} are not in the configuration, "
             f"{sorted(configured - named)} are missing. Regenerate it, or mark it superseded."
         )
+
+
+def test_every_generated_report_states_its_shape_and_the_configured_ones_agree() -> None:
+    """The half of the drift the formula could not catch, and did not for two days.
+
+    `windows.md` published three regime cuts, an anchoring multiplier and a master scale of a
+    **scalar-shape** model, while carrying the configured scale formula -- because
+    `backtest/campaign.py` never passed the ancillary formula on, and nothing in the package
+    stated or compared a shape. A report naming only its scale cannot be told from one of a model
+    that has no shape at all, which is why the provenance prints "scalar" rather than omitting
+    the line.
+    """
+    from creditsurv.config import default_shape
+
+    shape = default_shape()
+    configured = set(re.findall(r"\w+", shape))
+
+    for name, (_, expected) in EXPECTED_SPECIFICATION.items():
+        report = reports_dir() / f"{name}.md"
+        if not report.exists():
+            continue
+        text = report.read_text()
+        if SUPERSEDED_MARKER in text[:4000] or _predates_the_provenance(text):
+            continue
+        stated = re.findall(r"^[-*]?\s*(?:\w+ -- )?Shape:\s*`([^`]+)`", text, re.MULTILINE)
+        assert stated, (
+            f"docs/reports/{name}.md states no shape, so it cannot be told from a report of a "
+            "model fitted without one -- which is the defect this test exists for"
+        )
+        if expected is not ...:
+            continue
+        named = set(re.findall(r"\w+", stated[0]))
+        assert named == configured, (
+            f"docs/reports/{name}.md was generated with a different shape: "
+            f"{sorted(named - configured)} are not in `config.default_shape()`, "
+            f"{sorted(configured - named)} are missing. Regenerate it, or mark it superseded."
+        )
+
+
+def test_no_generated_report_escapes_the_freshness_checks() -> None:
+    """Every report a reporting module writes is named above, or the next one drifts unseen.
+
+    `windows.md` and `family.md` drifted for a month because the check listed three reports by
+    hand and nobody added the fourth. The list is still by hand -- it has to be, because the
+    expectation differs per report -- so this is what notices when it falls behind: the writers
+    name their own output files, and every one of them has to be accounted for.
+    """
+    import re as regex
+
+    written = set()
+    reporting = project_root() / "src" / "creditsurv" / "reporting"
+    for module in sorted(reporting.glob("*.py")):
+        source = module.read_text()
+        written |= {
+            match.group("name")
+            for match in regex.finditer(r'reports_dir\s*/\s*f?"(?P<name>[\w_]+)\.md"', source)
+        }
+    # `selection.py` writes its name from a variable, so its three outputs cannot be read off
+    # the source. They are named here for the same reason the mapping is by hand.
+    written |= {"selection", "selection_loglogistic", "selection_weibull_prepayment"}
+    unaccounted = written - set(EXPECTED_SPECIFICATION)
+    assert unaccounted == set(), (
+        f"these reports are written by the package and checked by nothing: {sorted(unaccounted)}. "
+        "Add each to EXPECTED_SPECIFICATION with the formula and shape it owes."
+    )
 
 
 def test_the_views_manifest_and_the_configured_specification_name_one_model() -> None:
@@ -512,4 +620,17 @@ def test_the_views_manifest_and_the_configured_specification_name_one_model() ->
         f"the views come from fit {named}, whose formula is not the configured one. "
         "Re-run `creditsurv views` after `creditsurv report`, or the site publishes figures "
         "of a specification the configuration has replaced."
+    )
+    # And the shape, which this test ignored while `views/build.py` already *searched* by it: a
+    # fit of the right scale and no shape would have passed here and published every figure on
+    # the site of a model nobody configured.
+    from creditsurv.config import default_shape
+
+    stated_shape = described[named].get("ancillary")
+    assert stated_shape is not None, (
+        f"the cached fit {named} carries no ancillary formula, so the views are of a scalar-shape "
+        "model where rule 14 makes the shape part of the specification"
+    )
+    assert set(re.findall(r"\w+", str(stated_shape))) == set(re.findall(r"\w+", default_shape())), (
+        f"the views come from fit {named}, whose shape is not the configured one."
     )

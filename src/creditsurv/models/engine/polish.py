@@ -276,8 +276,62 @@ def _newton_from(
     if solution[5] > POLISH_TOLERANCE_SE:
         log.info("Newton steps did not converge from the warm start; falling back on SLSQP")
         return None
-    if not bool(np.all(np.linalg.eigvalsh(solution[2]) > 0)):
-        log.info("Newton steps ended where the likelihood is not concave; falling back on SLSQP")
+    # **Positive definite to the Hessian's own precision, not to a strict inequality.**
+    # The tolerance is the one `np.linalg.matrix_rank` uses to decide that a singular value is
+    # zero -- the largest eigenvalue times the dimension times machine epsilon -- because the
+    # question here is the same question: is this curvature zero, or is it a number?
+    #
+    # Measured on the 2018-12 cut of the shaped model, which is what produced this: the polish
+    # reached **2.25e-06 standard errors** from the optimum, three orders inside what this
+    # engine promises, and was refused on a smallest eigenvalue of **-9.175e-18** against a
+    # largest of 1.935e-01 -- one of 42, at **0.0051 of the rank tolerance**, so its sign is
+    # rounding and not curvature. The strict test then sent the fit into the method chain, where
+    # SLSQP spent 77 evaluations converging to 0.005607 against the 0.005582 Newton had already
+    # found: on 58 million rows that gap is about 1,450 log-likelihood units, thrown away to
+    # read a rounding error as a saddle.
+    #
+    # The refusal itself is kept and is right where the curvature is genuinely negative: a
+    # vanishing gradient without upward curvature is a saddle, not a maximum. What changes is
+    # that "not positive" now means "negative by more than the arithmetic can explain", which
+    # is the same discipline this project applies to the Kaplan-Meier band and the crossing
+    # test -- both of which fired on quantities smaller than their own noise until they were
+    # given floors.
+    eigenvalues = np.linalg.eigvalsh(solution[2])
+    rank_tolerance = float(eigenvalues.max()) * eigenvalues.size * float(np.finfo(float).eps)
+    flat = int((np.abs(eigenvalues) <= rank_tolerance).sum())
+    if flat:
+        # A direction flatter than the arithmetic can resolve is a fact about identification,
+        # not a failure of the fit: along it the likelihood is constant, so the optimum is a
+        # set and the point the polish reached is a member of it. Recorded rather than refused,
+        # because the distance guarantee still holds in every direction that is determined.
+        log.info(
+            "%d of %d curvature directions are flat to the arithmetic (|eigenvalue| <= %.3e); "
+            "the optimum is a set in those directions and the fit is a point in it",
+            flat,
+            eigenvalues.size,
+            rank_tolerance,
+        )
+    if not bool(np.all(eigenvalues > -rank_tolerance)):
+        # **The eigenvalue is logged because the test has no tolerance and the distance does.**
+        # On the 2018-12 cut of the shaped model the polish reached 2.25e-06 standard errors --
+        # three orders inside the 1e-3 this engine promises -- and was then refused here, which
+        # sent it into the method chain at a worse objective (0.006502 against 0.005582). Two
+        # readings of that are possible and they call for opposite responses: the point is
+        # genuinely a saddle, and no optimiser or start will certify it; or the smallest
+        # eigenvalue is floating-point noise around zero on a 44-parameter Hessian, in which
+        # case a strict `> 0` is the knife-edge this project refuses elsewhere -- the
+        # Kaplan-Meier band, the crossing test -- for the same reason. Which one it is cannot be
+        # read off the message, so the message now carries the number.
+        log.info(
+            "Newton steps ended where the likelihood is not concave; falling back on SLSQP "
+            "(smallest eigenvalue %.3e, largest %.3e, tolerance %.3e, %d of %d negative "
+            "beyond it)",
+            float(eigenvalues.min()),
+            float(eigenvalues.max()),
+            rank_tolerance,
+            int((eigenvalues <= -rank_tolerance).sum()),
+            eigenvalues.size,
+        )
         return None
     return solution
 

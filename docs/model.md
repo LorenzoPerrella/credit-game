@@ -86,9 +86,16 @@ training half. The categorical ones are each level against its reference.
 
 ## The term structure
 
-Cumulative PD month by month for the origination book dated to today -- the commonest
-origination profiles, each weighted by the lending it stands for -- on the baseline path, by
-segment.
+Cumulative PD month by month for the origination book dated to today -- **every origination
+of the twelve months ending at the reporting date**, each at the weight it carries -- on the
+baseline path, by segment.
+
+Until 19 October 2026 the book was the 500 heaviest age-zero profiles ever written, which is a
+mode and not a portfolio: 0.6% purchase where the window's own lending is 32.2%, 87.8% rate-term
+refinance where it is 41.4%, and no first-time buyers and no investment properties at all where
+the window is 13.0% and 4.6%. A declared window needs no ordering and no truncation -- it is
+20,465 profiles standing for 4.1 million loans, read in 1.3 seconds -- and the composition is
+published beside every number below, as `book_weight` by segment.
 
 <!-- figure: term_structure -->
 

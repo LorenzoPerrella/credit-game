@@ -202,6 +202,8 @@ competing risk, and the direction of the bias is upward on lifetime PD.
 
 - `uv run creditsurv report`
 - Formula: `moratorium_regime + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured'))`
+- Shape: `term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))`
+- Generated: 2026-10-23
 - Reporting date: 2021-12
 - Training exposure: 2,112,532,468 loan-months
 - Test exposure: 661,107,714 loan-months

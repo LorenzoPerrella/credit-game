@@ -142,6 +142,32 @@ Nothing new is stored for it.
   derivation for that reason. A **decile** is the exception: it needs the whole distribution,
   so its boundaries come off a weighted histogram of the log hazard in a pass of its own, land
   within a bin of the true quantile, and cannot split a tie.
+**Every command that fits has to be handed the shape, and one was not.** Rule 14 makes the
+ancillary formula part of the specification, so `report`, `views` and `select` pass
+`default_shape()` -- and `windows` did not, because `backtest/campaign.py` never threaded it into
+`fit_streamed` or into `fit_description`. Four fits a campaign, all scalar-shape, and every
+published out-of-sample number was of them: the three regime cuts, the anchoring multiplier, the
+master scale. The evidence is two cached descriptions differing in exactly one key on identical
+rows, **27.1 minutes against 5.2**. It went unseen because `FitResult` carried no `ancillary`
+field, so **no report stated its shape and no test could compare one** -- the freshness test
+added the week before covered three reports of eleven and compared the scale formula alone. The
+campaign now fits through `read_cells` + `fit_encoding`, because `fit_streamed` stores a design
+and **refuses a shape that reads covariates**; `reporting.builder.specification()` writes
+`Formula:`, `Shape:` and `Generated:` on every report; and `tests/test_site.py` holds every
+report a reporting module writes, with an exemption keyed to the `Generated:` line so it retires
+itself the moment a report is regenerated.
+
+**And a table named for a criterion has to evaluate that criterion.** `views.build` scored its
+backtest tables from `as_of + 1` -- 2022-01, the anchoring window **and** the test window
+together -- on an **unanchored** hazard, while rule 1 reserves the anchoring window for the level
+"and nothing else" and begins the test window at 2025-01. So `acceptance_by_segment` published a
+`deciles_passed` column reading False at a worst decile of **1.456** where the declared criterion
+reads True at **1.150**, and the same decile got read three ways in one day: 1.676 in sample,
+1.456 on that mixed window, 1.150 anchored on the declared one. **A number is not interpretable
+without the model *and* the window it is of.** Rule 5's out-of-sample age-band criterion was in
+the same state from the other side -- declared on 17 October with nothing in the package able to
+compute it, now one further view off the in-sample grouper.
+
 - **A cached fit is searchable.** The fingerprint hashes the row counts, so naming a fit meant
   expanding the rows to count them -- to find the model that would have scored them.
   `find_fits(**criteria)` reads the descriptions written beside the pickles instead, and tells
@@ -149,8 +175,19 @@ Nothing new is stored for it.
 - **A window is read, not filtered.** `load_cells_window` selects on the observation month,
   which is `origination_month + age` and therefore not a column parquet can be asked about by
   name; DuckDB evaluates it while reading. Two years of observation are about 3% of the table,
-  and `outcomes_by_age` and `load_largest_cells` do the same for a non-parametric curve and
-  for the origination profiles.
+  and `outcomes_by_age`, `load_largest_cells` and `load_originations` do the same for a
+  non-parametric curve, for the heaviest profiles and for a declared book.
+- **The projection book is a declared window, and the old one was a mode.** `BOOK_WINDOW_MONTHS`
+  is twelve, the book is **every** origination of the year ending at the reporting date at the
+  weight it carries -- 20,465 profiles standing for 4.1 million loans, read in 1.3 s -- and
+  nothing is ordered or truncated. It was the 500 heaviest age-zero cells ever written, which
+  against the window's own lending is **0.6% purchase where the book is 32.2%**, 87.8% rate-term
+  refinance where it is 41.4%, and **no first-time buyers and no investors at all** where the
+  window is 13.0% and 4.6%. Every published lifetime and scenario PD was of that.
+  **And dating a book takes three columns**: `origination_book` set `period` and left
+  `origination_period`, which `add_macro_covariates` reads separately, so every change since
+  origination spanned twenty years in a book said to have been written this month -- visible in
+  the published table as **five vintage eras** in a one-month book.
 - Aggregation peaks at ~11.3 GB, concatenating and writing the table. One heavy job at a
   time.
 - A successful fit is saved to `data/processed/fits/<hash>.pickle` the moment it
@@ -541,13 +578,26 @@ loans and says nothing on 48 million. Expect more of these.
 - **An out-of-time actual-over-expected cannot be read alone.** In sample it ran from
   0.27 to 2.78 by year, so the backtest publishes that dispersion beside it, and the
   acceptance criteria in `backtest/runner.py` are declared before any run.
-- **The Jeffreys interval on a grade goes the same way.** The master scale asks that a grade's
-  predicted twelve-month PD fall inside the 95% interval around what its loans did, and **0 of 8
-  pass** -- on relative errors of 5% in grade 5 (0.005657 predicted against 0.005381), 8% in
-  grade 7 and 30% in grade 4. With 5 million obligor-years in a grade the interval is a few parts
-  in a thousand wide, so it is testing the arithmetic of the average, not the model. The rule was
-  declared before the run and stands; what has to be published beside it is the **magnitude** of
-  each miss, exactly as for the Kaplan-Meier band.
+- **The Jeffreys interval on a grade went the same way, and it is the one criterion this project
+  has withdrawn.** The master scale asked that a grade's predicted twelve-month PD fall inside the
+  95% interval around what its loans did, and **0 of 8 passed** -- on relative errors of 5% in
+  grade 5 (0.005657 predicted against 0.005381), 8% in grade 7 and 30% in grade 4. With 5 million
+  obligor-years in a grade the interval is a few parts in a thousand wide, so it tests the
+  arithmetic of the average and not the model.
+
+  Rule 5 replaced it with a **25% relative tolerance** on 17 October 2026 and the amendment was
+  **ratified on 19 October**, which it needed because it was written *after* seeing 0 of 8 -- the
+  shape of tuning. What admits it is arithmetic rather than argument: on the grade table published
+  at the time the tolerance passes **six of eight** where Jeffreys passes **one**, and the scale,
+  which allows at most one failing grade, **fails under both**. An amendment that cannot turn a
+  failure into a pass is admissible on its reasoning. The Jeffreys bounds stay as published
+  columns and `relative_miss` is published beside them, because the **magnitude** of each miss is
+  what the Kaplan-Meier band taught and because a withdrawn criterion that stops being reported is
+  one nobody can check the withdrawal of.
+
+  **The code disagreed with the rule for two days**, which is the governance half: `metrics.py`
+  still passed grades on the interval while `docs/rules.md` said 25%. A criterion lives in two
+  places and both have to move.
 
 **A marginal relationship is evidence that a covariate is correlated with the outcome,
 never that it is identified in a model.** This was got wrong twice — see
@@ -666,20 +716,33 @@ where there is not.
 
 ## Open
 
-**The backtest fails its decile criterion, and the figures to quote are the anchored ones on the
-declared test window.** 0.920 / 0.561 / 0.598-1.064 appeared here as the current state for a
-month and belonged to the **September** model -- a different table, a different window and
-prepayment as censoring. On the published model, anchored by rule 4's multiplier of 1.1831 and
-scored on 2025-01 onwards: overall actual over expected **0.959** and Gini **0.542** pass, and the
-deciles run **0.674 to 1.062** with **6 of 10** in band. The master scale reads **1 of 8**, with
-relative errors to **+89%** in the safest grade. The criteria were fixed before the run, so the
-model is not tuned to them on the test window -- and the candidate rule 14 produced reads
-**0.927 / 0.548 / 10 of 10** on the same window, which is the first time anything here has passed
-all three.
+**Every out-of-sample number this section has ever carried is of a model without the shape, and
+the third validation found it.** `backtest/campaign.py` never passed rule 14's ancillary formula
+to its fits, so all four of them -- the three regime cuts and the development model the anchoring
+and the grades are of -- were **scalar-shape**: two cached descriptions differ in exactly one key
+on identical rows, 27.1 minutes against 5.2. The multiplier of **1.1831**, the **0.959 / 0.542**,
+the deciles **0.674 to 1.062** at 6 of 10 and the master scale's **1 of 8** all come from that
+path, and `windows.md` carries a notice saying so.
 
-Three out-of-time ratios exist and they are different quantities: **1.166** unanchored from 2022
-(the site's home), **0.959** anchored on the test window (the calibration page), and the 0.920
-above. The second independent validation found all three presented as one.
+**What the published model reads has not been measured by this repository yet.** The third
+validation recomputed it with its own scorer and reports **10 of 10 deciles between 0.803 and
+1.150** and **8 of 8 grades** inside rule 5's tolerance on the declared test window, anchored --
+which would be the first time anything here passed all three. That figure is **the validator's,
+not a measurement of ours**, and it is replaced by the corrected campaign's own output rather than
+adopted. Until that run lands, no anchored figure in this repository describes the configured
+model.
+
+**And the same decile reads three different numbers on three different windows**, which is how it
+came to be reported three ways in one day: **1.676** in sample, **1.456** on 2022-01 onwards
+unanchored -- which is what `acceptance_by_segment` published under a `deciles_passed` column, and
+which spans the anchoring window and the test window together -- and **1.150** anchored on the
+declared test window, the only one of the three that is a criterion. A number is not interpretable
+without the model **and** the window it is of.
+
+Earlier states of this paragraph, kept because each was believed: 0.920 / 0.561 / 0.598-1.064 was
+the **September** model, on a different table and with prepayment as censoring. And three
+out-of-time ratios were once presented as one -- 1.166 unanchored from 2022, 0.959 anchored on the
+test window, and the 0.920 -- which the second validation found.
 
 **The shape on the risk removes the compression and overshoots it, and the model has no hazard
 floor.** Rule 14 let the Weibull's shape read the covariates fixed at origination -- all nine of

@@ -9,6 +9,7 @@ project does not take a dependency on ``tabulate`` for one function.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING
 
 from creditsurv.names import readable
@@ -107,3 +108,28 @@ def provenance(lines: Sequence[str]) -> str:
     """A standard footer recording how a report was produced."""
     body = "\n".join(f"- {line}" for line in lines)
     return f"---\n\n## How this was produced\n\n{body}"
+
+
+def specification(
+    formula: str, shape: str | bool | None, *, today: date | None = None
+) -> list[str]:
+    """The provenance lines that say which model a report is of, and when it was written.
+
+    Three lines, and all three were missing something. **The formula** was written by three
+    reports of eleven, so `windows.md` and `family.md` could drift from the configuration with
+    nothing to compare. **The shape** was written by none of them, which is how four fits of a
+    scalar shape came to publish every out-of-sample number in the project: a report that does
+    not state its ancillary formula cannot be told from one that has none. And **the date** was
+    stamped by nothing at all, which is why three current reports sat in the navigation labelled
+    with the month of the run before -- a nav label and a report body have to be comparable, and
+    `git log` is not a thing a reader of the site has.
+
+    The shape is printed as "scalar" rather than omitted when there is none, because an absent
+    line is the ambiguity this function exists to remove.
+    """
+    written = "the scale's own formula" if shape is True else (shape or "scalar")
+    return [
+        f"Formula: `{formula}`",
+        f"Shape: `{written}`",
+        f"Generated: {(today or date.today()).isoformat()}",
+    ]
