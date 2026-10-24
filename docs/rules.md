@@ -674,6 +674,42 @@ already has and whose reference discipline is held by a test. A restricted cubic
 fallback, and only if bands do not reach section 5's out-of-sample age criterion -- not because it
 fits better, since that is the argument rule 2 exists to refuse.
 
+### Four things settled before the fit, 24 October 2026
+
+**The band column has to be built, because the one that exists is a reporting grouper.**
+`views.segments.AGE_BANDS` cuts the age at 0, 12, 24, 36, 60, 120, 240, 400 and labels the result
+with **strings** -- "0 to 11" -- for the views. Rule 12's own text says a banded level is a number
+and that `Treatment('790.0')` is not a level of a float column, so the reporting grouper cannot be
+the model's column. The model reads a **numeric** column carrying each band's lower edge, built
+beside `moratorium_regime` in `features.add_macro_family`: that covariate is the precedent in every
+respect, because it reads no macro series at all and is a function of the observation month alone,
+where this one is a function of the age alone.
+
+**The reference band is `0 to 11`, and the margin is thin enough to say so now.** On the estimation
+table it carries **473,904,483** loan-months against `60 to 119`'s **469,648,978** -- a 0.9%
+margin, effectively a tie, and the two would swap on a re-measurement. Rule 12's precedent is to
+measure on the table the model is estimated on, which settles it; declaring it before the fit is
+what stops a tie from being resolved by whichever answer turns out convenient. Measured on the
+*test* window the answer would be `36 to 59`, which is exactly why the rule has to name the table.
+
+**The in-sample age profile stops being evidence, and that is a consequence rather than a
+decision.** A free coefficient for each band of the grouping section 5's criterion is scored on
+makes the in-sample profile approximately 1.000 in every band by construction -- a saturated factor
+reproduces the means of its own groups. So the published in-sample 6-of-7 will become 7-of-7 and
+will say nothing. **Only the out-of-sample profile counts**, and the criterion was already written
+that way. Anyone reading an in-sample improvement here as evidence is reading the arithmetic of a
+saturated factor.
+
+**The monotonicity condition is on the cumulative hazard, and it is not a claim about the hazard's
+shape.** `H` must be non-decreasing because it is the integral of a non-negative hazard, which is
+the whole of why this rule imposes it; `h = dH/dt` may rise, plateau and fall, and on this book it
+does -- the observed hazard peaks near age 48 and reads 0.00093, 0.00090, 0.00088, 0.00085 at 48,
+60, 84 and 120. A rule read as "the hazard must be monotone" would refuse the shape the data shows.
+For the banded form the condition bites only at the band boundaries, where `g` steps: the step must
+not take `H` down. It is checked numerically on the fitted model over the ages above the exposure
+floor, using the same `hazard_by_age` that already publishes the at-risk counts the floor is
+defined by.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.

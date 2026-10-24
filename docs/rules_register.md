@@ -894,3 +894,48 @@ has to be defended on the interval's arithmetic rather than on the margin.
 No page is changed and no verdict is restated until the signatory has read this. `docs/windows.md`
 and the grade table publish both criteria side by side and the `judged_on` column says which
 judged each grade, so the evidence is on the record either way.
+
+## 24 October 2026
+
+### Rule 16 — Four things settled before the age baseline is fitted, and the prediction
+
+Written before the column exists, because three of the four could be settled by a result if they
+were left open.
+
+**Why the rule's premise is now the published model's.** The rule was declared on the
+scalar-shape predecessor's 2-of-7, and the measurement round produced the configured model's own
+profile: **0.814, 1.480, 1.347, 0.911, 0.621, 0.647, 0.725** — also 2 of 7, and the misses
+**reverse sign**. That reversal is what admits a flexible baseline rather than something narrower:
+a defect in one direction could be met by a floor or a single factor, and one that is too low at
+two years and too high at eight cannot be.
+
+**The four, in the rule's own section.** The band column has to be built because the existing one
+is a string-labelled reporting grouper and rule 12 refuses a string level on a float column. The
+reference band is `0 to 11`, on the estimation table, by a **0.9% margin** over `60 to 119` —
+declared now precisely because a tie that thin would otherwise be settled by convenience, and
+because the test window would answer `36 to 59`. The in-sample profile stops being evidence, since
+a saturated factor on the criterion's own grouping reproduces its groups' means. And the
+monotonicity condition is on **H**, not on **h**: the observed hazard plateaus near age 48 and
+falls to 0.00085 by 120, so a rule read as "the hazard must be monotone" would refuse the data.
+
+**What this costs, measured from the fingerprint rather than guessed.** Zero cells, because age is
+already in the calendar key — `Factorisation` builds the calendar key as the macro covariates
+**plus the age**, so a function of age alone adds columns to a 153,309-row design table and **no
+new keys**. But the reading is not free: `encoding_fingerprint` covers the declared `calendar`
+list and no formula, so naming the basis on the calendar side changes the name and retires every
+reading on disk — a fresh 3.6 minutes and about 1.0 GB per window. The fit cache is keyed on the
+formula, so every cached fit, every report and every committed table becomes of a superseded
+specification. That is the price of the branch and it is stated before it is paid.
+
+**The prediction, before the run.** The two bands that miss **high** out of sample, 12-to-23 at
+1.480 and 24-to-35 at 1.347, are the two a free coefficient should move most, because they are
+adjacent and the misses are large; the three that miss **low**, 0.621, 0.647 and 0.725 from 60
+months on, should move less, because the exposure above 120 months thins to 489,000 loan-months and
+then 23,000 and a coefficient fitted there is fitted on little. So: **5 of 7 or better out of
+sample, with the remaining miss above 60 months rather than below 36.** If instead the young bands
+stay out, the band form is not the remedy and the restricted cubic basis is next — and if the
+seasoned bands overshoot into the band from below, that is the same sign reversal appearing inside
+the fix, which would be a finding about the Weibull rather than about the basis.
+
+**And one thing is declared not to be evidence**: a better likelihood. Nineteen more parameters on
+72.7 million rows will improve it, and rule 2 exists to refuse that as a criterion.
