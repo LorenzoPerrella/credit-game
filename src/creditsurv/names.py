@@ -478,6 +478,18 @@ _VARIABLES: Final[tuple[Variable, ...]] = (
         source="CARES Act and Freddie Mac forbearance reporting",
     ),
     _macro(
+        "age_band",
+        "Seasoning band",
+        "The lower edge of the loan's age band, in months: 0, 12, 24, 36, 60, 120 or 240. Read "
+        "as a factor, so the model carries one coefficient a band against the band holding the "
+        "most loan-months -- which is rule 16's flexible baseline along age, admitted because "
+        "period = cohort + age already puts the age in the calendar key, so a function of the "
+        "age alone costs no cells. It reads no series. Rule 16 of docs/rules.md, and "
+        "config.AGE_BANDS for the boundaries, which the seasoning views group by as well.",
+        unit="months",
+        source="the loan's own age, as origination month plus age",
+    ),
+    _macro(
         "housing_starts_growth",
         "Housing starts growth",
         "The year-on-year change in housing units started.",

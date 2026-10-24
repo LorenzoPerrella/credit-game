@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Final, cast
 import numpy as np
 import pandas as pd
 
-from creditsurv.config import MACRO_LAG_MONTHS, MORATORIUM_REGIME
+from creditsurv.config import AGE_BANDS, MACRO_LAG_MONTHS, MORATORIUM_REGIME
 
 
 def month_ordinal(period: pd.Period) -> int:
@@ -133,6 +133,13 @@ MACRO_SOURCES: Final[dict[str, tuple[str, ...]]] = {
     # moratorium is a policy, not a macro path, and a stress scenario that turned one on would
     # be asserting a policy response rather than a stress.
     "moratorium_regime": (),
+    # The second member that reads no series, and for a different reason: this one is a function
+    # of the **loan age** alone. It travels with the macro family because that family is the path
+    # a covariate takes when it is built after aggregation and costs no cells -- not because it is
+    # macroeconomic. Rule 16 admits it into the scale because `period = cohort + age` already puts
+    # the age in the calendar key, which is the same identity rule 14 uses to keep time-varying
+    # covariates out of the shape.
+    "age_band": (),
 }
 
 
@@ -448,6 +455,12 @@ MACRO_DERIVED: Final[tuple[str, ...]] = (
     # which months. It belongs here because it travels the path every macro covariate travels --
     # built after aggregation, from the observation date, costing no cells.
     "moratorium_regime",
+    # And the one that reads no series and is not about the calendar at all: rule 16's age band,
+    # a function of the **loan age**. It is here for the same reason -- it is built after
+    # aggregation and costs no cells -- and `config.AGE_BANDS` says where the boundaries are.
+    # Rule 16 says why the model may read it: `period = cohort + age` already puts the age in the
+    # calendar key, so a function of the age alone is a function of that key.
+    "age_band",
 )
 
 
@@ -578,6 +591,23 @@ def add_macro_family(
         opens, closes = (month_ordinal(pd.Period(edge, freq="M")) for edge in MORATORIUM_REGIME)
         months = observation.to_numpy(dtype=np.int64)
         store("moratorium_regime", ((months >= opens) & (months <= closes)).astype(float))
+
+    # Rule 16's flexible baseline along age, as the band's **lower edge** rather than a label.
+    #
+    # The band this reads is `views.segments.AGE_BANDS`, and the column it produces is not the one
+    # that module makes: `age_bands()` labels its cut with strings for the views, and rule 12's own
+    # text says a banded level is a number -- `Treatment('790.0')` is not a level of a float
+    # column. So the grouper is shared and the representation is not.
+    #
+    # `np.searchsorted(..., side="right") - 1` gives the index of the band each age falls in, and
+    # the edge array then gives its lower bound. Ages at or past the last edge would index past the
+    # end, so they are clipped into the final band -- which on this book is ages 400 and above,
+    # where the exposure is zero and the clip is a guard rather than a decision.
+    if requested("age_band"):
+        edges = np.asarray(AGE_BANDS, dtype=np.int64)
+        ages = (observation - origination_month).to_numpy(dtype=np.int64)
+        band = np.clip(np.searchsorted(edges, ages, side="right") - 1, 0, len(edges) - 2)
+        store("age_band", edges[band].astype(float))
 
     # The refinancing benchmark is switched by term, repeating what the source data
     # says rather than what is convenient: a fifteen-year loan is refinanced against

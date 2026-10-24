@@ -440,6 +440,21 @@ STABILITY_CUT: Final = "2010-06"
 #: the check that would have caught the old book on the day it was written.
 BOOK_WINDOW_MONTHS: Final = 12
 
+#: Loan age bands, in months, as both the reporting grouper and rule 16's baseline.
+#:
+#: Declared here rather than in `views.segments` since 24 October 2026, because rule 16 lets the
+#: **model** read the age in bands and `features` sits below `views` in the layer order -- so the
+#: two cannot share a constant that lives in the shallower one. The boundaries are unchanged; what
+#: changed is that two readers need them.
+#:
+#: The two readings are deliberately different objects. `views.segments.age_bands` labels the cut
+#: with strings for a table a person reads; `features.add_macro_family` stores each band's **lower
+#: edge** as a float, because rule 12's own text says a banded level is a number and that
+#: `Treatment('790.0')` is not a level of a float column. Sharing the boundaries and not the
+#: representation is the point: a criterion scored on one grouping and a model fitted on another
+#: would be two groupings nobody could compare.
+AGE_BANDS: Final[tuple[int, ...]] = (0, 12, 24, 36, 60, 120, 240, 400)
+
 #: Macro covariates the selection may not remove, because their purpose is to absorb rather than
 #: to be tested. `moratorium_regime` is here for the reason `harp` is in
 #: `procedure.BASE_CATEGORICAL`: a selection free to drop it would be free to read the macro
@@ -764,8 +779,21 @@ def default_shape() -> str:
     integrating to a survival function. `Factorisation.expand` refuses it in code as well, so the
     rule does not rest on this function being written correctly.
     """
+    # **Both lists are filtered by the origination-fixed set, and only one of them used to be.**
+    # `linear` has always been; `banded` iterated the whole of `BANDED_REFERENCE`, which was
+    # correct only by coincidence -- its three keys all happen to sit in `STATIC_CONTINUOUS`. The
+    # moment a banded covariate is not fixed at origination, the unfiltered version puts it in the
+    # **shape**, which is the one thing rule 14 refuses: a shape that moves with the age makes the
+    # hazard stop integrating to a survival function. Rule 16's `age_band` is exactly such a
+    # covariate, and this is the third defect of the shape found in this function -- after it read
+    # `CATEGORICAL_REFERENCE`, the scale's output, and after `default_covariates` did the same.
+    # `Factorisation.expand` would refuse the fit either way; a config that has to be caught by
+    # the engine is a config that is wrong.
+    fixed = set(STATIC_CONTINUOUS) | set(ORDINAL)
     linear = [name for name in STATIC_CONTINUOUS + ORDINAL if name not in BANDED_REFERENCE]
-    banded = [f"C({name}, Treatment({band}))" for name, band in BANDED_REFERENCE.items()]
+    banded = [
+        f"C({name}, Treatment({band}))" for name, band in BANDED_REFERENCE.items() if name in fixed
+    ]
     # `ORIGINATION_CATEGORICAL`, the set **offered**, not `CATEGORICAL_REFERENCE`, the set the
     # scale's selection kept. Rule 14's admissible side is an identity -- what is fixed at
     # origination -- and does not shrink when the scale's does.
