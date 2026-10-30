@@ -666,13 +666,19 @@ puts a function of age alone safely into the scale.
   cumulative hazard that falls is not one. A fit whose baseline is not monotone over the ages
   carrying exposure is refused, not published -- and the ages above the exposure floor are where
   the check applies, because beyond 180 months there are 489,000 loan-months at risk and then
-  23,000.
+  23,000. **This condition fired on the first fit it was written for**; the amendment of 30
+  October 2026 below gives it a closed form and says what it licenses.
 
 **The form, fixed here.** **Piecewise first**, by rule 12's own mechanism: age bands as factors
 with the band carrying the most loan-months as the reference. It reuses a mechanism this project
 already has and whose reference discipline is held by a test. A restricted cubic basis is the
 fallback, and only if bands do not reach section 5's out-of-sample age criterion -- not because it
 fits better, since that is the argument rule 2 exists to refuse.
+
+**Superseded on 30 October 2026**, because the piecewise form was fitted and refused on this
+rule's own monotonicity condition, and the reason it failed is a property of the form rather than
+of the fit. The amendment below carries the argument; this paragraph is kept because the ordering
+it declared is what made the refusal informative.
 
 ### Four things settled before the fit, 24 October 2026
 
@@ -710,6 +716,108 @@ not take `H` down. It is checked numerically on the fitted model over the ages a
 floor, using the same `hazard_by_age` that already publishes the at-risk counts the floor is
 defined by.
 
+### The band form was fitted, refused, and retired as infeasible -- 30 October 2026
+
+**The fit.** The selection under the banded baseline ran 14,007 s and chose fifteen terms
+including `C(age_band, Treatment(0.0))`. Its band coefficients on the **training half** (fit
+`a011cd438634371d`, log-likelihood -10,627,259.1489), against the `0 to 11` reference declared on
+24 October, and the step each one takes in the cumulative hazard:
+
+| boundary | coefficient | step in `eta` | `H(a+)/H(a-)` | hazard mass | at risk | |
+|---|---|---|---|---|---|---|
+| 0 | +0.000000 | (reference) | | | | |
+| 12 | -0.128311 | -0.128311 | 1.3092 | | 35,228,798 | rises |
+| **24** | **-0.086231** | **+0.042079** | **0.9154** | **-87** | 26,255,739 | **H falls 8.5%** |
+| **36** | **+0.063848** | **+0.150079** | **0.7297** | **-600** | 20,941,895 | **H falls 27.0%** |
+| **60** | **+0.278733** | **+0.214885** | **0.6369** | **-1,718** | 13,713,500 | **H falls 36.3%** |
+| **120** | **+0.318061** | **+0.039327** | **0.9208** | **-1,023** | 3,059,277 | **H falls 7.9%** |
+| 240 | +0.288168 | -0.029892 | 1.0648 | | 23,404 | rises |
+
+**Four boundaries of six.** The ratio is exact and closed-form, not read off a grid: across a
+boundary `H(a+)/H(a-) = exp(-rho * delta_eta)`, because `H = exp(rho * (log t - eta))` and the age
+`a` is the same on both sides. The **sign of the step decides for every loan**, because `rho` is an
+exponential and is positive whatever the covariates; the ratios above are at the reference loan's
+`rho = 2.0995`, and rule 14's shape spans 0.523 to 2.115 across the loan block, so the magnitudes
+move with the loan and the verdict does not. A cumulative hazard that falls integrates a negative
+hazard, and the four falls sit on 63,970,411 loan-months at risk -- far inside the exposure
+floor, so the exemption for thin ages does not reach any of them. **The fit is refused and is not
+published.** The prediction written before the run -- five bands of seven or better, with the
+residual above 60 months -- is falsified in a way that does not even reach the criterion: the form
+fails a coherence condition before it can be scored.
+
+**And the fitted coefficients bear the algebra out exactly.** `eta` falls once, to 12 months, and
+then rises at every boundary through 120 -- which is the model raising the hazard over the year-one
+hump and lowering it across the seasoned book, precisely the two-signed correction the measured
+defect asks for. One down-step and four up-steps, and every up-step takes `H` with it.
+
+**And no band vector could have passed.** With a piecewise-constant `eta`, `log H` is a *step*
+function of `log t`: `H` is discontinuous at every boundary, and the jump is down whenever the step
+in `eta` is up. The defect this rule was declared on -- `0.814, 1.480, 1.347, 0.911, 0.621, 0.647,
+0.725` -- needs the hazard **raised** over 12 to 35 months and **lowered** from 60 on, so `eta`
+must fall and then rise. Any band vector that corrects both signs steps upward somewhere and
+violates this rule's monotonicity clause there. **The form cannot satisfy rule 16 and repair rule
+16's premise at the same time.** That is an argument about the form, not a verdict on a fit.
+
+**What the data asks for instead, measured with no fit involved.** The quantity a Weibull holds
+constant at `rho` is `d log H / d log t`. Off the book's own Nelson-Aalen curve, on the estimation
+table, it reads **1.67** at 6 months, **1.81** at 12, 1.76 at 24, 1.52 at 36, 1.25 at 60, 1.15 at
+84 and **1.10** at 120. It does not wobble around a constant; it halves. A straight line in
+`log t` costs **2.6x** the exposure-weighted mean square error of a single bend, 0.283 against
+0.108. One parameter is being asked to be two numbers, and that is the whole defect.
+
+**The fallback is licensed on the refusal, which this rule did not provide for.** As written, the
+restricted cubic basis was admissible "only if bands do not reach section 5's out-of-sample age
+criterion" -- a measurement the same rule's refusal clause forbids taking, since a refused fit is
+not scored. The gap is closed here: **a monotonicity refusal licenses the fallback on the same
+footing as a missed criterion**, and the band form is retired as *infeasible* rather than as
+unsuccessful.
+
+Admissible, by this file's own test for an amendment made after a result:
+
+- **Every input to the argument predates the fit it replaces.** The algebra is the model's own
+  definition of `H`; the A/E profile is the register entry of 24 October, written before the
+  column existed; the Nelson-Aalen slopes are observed counts in a committed table. Nothing in
+  the argument is a function of the refused coefficients -- they are the illustration, not the
+  premise.
+- **It cannot turn a failure into a pass.** The band fit stays refused, no acceptance criterion
+  moves, and the replacement must meet section 5 on its own with its prediction registered first.
+- Second signatory and register entry per rule 17, the amendment being about when a declared form
+  may be replaced.
+
+**The monotonicity condition gets a closed form, and stops being a check.** For a smooth basis,
+`d log H / d log t = rho * (1 - g'(log t))` and `rho = exp(shape)` is strictly positive, so
+
+> `H` is non-decreasing for **every** loan at **every** covariate value **iff `g'(u) < 1`** on the
+> declared age range.
+
+One condition on the basis coefficients alone -- independent of `rho`, of every covariate and of
+every loan. For a restricted cubic basis `g'` is piecewise quadratic between the boundary knots
+and constant outside them, so `sup g'` is attained at a knot or at an interval's vertex and is
+**exact, with no sampling**. The numerical check over integer ages stays as the publication gate,
+because the exact per-age condition `g'(u) < (a + 1/2)/a` is strictly weaker: a fit that passes the
+certificate cannot fail the gate, and a gate that cannot fire is still the thing a reader checks.
+
+**And the ladder is declared now, with what each rung costs:**
+
+- **Rung 0** -- unconstrained fit, certificate computed, published.
+- **Rung 1** -- `sup g' >= 1`: the fit is refused, and the declared response is a **constrained**
+  refit with `g'(u) <= 1 - 1e-6` at the knots and vertices. The polish knows nothing of
+  constraints, so rung 1 also replaces its distance-to-the-optimum certification with a KKT
+  residual and publishes the active set and the likelihood forgone. The shape's bound is **not** a
+  precedent for this: `_check_interior` refuses a fit sitting on a bound as not identified, which
+  is the opposite of an active constraint.
+- **Rung 2** -- the constrained optimum sits on the constraint over a wide range of ages: the
+  family cannot carry this age profile monotonically at all. That is rule 2's question, and
+  nothing is published as the age baseline.
+
+**A form is probed before it is fitted, from 30 October 2026.** Any declared baseline form is
+first fitted by exposure-weighted least squares to the book's own Nelson-Aalen `log H(log age)`
+over the ages above the exposure floor, and its `sup g'`, its weighted error and its implied A/E by
+band are registered **before** the heavy fit. It costs milliseconds and reads only a committed
+table of observed counts. Had it existed, the band form's step-down would have been visible in
+seconds rather than after three and a half hours of selection -- and the probe is not evidence for
+a form, only against one: it is in-sample, marginal, and section 5's criterion is out of sample.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.
@@ -733,7 +841,10 @@ defined by.
   or taking a subset of the admissible side when the whole of it is what can be declared.
 - Carrying a continuous candidate with no declared expected sign.
 - Publishing a flexible age baseline without checking that its cumulative hazard is monotone
-  over the ages carrying exposure.
+  over the ages carrying exposure, or fitting one without registering the closed-form certificate
+  and the probe first.
+- Reading a **piecewise-constant** baseline in the scale as a flexible one: it makes the
+  cumulative hazard a step function, so it can only be monotone if every step goes the same way.
 - Correcting a level that trends with a single multiplier, and reporting the overall ratio
   without the monthly one beside it.
 - Reading a grade's twelve-month PD against a Jeffreys interval on millions of obligor-years,

@@ -10,7 +10,10 @@ import os
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # --------------------------------------------------------------------------------------
 # Filesystem layout
@@ -440,19 +443,15 @@ STABILITY_CUT: Final = "2010-06"
 #: the check that would have caught the old book on the day it was written.
 BOOK_WINDOW_MONTHS: Final = 12
 
-#: Loan age bands, in months, as both the reporting grouper and rule 16's baseline.
+#: Loan age bands, in months: the grouping rule 5's out-of-sample age criterion is scored on.
 #:
-#: Declared here rather than in `views.segments` since 24 October 2026, because rule 16 lets the
-#: **model** read the age in bands and `features` sits below `views` in the layer order -- so the
-#: two cannot share a constant that lives in the shallower one. The boundaries are unchanged; what
-#: changed is that two readers need them.
-#:
-#: The two readings are deliberately different objects. `views.segments.age_bands` labels the cut
-#: with strings for a table a person reads; `features.add_macro_family` stores each band's **lower
-#: edge** as a float, because rule 12's own text says a banded level is a number and that
-#: `Treatment('790.0')` is not a level of a float column. Sharing the boundaries and not the
-#: representation is the point: a criterion scored on one grouping and a model fitted on another
-#: would be two groupings nobody could compare.
+#: Declared here rather than in `views.segments` since 24 October 2026, because rule 16 briefly let
+#: the **model** read the age in bands too and `features` sits below `views` in the layer order, so
+#: the two could not share a constant living in the shallower one. That form was refused and the
+#: model reads no band of the age today; the constant stays here because the criterion is the one
+#: thing both a reporting grouper and any future baseline have to agree with, and a criterion
+#: scored on one grouping against a model fitted on another would be two groupings nobody could
+#: compare. `views.segments.age_bands` labels the same cut with strings for a table a person reads.
 AGE_BANDS: Final[tuple[int, ...]] = (0, 12, 24, 36, 60, 120, 240, 400)
 
 #: Macro covariates the selection may not remove, because their purpose is to absorb rather than
@@ -461,6 +460,12 @@ AGE_BANDS: Final[tuple[int, ...]] = (0, 12, 24, 36, 60, 120, 240, 400)
 #: coefficients off a book in which a policy intervention is still unmarked. Rule 15 asks a
 #: declared sign of every *candidate*, and a protected covariate is not one -- it is not screened,
 #: not eliminated, and carries no prior.
+#:
+#: Rule 16's baseline along age belongs here on the same argument -- a selection free to drop it
+#: would read every other coefficient off a model whose time scale is a single parameter -- and
+#: `age_band` was here from 24 to 29 October 2026. It left with the band form: that fit violated
+#: rule 16's own monotonicity condition and was refused, so nothing in the specification names a
+#: baseline along age until the restricted basis replaces it. See `docs/rules.md` rule 16.
 PROTECTED_MACRO: Final[tuple[str, ...]] = ("moratorium_regime",)
 
 #: The economic dimension each candidate measures, fixed before any selection result.
@@ -650,6 +655,12 @@ CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
     # `buyer_type` was here until 19 October 2026 and the band-form selection removed it at
     # step 7. It stays in `procedure.CANDIDATE_CATEGORICAL`, which is the **input** and is fixed
     # before any fit; this is the **output**, so it is a subset of that input and not a copy.
+    #
+    # It came back on 29 October under rule 16's age baseline -- p = 0.177 moved inside the
+    # threshold once the age had its own coefficients, a first-time-buyer indicator standing in
+    # for the age profile -- and left again when that fit was refused. The movement is a result
+    # and is recorded in `docs/rules_register.md`; what belongs here is only what the published
+    # selection chose.
 }
 
 
@@ -677,6 +688,12 @@ BANDED_REFERENCE: Final[dict[str, float]] = {
     "credit_score": 790.0,
     "original_ltv": 50.0,
     "debt_to_income": 19.0,
+    # `age_band` was here from 24 to 29 October 2026, as rule 16's first choice of form, with
+    # `0 to 11` as the reference on 473,904,483 loan-months against `60 to 119`'s 469,648,978. The
+    # band form is retired: `H = exp(rho * (log t - eta))` with a piecewise-constant `eta` is a
+    # step function of `log t`, so an upward step takes the cumulative hazard **down** -- 8.6% at
+    # 36 months and 23.8% at 60 -- and rule 16 refuses such a fit rather than publishing it. The
+    # `default_shape` filter that key forced stays, and the comment there says why.
 }
 
 
@@ -764,6 +781,35 @@ def default_covariates() -> list[str]:
     ]
 
 
+def calendar_covariates(names: Iterable[str] | None = None) -> list[str]:
+    """Which covariates the kernel reads off the calendar key rather than the loan key.
+
+    `eta = A[i] + B[j]`, and which side a column belongs to is a declaration: a macro covariate
+    is "a function of the vintage quarter and the loan age, both already in the aggregation key",
+    which is `MACRO_CANDIDATES`; and the protected block is the same kind of object, because
+    `moratorium_regime` is a function of the observation month and nothing else.
+
+    **This existed as three expressions in three commands and they disagreed.** `cli.select`
+    declared `(*MACRO_CANDIDATES, *PROTECTED_MACRO)`; `backtest.campaign` declared the same and
+    carries the comment explaining why the protected names belong in it; and
+    `models.fits.fit_from_cells` -- the `fit` command -- declared `MACRO_CANDIDATES` alone, so
+    `moratorium_regime` has been landing on the **loan** side there since rule 1 introduced it.
+    The arithmetic survives it, because each row's loan index encodes its own value, but the loan
+    key inflates and the `encoding_fingerprint` diverges, so `fit` and `select` share no reading
+    of the same table. One function, called by all three, is the fix; a specification declared
+    three ways is the defect, and this project has found that shape of defect four times now.
+
+    `names` filters the answer to the covariates a caller actually loaded, which is what the
+    encoding's own unclassified check compares against; without it the whole declared set comes
+    back.
+    """
+    declared = (*MACRO_CANDIDATES, *PROTECTED_MACRO)
+    if names is None:
+        return list(declared)
+    wanted = set(declared)
+    return [name for name in names if name in wanted]
+
+
 def default_shape() -> str:
     """Rule 14's shape: every covariate fixed at origination, in rule 12's forms.
 
@@ -784,9 +830,12 @@ def default_shape() -> str:
     # correct only by coincidence -- its three keys all happen to sit in `STATIC_CONTINUOUS`. The
     # moment a banded covariate is not fixed at origination, the unfiltered version puts it in the
     # **shape**, which is the one thing rule 14 refuses: a shape that moves with the age makes the
-    # hazard stop integrating to a survival function. Rule 16's `age_band` is exactly such a
-    # covariate, and this is the third defect of the shape found in this function -- after it read
-    # `CATEGORICAL_REFERENCE`, the scale's output, and after `default_covariates` did the same.
+    # hazard stop integrating to a survival function. A band of the **age** is exactly such a
+    # covariate; rule 16's first form was one, and this filter outlived it -- the band fit was
+    # refused on its own monotonicity condition before the filter could ever be tested by it, and
+    # the defect it closes is a property of this function and not of that covariate. It is the
+    # third defect of the shape found here -- after it read `CATEGORICAL_REFERENCE`, the scale's
+    # output, and after `default_covariates` did the same.
     # `Factorisation.expand` would refuse the fit either way; a config that has to be caught by
     # the engine is a config that is wrong.
     fixed = set(STATIC_CONTINUOUS) | set(ORDINAL)

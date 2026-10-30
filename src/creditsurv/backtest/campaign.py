@@ -33,7 +33,7 @@ import pandas as pd
 
 from creditsurv.backtest.metrics import cycle_in_band, grade_backtest
 from creditsurv.backtest.runner import ACCEPTANCE, predicted_hazard, score
-from creditsurv.config import DISTRIBUTION, MACRO_CANDIDATES, PROTECTED_MACRO
+from creditsurv.config import DISTRIBUTION, calendar_covariates
 from creditsurv.data.panel import WEIGHT, cells_to_episodes, ended_in, month_ordinal
 from creditsurv.data.store import cells_identity, fit_fingerprint, load_cells_window, save_fit
 from creditsurv.models.aft import fit_encoding
@@ -255,12 +255,13 @@ def _fitted_to(
         moratorium, macro, covariates, block_rows=block_rows, until=month_ordinal(cut)
     )
     # The calendar side is every covariate that is a function of the month, which is the macro
-    # candidates **and** the protected block: the selection declares it that way
-    # (`cli.select`) and this path declared it without the protected names, so the moratorium
-    # indicator -- a pure function of the observation month -- landed on the loan side. The
-    # arithmetic survives it, because each row's loan index encodes its own value; what does
-    # not survive is one specification being declared two ways in two paths.
-    calendar = [name for name in covariates if name in MACRO_CANDIDATES or name in PROTECTED_MACRO]
+    # candidates **and** the protected block: this path declared it without the protected names,
+    # so the moratorium indicator -- a pure function of the observation month -- landed on the
+    # loan side. The arithmetic survives it, because each row's loan index encodes its own value;
+    # what does not survive is one specification being declared several ways in several paths,
+    # which is why the declaration is `config.calendar_covariates` and no longer a comprehension
+    # written out once per command.
+    calendar = calendar_covariates(covariates)
     loan = [name for name in covariates if name not in set(calendar)]
     # **Through the encoding, not through `fit_streamed`.** The streamed path stores a design and
     # reads the shape's coefficient straight out of the parameter vector, so it refuses a shape

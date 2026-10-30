@@ -382,7 +382,7 @@ class Factorisation:
         decide the design's columns, and must see the levels the rows were encoded against.
         """
         loan_keys, calendar_keys = self.keys()
-        return _completed(loan_keys, calendar_keys)
+        return _every_level(loan_keys, calendar_keys)
 
     def expand(
         self,
@@ -690,13 +690,60 @@ def _unchanging(values: np.ndarray) -> np.ndarray:
 
 
 def _completed(base: pd.DataFrame, other: pd.DataFrame) -> pd.DataFrame:
-    """``base`` with the other side's columns held at its first row, so a formula can read it.
+    """``base`` with the other side's columns **held at its first row**, so a formula can read it.
 
-    Repeating a row through ``iloc`` rather than assigning scalars, because the categoricals
-    have to keep their declared levels: a dummy column exists for a level the probe never
-    shows, and the design's width has to be the width the rows were encoded against.
+    Held, not varied, and that is the whole of what :meth:`Factorisation.expand` needs from it:
+    the classification works by putting the formula through one frame where the loan moves and
+    the calendar is pinned and another where they swap, then asking which design columns moved.
+    Vary both and every column moves with both, and the classification refuses the model --
+    which is what happened when this function was changed to show every level: five columns of
+    the published design were reported as coupling a loan characteristic to the calendar.
+
+    Repeating a row through ``iloc`` rather than assigning scalars, because the categoricals have
+    to keep their declared levels: a dummy column exists for a level the probe never shows, and
+    the design's width has to be the width the rows were encoded against.
+
+    **What this frame cannot do is establish the levels**, and that is why
+    :func:`_every_level` exists beside it.
     """
     filler = other.iloc[[0] * len(base)].reset_index(drop=True)
+    return pd.concat([base.reset_index(drop=True), filler], axis=1)
+
+
+def _every_level(base: pd.DataFrame, other: pd.DataFrame) -> pd.DataFrame:
+    """``base`` with every **level** of the other side's columns shown at least once.
+
+    The frame lifelines' ``CovariateParameterMappings`` reads to decide the design's columns. Its
+    only contract is that each column shows the levels the rows were encoded against; the rows
+    need not be coherent across columns, because nothing reads a row of it.
+
+    **It is not :func:`_completed`, and conflating the two cost a selection.** That function holds
+    the other side at its first row, which preserves the levels of a `pandas.Categorical` -- they
+    live in the dtype -- and destroys them for a `C()` over a **numeric** column, where formulaic
+    infers the levels from the values it is shown. Rule 16's `age_band` is the first banded
+    covariate on the calendar side, so it was shown **one** of its seven bands and the design came
+    out with an intercept and no band coefficients at all: a three-and-a-half-hour selection that
+    fitted no age baseline while reporting a formula that claimed one. formulaic said so, in a
+    `DataMismatchWarning` repeated 28 times in a log nobody reads.
+
+    For every model fitted before rule 16 this changes nothing, measured rather than assumed: on
+    the published reading of the whole training half the design is **23 columns under both**, with
+    the same names, because the loan side is the base and no calendar covariate was wrapped in
+    `C()`.
+    """
+    rows = len(base)
+    filler = pd.DataFrame(index=pd.RangeIndex(rows))
+    for name in other.columns:
+        column = other[name]
+        # A categorical carries its levels in the dtype, so one value suffices -- and taking the
+        # distinct ones would drop a level the data never shows, which is the opposite failure.
+        values = (
+            column if isinstance(column.dtype, pd.CategoricalDtype) else column.drop_duplicates()
+        )
+        positions = np.arange(rows) % len(values)
+        filler[name] = pd.Series(
+            values.to_numpy()[positions], index=filler.index, dtype=column.dtype
+        )
     return pd.concat([base.reset_index(drop=True), filler], axis=1)
 
 

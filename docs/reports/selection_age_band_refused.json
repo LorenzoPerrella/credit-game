@@ -1,0 +1,96 @@
+{
+  "what": "rule 16's banded age baseline, fitted and REFUSED -- not a published specification",
+  "why_refused": "The cumulative hazard falls at four of six band boundaries. H = exp(rho * (log t - eta)) with a piecewise-constant eta is a step function of log t, so an upward step in eta takes H down, and a cumulative hazard that falls integrates a negative hazard. Rule 16 of docs/rules.md refuses such a fit rather than publishing it.",
+  "and_no_band_vector_could_pass": "The measured defect needs the hazard raised over 12-35 months and lowered from 60 on, so eta must fall and then rise; any band vector correcting both signs steps upward somewhere and violates the condition there. The form is retired as infeasible, not unsuccessful.",
+  "fit": {
+    "hash": "a011cd438634371d",
+    "sample": "training half",
+    "formula": "C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + C(age_band, Treatment(0.0)) + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
+    "ancillary": "term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
+    "distribution": "weibull",
+    "cause": null,
+    "cells": "cells_exclude.parquet:448169670:1791619429593537860",
+    "log_likelihood": -10627259.148857925,
+    "minutes": 5.778,
+    "selection_seconds": 14007
+  },
+  "shape": {
+    "note": "Rule 14's shape reads the nine covariates fixed at origination, so rho is a function of the loan. The sign of each step decides for every loan because rho is an exponential and positive; the ratios below are at the reference loan.",
+    "rho_at_the_reference_loan": 2.0995,
+    "rho_span_over_the_loan_block": [
+      0.523,
+      2.115
+    ]
+  },
+  "reference_band": "0 to 11, declared 24 October 2026 on the estimation table",
+  "steps": [
+    {
+      "boundary_months": 12,
+      "coefficient": -0.128311,
+      "step_in_eta": -0.128311,
+      "cumulative_hazard_ratio": 1.3092,
+      "hazard_mass": 57.0,
+      "loan_months_at_risk": 35228798,
+      "falls": false
+    },
+    {
+      "boundary_months": 24,
+      "coefficient": -0.086231,
+      "step_in_eta": 0.042079,
+      "cumulative_hazard_ratio": 0.9154,
+      "hazard_mass": -87.463,
+      "loan_months_at_risk": 26255739,
+      "falls": true
+    },
+    {
+      "boundary_months": 36,
+      "coefficient": 0.063848,
+      "step_in_eta": 0.150079,
+      "cumulative_hazard_ratio": 0.7297,
+      "hazard_mass": -599.547,
+      "loan_months_at_risk": 20941895,
+      "falls": true
+    },
+    {
+      "boundary_months": 60,
+      "coefficient": 0.278733,
+      "step_in_eta": 0.214885,
+      "cumulative_hazard_ratio": 0.6369,
+      "hazard_mass": -1717.784,
+      "loan_months_at_risk": 13713500,
+      "falls": true
+    },
+    {
+      "boundary_months": 120,
+      "coefficient": 0.318061,
+      "step_in_eta": 0.039327,
+      "cumulative_hazard_ratio": 0.9208,
+      "hazard_mass": -1023.316,
+      "loan_months_at_risk": 3059277,
+      "falls": true
+    },
+    {
+      "boundary_months": 240,
+      "coefficient": 0.288168,
+      "step_in_eta": -0.029892,
+      "cumulative_hazard_ratio": 1.0648,
+      "hazard_mass": 3300.04,
+      "loan_months_at_risk": 23404,
+      "falls": false
+    }
+  ],
+  "verdict": {
+    "monotone": false,
+    "falling_boundaries": [
+      24,
+      36,
+      60,
+      120
+    ],
+    "loan_months_at_risk_at_them": 63970411,
+    "largest_fall": "36.3%",
+    "exposure_floor_exemption_applies": false
+  },
+  "prediction_registered_before_the_run": "5 of 7 age bands or better out of sample, with the remaining miss above 60 months. FALSIFIED, and not on the criterion it named: the form fails a coherence condition before it can be scored.",
+  "what_is_not_here": "The elimination ladder and the screening tables of this run. docs/reports/selection*.json and .csv were reverted to the published specification before a copy was taken, which was a mistake. The 28 fits of the run are still in the cache -- find_fits() with 'age_band' in the formula -- so the record is regenerable; the coefficients above are read from the chosen fit itself rather than transcribed, which is the primary evidence either way."
+}

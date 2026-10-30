@@ -939,3 +939,103 @@ the fix, which would be a finding about the Weibull rather than about the basis.
 
 **And one thing is declared not to be evidence**: a better likelihood. Nineteen more parameters on
 72.7 million rows will improve it, and rule 2 exists to refuse that as a criterion.
+
+## 30 October 2026
+
+### Rule 16 — The band form was fitted, refused, and retired as infeasible
+
+**The prediction of 24 October is falsified, and not on the criterion it named.** It said 5 of 7
+age bands or better out of sample, with the remaining miss above 60 months. The fit never reached
+that measurement: it violates this rule's own monotonicity condition, so it is refused and not
+scored. A form can fail a coherence condition before it is allowed to be judged, and that
+possibility was not in the prediction.
+
+**The measurement**, on the training half — fit `a011cd438634371d`, log-likelihood
+-10,627,259.1489. The step each band boundary takes in the cumulative hazard, exactly, as
+`H(a+)/H(a-) = exp(-rho * delta_eta)` since the age is the same on both sides:
+
+| boundary | coefficient | step in `eta` | `H(a+)/H(a-)` | hazard mass | at risk | |
+|---|---|---|---|---|---|---|
+| 0 | +0.000000 | (reference) | | | | |
+| 12 | -0.128311 | -0.128311 | 1.3092 | | 35,228,798 | rises |
+| **24** | **-0.086231** | **+0.042079** | **0.9154** | **-87** | 26,255,739 | **H falls 8.5%** |
+| **36** | **+0.063848** | **+0.150079** | **0.7297** | **-600** | 20,941,895 | **H falls 27.0%** |
+| **60** | **+0.278733** | **+0.214885** | **0.6369** | **-1,718** | 13,713,500 | **H falls 36.3%** |
+| **120** | **+0.318061** | **+0.039327** | **0.9208** | **-1,023** | 3,059,277 | **H falls 7.9%** |
+| 240 | +0.288168 | -0.029892 | 1.0648 | | 23,404 | rises |
+
+**Four boundaries of six**, on 63,970,411 loan-months at risk between them, all far inside the
+exposure floor. The ratios are at the reference loan's `rho = 2.0995`; rule 14's shape spans `rho`
+from 0.523 to 2.115 across the loan block, so the magnitudes move with the loan and the **sign**
+decides for every one of them, `rho` being an exponential.
+
+**And the coefficients bear the algebra out exactly.** `eta` falls once, to 12 months, then rises
+at every boundary through 120: the model raising the hazard over the year-one hump and lowering it
+across the seasoned book, which is the two-signed correction the measured defect asks for. One
+down-step, four up-steps, and every up-step takes `H` with it.
+
+**Two corrections to the first reading of this, both recorded because the second is serious.**
+
+The *method* was wrong first: the direction of each step was inferred from the **sign** of the
+coefficient difference, which is an argument about `eta` and not about `H`, where rule 16's
+amendment of 24 October had already said the check is numerical and on `H`.
+
+And the *fit* was the wrong one. The coefficients first reported — 0, -0.14439, -0.20143, -0.15715,
+-0.02313, -0.06247, -0.21590, with two falling boundaries at 36 and 60 — belong to
+`cb4f937bc011cf8f`, the **"after 2010-06" sub-sample** of rule 9's own stability test, not to the
+model. The five cached fits of that specification differ only in their `sample` key, and the
+training-half one is the model. The misreading **understated the violation**: two falls become
+four, and 23.8% at 60 months becomes 36.3%. The verdict was right for the wrong numbers, which is
+the failure mode this register exists to make visible — and it is the second time in a fortnight
+that a number here was of a model other than the one it was said to be of.
+
+**And the form could not have passed.** With a piecewise-constant `eta`, `log H` is a step
+function of `log t`, so `H` jumps down wherever `eta` steps up. The defect this rule was declared
+on needs the hazard raised over 12 to 35 months and lowered from 60 on — `eta` falling and then
+rising — so any band vector correcting both signs steps upward somewhere. **The form cannot
+satisfy rule 16 and repair rule 16's premise at the same time.** The refusal is therefore about
+the form and not about this fit, which is what licenses the fallback; the amendment in
+`docs/rules.md` carries the argument and its admissibility test.
+
+**What the data asks for, and it was measurable all along.** `d log H / d log t` — the quantity a
+Weibull holds constant at `rho` — off the Nelson-Aalen curve of the estimation table:
+
+| age | 6 | 12 | 24 | 36 | 60 | 84 | 120 |
+|---|---|---|---|---|---|---|---|
+| slope | 1.67 | **1.81** | 1.76 | 1.52 | 1.25 | 1.15 | **1.10** |
+
+It halves. A straight line in `log t` costs **2.6x** the exposure-weighted mean square error of a
+single bend — 0.283 against 0.108 — and past two interior knots the error stops moving. One
+parameter was being asked to be two numbers, which is the defect in one line and needed no fit to
+see.
+
+**The probe this installs.** From today a declared baseline form is first fitted by
+exposure-weighted least squares to that same Nelson-Aalen curve, and its `sup g'`, its weighted
+error and its implied A/E by band are registered **before** the heavy fit. It costs milliseconds.
+Had it existed, the step-down would have been visible in seconds instead of after three and a
+half hours. Declared not to be evidence *for* a form — it is in-sample and marginal — only
+against one.
+
+### What the refused fit found anyway, recorded and not acted on
+
+**`buyer_type` came back.** It was eliminated at step 7 on 19 October at p = 0.177; under the age
+baseline the same selection keeps it, with six eliminations instead of seven. Nothing about the
+covariate changed — what changed is what it is measured beside. A loan block that cannot bend
+along age absorbs part of the age profile into whatever correlates with seasoning, and first-time
+buyers are younger loans. It is rule 12's own warning generalising — "a covariate that survived
+on a straight line might not on a bend" — with the converse holding too.
+
+Recorded rather than carried forward. `config.CATEGORICAL_REFERENCE` is reverted with the rest of
+the specification, because what belongs there is what the **published** selection chose, and the
+selection that kept `buyer_type` is refused. The replacement form re-runs steps 7 to 10 cold and
+nothing about `buyer_type` is pre-committed either way.
+
+**And a defect in the calendar-side declaration, found while scoping the revert.** `eta = A[i] +
+B[j]`, and which side a covariate belongs to was written out as three separate expressions in
+three commands. Two said "the macro candidates and the protected block"; `models.fits` — the
+`fit` command — said the macro candidates alone, so **`moratorium_regime` has been landing on the
+loan side there since rule 1 introduced it**. The arithmetic survives, because each row's loan
+index encodes its own value, but the loan key inflates and the `encoding_fingerprint` diverges,
+so `fit` and `select` shared no reading of the same table. `config.calendar_covariates` is now the
+one declaration and all four sites call it. The published path was never affected: `select` and
+`windows` both had the right list.
