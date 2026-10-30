@@ -44,12 +44,17 @@ def test_every_macro_covariate_the_model_reads_is_moved_by_the_scenario() -> Non
         name for name in STRESSED_COVARIATES if not set(MACRO_SOURCES[name]) & set(ADVERSE.shocks)
     ]
 
-    # `moratorium_regime` is exempt, and for a reason rather than for convenience: it reads no
-    # macro series at all -- the observation month is the whole of it -- so there is nothing for
-    # a scenario to shock. A stress scenario that switched a moratorium on would be asserting a
+    # One is exempt, and for a reason rather than for convenience. `moratorium_regime` reads no
+    # macro series at all -- the observation month is the whole of it -- so there is nothing for a
+    # scenario to shock. A stress scenario that switched a moratorium on would be asserting a
     # **policy response** to the stress, which is a different claim from a stress, and one this
     # model has no standing to make.
-    unmoved = [name for name in unmoved if name != "moratorium_regime"]
+    #
+    # Rule 16's baseline along age will want the same exemption for a stronger reason -- it is the
+    # model's **time scale**, and `period = cohort + age` means the age is already pinned by the
+    # cohort and the calendar, so there is nothing free to move. No such covariate is configured
+    # today: the band form was refused.
+    unmoved = [name for name in unmoved if name not in {"moratorium_regime"}]
     assert not unmoved, f"{unmoved} have no shocked source, so the scenario cannot move them"
 
 

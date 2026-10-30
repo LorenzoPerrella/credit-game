@@ -666,13 +666,121 @@ puts a function of age alone safely into the scale.
   cumulative hazard that falls is not one. A fit whose baseline is not monotone over the ages
   carrying exposure is refused, not published -- and the ages above the exposure floor are where
   the check applies, because beyond 180 months there are 489,000 loan-months at risk and then
-  23,000.
+  23,000. **This condition is withdrawn**: the amendment of 30 October 2026 below shows that the
+  model's monthly hazard is non-negative for every `eta` profile, because the increment is taken at
+  fixed covariates, so there is nothing for it to refuse.
 
 **The form, fixed here.** **Piecewise first**, by rule 12's own mechanism: age bands as factors
 with the band carrying the most loan-months as the reference. It reuses a mechanism this project
 already has and whose reference discipline is held by a test. A restricted cubic basis is the
 fallback, and only if bands do not reach section 5's out-of-sample age criterion -- not because it
 fits better, since that is the argument rule 2 exists to refuse.
+
+**Still in force on 30 October 2026**, and the amendment below is why it had to be restated: the
+piecewise form was fitted, read as refused on this rule's monotonicity condition, and that reading
+was withdrawn. The ordering this paragraph declared therefore stands unchanged -- bands first, the
+restricted basis only if bands do not reach section 5's out-of-sample age criterion -- and that
+criterion is what the band fit now owes.
+
+### Four things settled before the fit, 24 October 2026
+
+**The band column has to be built, because the one that exists is a reporting grouper.**
+`views.segments.AGE_BANDS` cuts the age at 0, 12, 24, 36, 60, 120, 240, 400 and labels the result
+with **strings** -- "0 to 11" -- for the views. Rule 12's own text says a banded level is a number
+and that `Treatment('790.0')` is not a level of a float column, so the reporting grouper cannot be
+the model's column. The model reads a **numeric** column carrying each band's lower edge, built
+beside `moratorium_regime` in `features.add_macro_family`: that covariate is the precedent in every
+respect, because it reads no macro series at all and is a function of the observation month alone,
+where this one is a function of the age alone.
+
+**The reference band is `0 to 11`, and the margin is thin enough to say so now.** On the estimation
+table it carries **473,904,483** loan-months against `60 to 119`'s **469,648,978** -- a 0.9%
+margin, effectively a tie, and the two would swap on a re-measurement. Rule 12's precedent is to
+measure on the table the model is estimated on, which settles it; declaring it before the fit is
+what stops a tie from being resolved by whichever answer turns out convenient. Measured on the
+*test* window the answer would be `36 to 59`, which is exactly why the rule has to name the table.
+
+**The in-sample age profile stops being evidence, and that is a consequence rather than a
+decision.** A free coefficient for each band of the grouping section 5's criterion is scored on
+makes the in-sample profile approximately 1.000 in every band by construction -- a saturated factor
+reproduces the means of its own groups. So the published in-sample 6-of-7 will become 7-of-7 and
+will say nothing. **Only the out-of-sample profile counts**, and the criterion was already written
+that way. Anyone reading an in-sample improvement here as evidence is reading the arithmetic of a
+saturated factor.
+
+**The monotonicity condition is on the cumulative hazard, and it is not a claim about the hazard's
+shape.** `H` must be non-decreasing because it is the integral of a non-negative hazard, which is
+the whole of why this rule imposes it; `h = dH/dt` may rise, plateau and fall, and on this book it
+does -- the observed hazard peaks near age 48 and reads 0.00093, 0.00090, 0.00088, 0.00085 at 48,
+60, 84 and 120. A rule read as "the hazard must be monotone" would refuse the shape the data shows.
+For the banded form the condition bites only at the band boundaries, where `g` steps: the step must
+not take `H` down. It is checked numerically on the fitted model over the ages above the exposure
+floor, using the same `hazard_by_age` that already publishes the at-risk counts the floor is
+defined by.
+
+### The band form was fitted, the monotonicity condition was read as violated, and that reading was wrong -- 30 October 2026
+
+**What happened.** The selection under the banded baseline ran 14,007 s and chose fifteen terms
+including `C(age_band, Treatment(0.0))`. Its band coefficients on the training half (fit
+`a011cd438634371d`, log-likelihood -10,627,259.1489) are `0, -0.128311, -0.086231, +0.063848,
++0.278733, +0.318061, +0.288168`, so `eta` falls to twelve months and then rises at every boundary
+through a hundred and twenty. That was read as a violation of this rule's monotonicity condition
+and the fit was refused. **The refusal is withdrawn**, and the reason it was wrong is the more
+useful half of this entry.
+
+**The model's hazard is non-negative for every `eta` profile, by construction.** `episode_hazards`
+(`models/aft.py:492-493`) evaluates the cumulative hazard at the times `a` and `a + 1` **with the
+covariates the row itself carries**, so the increment is
+
+    H(a+1 | x_a) - H(a | x_a) = exp(-rho * eta_a) * ((a+1)**rho - a**rho)
+
+and both factors are positive: `exp` of a real number, and `(a+1)^rho - a^rho` for any `rho > 0`.
+There is no `eta(a)` -- banded, spline or arbitrary -- that makes it negative. Verified through the
+refused model itself over ages 0 to 359: the monthly hazard runs 7.3e-07 to 2.1e-03, nothing at or
+below zero, and the implied cumulative hazard is **monotone increasing at every age**.
+
+**What was computed instead** was `H(a | eta_b)` against `H(a | eta_{b+1})` -- the cumulative
+hazards of two *different covariate vectors* at the same age, which is to say of two different
+loans -- and the ratio between them was read as a jump in one loan's own curve. It is not one. The
+model never places those two numbers side by side.
+
+**So the condition as this rule wrote it is withdrawn.** It was declared on the object
+`H = exp(g(log t) - rho * (A + B_macro))` read as "a single monotone-if-checked function of time
+per loan", and that is not the object the implementation builds. This model is an AFT with
+**time-varying covariates**, integrated month by month at fixed covariates within each month --
+and `moratorium_regime`, `ltv_change` and `unemployment_change` have all made `eta` step between
+one month and the next since the day they entered it. The age is no different from them, and a
+condition that refuses a baseline along age would have to refuse those three as well.
+
+**What is true, and what it is an argument for.** The band form makes the **hazard** discontinuous
+in age: through the fitted model it reads 23.8 per 100,000 loan-months at age 35 and 17.4 at 36,
+33.3 at 59 and 20.6 at 60. The hazard is positive and the cumulative hazard rises; what it is not
+is continuous, so a term structure built from it has kinks at six ages chosen by a reporting
+grouper. That is a reason to prefer a smooth basis, and it is a reason about **smoothness**, not
+about coherence -- so it decides a tie rather than refusing a form.
+
+**The form is settled by section 5's out-of-sample age criterion, exactly as this rule said
+before the amendment, and that criterion has not been measured on the band fit.** Until it is,
+publishing the band form and refusing it are both unjustified, so the configuration stays at the
+published specification -- not because the band fit is refused, but because nothing has yet scored
+it against the thing that admits it.
+
+**What the data asks for, which is unaffected and was measurable all along.** `d log H / d log t`,
+the quantity a Weibull holds *constant* at `rho`, off the Nelson-Aalen curve of the estimation
+table: **1.67** at six months, **1.81** at twelve, 1.76 at twenty-four, 1.52 at thirty-six, 1.25
+at sixty, 1.15 at eighty-four, **1.10** at a hundred and twenty. It halves. Fitting the straight
+line costs **2.6x** the exposure-weighted mean square error of a single bend, 0.283 against 0.108.
+One parameter is being asked to be two numbers, and that is why this rule exists.
+
+**A form is probed before it is fitted, from 30 October 2026.** Any declared baseline form is
+first fitted by exposure-weighted least squares to the book's own Nelson-Aalen `log H(log age)`
+over the ages above the exposure floor, and the age profile it implies is registered **before**
+the heavy fit. It costs milliseconds and reads only a committed table of observed counts. Declared
+not to be evidence *for* a form -- it is in sample and marginal, where section 5's criterion is
+out of sample -- only against one. **This is the instrument that would have cost least here**: not
+because it would have caught a coherence failure, there being none, but because the implied
+profile of a declared form is the cheapest thing in this project to look at and it was never
+looked at.
 
 ## What these rules forbid
 
@@ -696,8 +804,10 @@ fits better, since that is the argument rule 2 exists to refuse.
 - Searching for what to put in the shape by what improves the decile the model is judged on,
   or taking a subset of the admissible side when the whole of it is what can be declared.
 - Carrying a continuous candidate with no declared expected sign.
-- Publishing a flexible age baseline without checking that its cumulative hazard is monotone
-  over the ages carrying exposure.
+- Fitting a flexible age baseline without registering the profile the probe implies for it first.
+- Reading the cumulative hazard of **two covariate vectors at one age** as one loan's curve over
+  time. The model takes its increment at fixed covariates, so the two numbers never meet; reading
+  them as a jump is what refused a coherent fit on 29 October 2026.
 - Correcting a level that trends with a single multiplier, and reporting the overall ratio
   without the monthly one beside it.
 - Reading a grade's twelve-month PD against a Jeffreys interval on millions of obligor-years,

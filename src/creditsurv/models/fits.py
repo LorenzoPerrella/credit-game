@@ -29,6 +29,7 @@ the rest of the package reports it.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Final
@@ -184,7 +185,11 @@ class Fits:
         cached = load_fit(fingerprint)
         # A log-likelihood of zero or more is no likelihood at all: a fit saved before the
         # polish refused such values may have stopped at one.
-        if isinstance(cached, FitResult) and cached.log_likelihood < 0:
+        if (
+            isinstance(cached, FitResult)
+            and cached.log_likelihood < 0
+            and _names_its_terms(cached, spec.formula)
+        ):
             log.info("cached: %s on the %s", spec.formula, sample)
             self.record.append({**described, "minutes": 0.0, "evaluations": None, "cached": True})
             return cached
@@ -607,6 +612,36 @@ def _terms(result: FitResult) -> pd.DataFrame:
     return summary
 
 
+def _names_its_terms(fitted: FitResult, formula: str) -> bool:
+    """Whether a cached fit's coefficients cover every covariate its formula names.
+
+    **The fingerprint covers the formula string and not the design it produced**, and those are
+    two different things: a defect that silently drops a column gives a fit whose name claims the
+    column and whose coefficients do not have it, and every later run then reuses it. That is not
+    hypothetical. Rule 16's `age_band` was shown one of its seven bands by a probe frame that held
+    the calendar side at a single row, so twenty-eight selection fits were cached under a formula
+    naming `C(age_band, Treatment(0.0))` while carrying **zero** band coefficients -- and the
+    re-run after the probe was fixed reused all twenty-eight and finished in **28 seconds**,
+    reporting a specification nothing had fitted.
+
+    So the covariate names in the formula are checked against the names in `params_`. It is a
+    containment test and not an equality: a factor expands to several coefficients and an
+    intercept appears in neither, so what is asserted is that no named covariate is missing
+    entirely. That is the failure mode -- a column absent, not a column renamed.
+    """
+    named = {match for match in re.findall(r"[A-Za-z_][A-Za-z_0-9]*", formula)} - {"C", "Treatment"}
+    carried = " ".join(str(index) for index in fitted.fitter.params_.index)
+    missing = sorted(name for name in named if name not in carried)
+    if missing:
+        log.warning(
+            "the cached fit names %s in its formula and carries no coefficient for them, so it "
+            "is a miss rather than a reuse: refitting",
+            ", ".join(missing),
+        )
+        return False
+    return True
+
+
 def read_cells(
     source: CellBlocks,
     *,
@@ -736,7 +771,7 @@ def fit_from_cells(
     """
     import pandas as pd
 
-    from creditsurv.config import MACRO_CANDIDATES
+    from creditsurv.config import calendar_covariates
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import WEIGHT, month_ordinal
     from creditsurv.data.store import fit_fingerprint, save_fit
@@ -755,7 +790,10 @@ def fit_from_cells(
         until=cut,
         cause=cause,
     )
-    written = None if traced else [n for n in default_covariates() if n in MACRO_CANDIDATES]
+    # `config.calendar_covariates`, not `MACRO_CANDIDATES` alone: this line read the macro
+    # candidates only, so `moratorium_regime` -- a pure function of the observation month -- went
+    # to the **loan** side on this path and only on this path. See that function for what it cost.
+    written = None if traced else calendar_covariates(default_covariates())
     log.info(
         "Reading %s%s",
         source.source,

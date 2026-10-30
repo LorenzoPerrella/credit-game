@@ -10,7 +10,10 @@ import os
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # --------------------------------------------------------------------------------------
 # Filesystem layout
@@ -440,12 +443,76 @@ STABILITY_CUT: Final = "2010-06"
 #: the check that would have caught the old book on the day it was written.
 BOOK_WINDOW_MONTHS: Final = 12
 
+#: Loan age bands, in months: the grouping rule 5's out-of-sample age criterion is scored on.
+#:
+#: Declared here rather than in `views.segments` since 24 October 2026, because rule 16 briefly let
+#: the **model** read the age in bands too and `features` sits below `views` in the layer order, so
+#: the two could not share a constant living in the shallower one. That form was refused and the
+#: model reads no band of the age today; the constant stays here because the criterion is the one
+#: thing both a reporting grouper and any future baseline have to agree with, and a criterion
+#: scored on one grouping against a model fitted on another would be two groupings nobody could
+#: compare. `views.segments.age_bands` labels the same cut with strings for a table a person reads.
+AGE_BANDS: Final[tuple[int, ...]] = (0, 12, 24, 36, 60, 120, 240, 400)
+
+#: Rule 16's baseline along age: the offset that makes `log(age)` a number at age zero.
+#:
+#: The row is at risk over `(age, age + 1]` and this is that interval's midpoint -- the one point
+#: in it that is not an endpoint, so it is the interval's own centre and not a tuned parameter.
+AGE_BASIS_OFFSET: Final = 0.5
+
+#: Where the basis bends, in `u = log(age + AGE_BASIS_OFFSET)`. Declared before the fit.
+#:
+#: Five knots, so four degrees of freedom and -- with the linear term dropped for the collinearity
+#: with `rho * u` -- **three** columns. The interior three sit at the 25th, 50th and 75th centile
+#: of the **default-weighted** `u`, which is Royston-Parmar's own convention: knots go where the
+#: uncensored event times are, because that is where the curve is pinned down. Measured on
+#: `docs/tables/km_vs_model.parquet` -- observed counts on the training half, the table the model
+#: is estimated on -- over the ages carrying at least `nonparametric.EXPOSURE_FLOOR` loan-months:
+#: **ages 24.5, 43.4 and 70.9**.
+#:
+#: The boundary knots are the 1st and 99th centile of the same distribution, **ages 3.4 and
+#: 169.9**, and not the extreme event times the convention literally names. At ages 0, 1 and 2
+#: this book records 272, 45 and 199 defaults at hazards of 7.2e-06, 1.1e-06 and 4.7e-06 against
+#: age 3's 2.5e-04 -- and it cannot record a real one, because at three missed payments the loan
+#: has defaulted *by definition*, so a loan 90 days delinquent at age zero is a loan whose
+#: `loan_age` restarted at a modification. 516 of 1,439,685 defaults, 0.036%. Anchoring a cubic
+#: on them would bend the basis hardest where the event is impossible. The spline is linear below
+#: the first knot, which is the right shape there anyway: a hazard ramping from zero.
+#:
+#: 98.21% of the defaults above the exposure floor fall between the boundary knots.
+AGE_BASIS_KNOTS: Final[tuple[float, ...]] = (1.3547, 3.2203, 3.7825, 4.2677, 5.1383)
+
+#: The ages the monotonicity certificate is evaluated over, in the same `u`.
+#:
+#: Rule 16 says the check applies "over the ages carrying exposure", which is every age at or
+#: above `nonparametric.EXPOSURE_FLOOR`: **0 to 221 months**, 2,111,289,771 loan-months and
+#: 99.92% of the defaults. Wider than the knots on purpose -- the basis is linear outside them, so
+#: `g'` is constant there and the certificate covers the extrapolation as cheaply as the interior.
+AGE_BASIS_RANGE: Final[tuple[float, float]] = (-0.6931, 5.4004)
+
+#: The basis columns, in the order `models.baseline` builds and reads them.
+#:
+#: **Declared, not yet licensed.** Rule 16 fixes the order the forms are tried in -- bands first,
+#: the restricted basis only if bands do not reach section 5's out-of-sample age criterion -- and
+#: that criterion has not been measured on the band fit. These constants are the fallback's form,
+#: settled from the estimation table before anyone knows whether it will be needed, which is the
+#: strongest version of declaring a form in advance: nothing about them can be a response to a
+#: result. Nothing in the configuration names them until the bands have been scored.
+AGE_BASIS_COLUMNS: Final[tuple[str, ...]] = ("age_basis_1", "age_basis_2", "age_basis_3")
+
+
 #: Macro covariates the selection may not remove, because their purpose is to absorb rather than
 #: to be tested. `moratorium_regime` is here for the reason `harp` is in
 #: `procedure.BASE_CATEGORICAL`: a selection free to drop it would be free to read the macro
 #: coefficients off a book in which a policy intervention is still unmarked. Rule 15 asks a
 #: declared sign of every *candidate*, and a protected covariate is not one -- it is not screened,
 #: not eliminated, and carries no prior.
+#:
+#: Rule 16's baseline along age belongs here on the same argument -- a selection free to drop it
+#: would read every other coefficient off a model whose time scale is a single parameter -- and
+#: `age_band` was here from 24 to 29 October 2026. It left with the band form: that fit violated
+#: rule 16's own monotonicity condition and was refused, so nothing in the specification names a
+#: baseline along age until the restricted basis replaces it. See `docs/rules.md` rule 16.
 PROTECTED_MACRO: Final[tuple[str, ...]] = ("moratorium_regime",)
 
 #: The economic dimension each candidate measures, fixed before any selection result.
@@ -635,6 +702,12 @@ CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
     # `buyer_type` was here until 19 October 2026 and the band-form selection removed it at
     # step 7. It stays in `procedure.CANDIDATE_CATEGORICAL`, which is the **input** and is fixed
     # before any fit; this is the **output**, so it is a subset of that input and not a copy.
+    #
+    # It came back on 29 October under rule 16's age baseline -- p = 0.177 moved inside the
+    # threshold once the age had its own coefficients, a first-time-buyer indicator standing in
+    # for the age profile -- and left again when that fit was refused. The movement is a result
+    # and is recorded in `docs/rules_register.md`; what belongs here is only what the published
+    # selection chose.
 }
 
 
@@ -662,6 +735,12 @@ BANDED_REFERENCE: Final[dict[str, float]] = {
     "credit_score": 790.0,
     "original_ltv": 50.0,
     "debt_to_income": 19.0,
+    # `age_band` was here from 24 to 29 October 2026, as rule 16's first choice of form, with
+    # `0 to 11` as the reference on 473,904,483 loan-months against `60 to 119`'s 469,648,978. The
+    # band form is retired: `H = exp(rho * (log t - eta))` with a piecewise-constant `eta` is a
+    # step function of `log t`, so an upward step takes the cumulative hazard **down** -- 8.6% at
+    # 36 months and 23.8% at 60 -- and rule 16 refuses such a fit rather than publishing it. The
+    # `default_shape` filter that key forced stays, and the comment there says why.
 }
 
 
@@ -749,6 +828,35 @@ def default_covariates() -> list[str]:
     ]
 
 
+def calendar_covariates(names: Iterable[str] | None = None) -> list[str]:
+    """Which covariates the kernel reads off the calendar key rather than the loan key.
+
+    `eta = A[i] + B[j]`, and which side a column belongs to is a declaration: a macro covariate
+    is "a function of the vintage quarter and the loan age, both already in the aggregation key",
+    which is `MACRO_CANDIDATES`; and the protected block is the same kind of object, because
+    `moratorium_regime` is a function of the observation month and nothing else.
+
+    **This existed as three expressions in three commands and they disagreed.** `cli.select`
+    declared `(*MACRO_CANDIDATES, *PROTECTED_MACRO)`; `backtest.campaign` declared the same and
+    carries the comment explaining why the protected names belong in it; and
+    `models.fits.fit_from_cells` -- the `fit` command -- declared `MACRO_CANDIDATES` alone, so
+    `moratorium_regime` has been landing on the **loan** side there since rule 1 introduced it.
+    The arithmetic survives it, because each row's loan index encodes its own value, but the loan
+    key inflates and the `encoding_fingerprint` diverges, so `fit` and `select` share no reading
+    of the same table. One function, called by all three, is the fix; a specification declared
+    three ways is the defect, and this project has found that shape of defect four times now.
+
+    `names` filters the answer to the covariates a caller actually loaded, which is what the
+    encoding's own unclassified check compares against; without it the whole declared set comes
+    back.
+    """
+    declared = (*MACRO_CANDIDATES, *PROTECTED_MACRO)
+    if names is None:
+        return list(declared)
+    wanted = set(declared)
+    return [name for name in names if name in wanted]
+
+
 def default_shape() -> str:
     """Rule 14's shape: every covariate fixed at origination, in rule 12's forms.
 
@@ -764,8 +872,24 @@ def default_shape() -> str:
     integrating to a survival function. `Factorisation.expand` refuses it in code as well, so the
     rule does not rest on this function being written correctly.
     """
+    # **Both lists are filtered by the origination-fixed set, and only one of them used to be.**
+    # `linear` has always been; `banded` iterated the whole of `BANDED_REFERENCE`, which was
+    # correct only by coincidence -- its three keys all happen to sit in `STATIC_CONTINUOUS`. The
+    # moment a banded covariate is not fixed at origination, the unfiltered version puts it in the
+    # **shape**, which is the one thing rule 14 refuses: a shape that moves with the age makes the
+    # hazard stop integrating to a survival function. A band of the **age** is exactly such a
+    # covariate; rule 16's first form was one, and this filter outlived it -- the band fit was
+    # refused on its own monotonicity condition before the filter could ever be tested by it, and
+    # the defect it closes is a property of this function and not of that covariate. It is the
+    # third defect of the shape found here -- after it read `CATEGORICAL_REFERENCE`, the scale's
+    # output, and after `default_covariates` did the same.
+    # `Factorisation.expand` would refuse the fit either way; a config that has to be caught by
+    # the engine is a config that is wrong.
+    fixed = set(STATIC_CONTINUOUS) | set(ORDINAL)
     linear = [name for name in STATIC_CONTINUOUS + ORDINAL if name not in BANDED_REFERENCE]
-    banded = [f"C({name}, Treatment({band}))" for name, band in BANDED_REFERENCE.items()]
+    banded = [
+        f"C({name}, Treatment({band}))" for name, band in BANDED_REFERENCE.items() if name in fixed
+    ]
     # `ORIGINATION_CATEGORICAL`, the set **offered**, not `CATEGORICAL_REFERENCE`, the set the
     # scale's selection kept. Rule 14's admissible side is an identity -- what is fixed at
     # origination -- and does not shrink when the scale's does.

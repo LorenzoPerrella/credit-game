@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 import pandas as pd
 
+from creditsurv.config import AGE_BANDS as _AGE_BANDS
 from creditsurv.data.aggregate import PRODUCTION_EDGES
 from creditsurv.data.panel import AGE
 
@@ -134,8 +135,11 @@ SEGMENTS: Final[dict[str, Segment]] = {
     )
 }
 
-#: Loan age bands, for calibration by seasoning.
-AGE_BANDS: Final[tuple[int, ...]] = (0, 12, 24, 36, 60, 120, 240, 400)
+#: Loan age bands, re-exported from `config` so the existing readers keep their import.
+#:
+#: Declared in `config` since 24 October 2026, because rule 16 lets the model read the age in
+#: bands and `features` sits below `views`, so the model cannot import it from here.
+AGE_BANDS: Final[tuple[int, ...]] = _AGE_BANDS
 
 
 def age_bands(frame: pd.DataFrame) -> pd.Series:

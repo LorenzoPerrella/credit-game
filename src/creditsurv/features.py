@@ -579,6 +579,14 @@ def add_macro_family(
         months = observation.to_numpy(dtype=np.int64)
         store("moratorium_regime", ((months >= opens) & (months <= closes)).astype(float))
 
+    # Rule 16's baseline along age was built here from 24 to 29 October 2026, as each band's
+    # lower edge. The band form was refused on rule 16's own monotonicity condition -- a
+    # piecewise-constant `eta` makes the cumulative hazard a step function of `log t`, and it
+    # stepped down 8.6% at 36 months and 23.8% at 60 -- so no column of the age is built today.
+    # The restricted basis that replaces it belongs here, beside `moratorium_regime` and for the
+    # same reason: it reads no series, it is a function of one of the key's own columns, and it
+    # costs no cells.
+
     # The refinancing benchmark is switched by term, repeating what the source data
     # says rather than what is convenient: a fifteen-year loan is refinanced against
     # the fifteen-year rate. That is possible only because term_years is in the cell
