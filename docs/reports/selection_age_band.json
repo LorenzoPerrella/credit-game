@@ -1,0 +1,49 @@
+{
+  "what": "Rule 16's banded age baseline, fitted. NOT a published specification: section 5's out-of-sample age-band criterion, which is what rule 16 says admits the form, has not been measured on it.",
+  "the_refusal_that_was_withdrawn": "On 29 October 2026 this fit was refused as violating rule 16's monotonicity condition. The refusal was withdrawn on 30 October. episode_hazards (models/aft.py:492-493) takes its increment at FIXED covariates -- H(a+1 | x_a) - H(a | x_a) = exp(-rho*eta_a) * ((a+1)**rho - a**rho) -- and both factors are positive, so the monthly hazard is non-negative for every eta profile. The quantity that fell was H(a | eta_b) against H(a | eta_b+1): two covariate vectors at one age, which is two loans and not one loan's curve. Rule 16's condition is withdrawn, not reworded.",
+  "fit": {
+    "hash": "a011cd438634371d",
+    "sample": "training half",
+    "formula": "C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + C(age_band, Treatment(0.0)) + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
+    "ancillary": "term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
+    "distribution": "weibull",
+    "cells": "cells_exclude.parquet:448169670:1791619429593537860",
+    "log_likelihood": -10627259.148857925,
+    "minutes": 5.778,
+    "selection_seconds": 14007
+  },
+  "band_coefficients": {
+    "0": 0.0,
+    "12": -0.128311,
+    "24": -0.086231,
+    "36": 0.063848,
+    "60": 0.278733,
+    "120": 0.318061,
+    "240": 0.288168
+  },
+  "implied_monthly_hazard_at_the_reference_loan": {
+    "note": "Through episode_hazards on the fitted model, ages 0 to 359, every other covariate at its reference level. Per 100,000 loan-months a month.",
+    "minimum": 0.0735,
+    "maximum": 214.3539,
+    "any_non_positive": false,
+    "cumulative_hazard_strictly_increasing": true,
+    "at_the_band_boundaries": {
+      "11": 4.363,
+      "12": 6.568,
+      "23": 15.171,
+      "24": 14.538,
+      "35": 23.775,
+      "36": 17.398,
+      "59": 33.264,
+      "60": 20.629,
+      "119": 50.879,
+      "120": 46.947,
+      "239": 116.725,
+      "240": 125.819
+    }
+  },
+  "what_is_true_about_the_form": "The hazard is discontinuous in age: 23.775 per 100,000 at age 35 against 17.398 at 36, and 33.264 at 59 against 20.629 at 60. Positive and the cumulative hazard rises; not continuous, so a term structure built from it has kinks at six ages a reporting grouper chose. That prefers a smooth basis on grounds of smoothness, which decides a tie rather than refusing a form.",
+  "what_is_owed": "Section 5's out-of-sample age-band criterion, anchored, on the declared test window, by the backtest_by_age_band view. Until then publishing this form and refusing it are both unjustified, so config stays at the published specification.",
+  "prediction_registered_24_october_still_open": "5 of 7 age bands or better out of sample, with the remaining miss above 60 months. Neither falsified nor confirmed: not measured.",
+  "also_found": "buyer_type survives this selection where it was eliminated at step 7 on p = 0.177, with six eliminations instead of seven -- a first-time-buyer indicator standing in for the age profile until the age had its own coefficients."
+}

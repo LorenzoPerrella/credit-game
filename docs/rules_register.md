@@ -942,63 +942,72 @@ the fix, which would be a finding about the Weibull rather than about the basis.
 
 ## 30 October 2026
 
-### Rule 16 — The band form was fitted, refused, and retired as infeasible
+### Rule 16 — The band form was fitted, read as refused, and the reading was wrong
 
-**The prediction of 24 October is falsified, and not on the criterion it named.** It said 5 of 7
-age bands or better out of sample, with the remaining miss above 60 months. The fit never reached
-that measurement: it violates this rule's own monotonicity condition, so it is refused and not
-scored. A form can fail a coherence condition before it is allowed to be judged, and that
-possibility was not in the prediction.
+**The retraction first, because it is the result.** The banded baseline was fitted, read as
+violating rule 16's monotonicity condition at four of six band boundaries, and refused. **That
+reading was wrong and the refusal is withdrawn.** The model's monthly hazard is non-negative for
+every `eta` profile, by construction.
 
-**The measurement**, on the training half — fit `a011cd438634371d`, log-likelihood
--10,627,259.1489. The step each band boundary takes in the cumulative hazard, exactly, as
-`H(a+)/H(a-) = exp(-rho * delta_eta)` since the age is the same on both sides:
+`episode_hazards` (`models/aft.py:492-493`) evaluates the cumulative hazard at the times `a` and
+`a + 1` **with the covariates the row itself carries**, so the increment is
 
-| boundary | coefficient | step in `eta` | `H(a+)/H(a-)` | hazard mass | at risk | |
-|---|---|---|---|---|---|---|
-| 0 | +0.000000 | (reference) | | | | |
-| 12 | -0.128311 | -0.128311 | 1.3092 | | 35,228,798 | rises |
-| **24** | **-0.086231** | **+0.042079** | **0.9154** | **-87** | 26,255,739 | **H falls 8.5%** |
-| **36** | **+0.063848** | **+0.150079** | **0.7297** | **-600** | 20,941,895 | **H falls 27.0%** |
-| **60** | **+0.278733** | **+0.214885** | **0.6369** | **-1,718** | 13,713,500 | **H falls 36.3%** |
-| **120** | **+0.318061** | **+0.039327** | **0.9208** | **-1,023** | 3,059,277 | **H falls 7.9%** |
-| 240 | +0.288168 | -0.029892 | 1.0648 | | 23,404 | rises |
+    H(a+1 | x_a) - H(a | x_a) = exp(-rho * eta_a) * ((a+1)**rho - a**rho)
 
-**Four boundaries of six**, on 63,970,411 loan-months at risk between them, all far inside the
-exposure floor. The ratios are at the reference loan's `rho = 2.0995`; rule 14's shape spans `rho`
-from 0.523 to 2.115 across the loan block, so the magnitudes move with the loan and the **sign**
-decides for every one of them, `rho` being an exponential.
+Both factors are positive — `exp` of a real number, and `(a+1)^rho - a^rho` for any `rho > 0` —
+so no `eta(a)` whatever makes it negative. Verified through the refused model itself over ages 0
+to 359: the monthly hazard runs **7.3e-07 to 2.1e-03**, nothing at or below zero, and the implied
+cumulative hazard is **monotone increasing at every age**.
 
-**And the coefficients bear the algebra out exactly.** `eta` falls once, to 12 months, then rises
-at every boundary through 120: the model raising the hazard over the year-one hump and lowering it
-across the seasoned book, which is the two-signed correction the measured defect asks for. One
-down-step, four up-steps, and every up-step takes `H` with it.
+What was computed instead was `H(a | eta_b)` against `H(a | eta_{b+1})` — the cumulative hazards
+of **two different covariate vectors at the same age**, which is two different loans — and the
+ratio between them read as a jump in one loan's curve. The model never places those two numbers
+side by side, so the "negative hazard mass" of -87, -600, -1,718 and -1,023 does not exist.
 
-**Two corrections to the first reading of this, both recorded because the second is serious.**
+**Three errors in one reading, in the order they were made.** The direction of each step was
+inferred from the **sign** of a coefficient difference, which is an argument about `eta` and not
+about `H`. The coefficients first quoted belonged to `cb4f937bc011cf8f`, the **"after 2010-06"
+sub-sample** of rule 9's own stability test rather than to the model. And then the corrected
+numbers, taken from the right fit and computed in closed form, were computed on **the wrong
+object**. The first two were caught and recorded; the third invalidates the conclusion both of
+them were serving, and it was caught only by reading what `episode_hazards` actually does.
 
-The *method* was wrong first: the direction of each step was inferred from the **sign** of the
-coefficient difference, which is an argument about `eta` and not about `H`, where rule 16's
-amendment of 24 October had already said the check is numerical and on `H`.
+**The lesson is not about care.** It is that an algebraic argument about a model is worth less
+than one line of the code that computes it, and this project has the second available at all
+times. The claim "a cumulative hazard that falls is not one" is true of the object rule 16 was
+written about and irrelevant to the object the package builds: this model is an AFT with
+**time-varying covariates**, integrated month by month at fixed covariates within each month, and
+`moratorium_regime`, `ltv_change` and `unemployment_change` have made `eta` step between
+consecutive months since the day they entered it. A condition that refuses a baseline along age
+would have to refuse those three as well. Rule 16's condition is therefore **withdrawn**, not
+reworded.
 
-And the *fit* was the wrong one. The coefficients first reported — 0, -0.14439, -0.20143, -0.15715,
--0.02313, -0.06247, -0.21590, with two falling boundaries at 36 and 60 — belong to
-`cb4f937bc011cf8f`, the **"after 2010-06" sub-sample** of rule 9's own stability test, not to the
-model. The five cached fits of that specification differ only in their `sample` key, and the
-training-half one is the model. The misreading **understated the violation**: two falls become
-four, and 23.8% at 60 months becomes 36.3%. The verdict was right for the wrong numbers, which is
-the failure mode this register exists to make visible — and it is the second time in a fortnight
-that a number here was of a model other than the one it was said to be of.
+**What is true about the band form, and what it is an argument for.** It makes the **hazard**
+discontinuous in age — through the fitted model, 23.8 per 100,000 loan-months at age 35 against
+17.4 at 36, and 33.3 at 59 against 20.6 at 60. The hazard is positive and the cumulative hazard
+rises; what it is not is continuous, so a term structure built from it has kinks at six ages
+chosen by a reporting grouper. That prefers a smooth basis on grounds of **smoothness**, which
+decides a tie rather than refusing a form.
 
-**And the form could not have passed.** With a piecewise-constant `eta`, `log H` is a step
-function of `log t`, so `H` jumps down wherever `eta` steps up. The defect this rule was declared
-on needs the hazard raised over 12 to 35 months and lowered from 60 on — `eta` falling and then
-rising — so any band vector correcting both signs steps upward somewhere. **The form cannot
-satisfy rule 16 and repair rule 16's premise at the same time.** The refusal is therefore about
-the form and not about this fit, which is what licenses the fallback; the amendment in
-`docs/rules.md` carries the argument and its admissibility test.
+**What is owed.** Section 5's out-of-sample age-band criterion, on the band fit, anchored, on the
+declared test window — which is what rule 16 said before any of this and what nothing has yet
+measured. Until it is measured, publishing the band form and refusing it are both unjustified, so
+`config` stays at the published specification for that reason and not for the one committed on 29
+October.
 
-**What the data asks for, and it was measurable all along.** `d log H / d log t` — the quantity a
-Weibull holds constant at `rho` — off the Nelson-Aalen curve of the estimation table:
+**The prediction of 24 October therefore still stands open**: 5 of 7 age bands or better out of
+sample, with the remaining miss above 60 months. It has not been falsified and it has not been
+confirmed; it has not been measured.
+
+**And the probe stays, with its reason restated.** A declared baseline form is fitted by
+exposure-weighted least squares to the book's own Nelson-Aalen `log H(log age)` and the age profile
+it implies is registered before the heavy fit. Not because it catches a coherence failure — there
+is none to catch — but because the implied profile of a declared form is the cheapest thing in
+this project to look at, it is the thing section 5's criterion is about, and in three and a half
+hours of selection nobody looked at it.
+
+**What the data asks for, unaffected by any of the above.** `d log H / d log t`, the quantity a
+Weibull holds **constant** at `rho`, off the Nelson-Aalen curve of the estimation table:
 
 | age | 6 | 12 | 24 | 36 | 60 | 84 | 120 |
 |---|---|---|---|---|---|---|---|
@@ -1006,15 +1015,52 @@ Weibull holds constant at `rho` — off the Nelson-Aalen curve of the estimation
 
 It halves. A straight line in `log t` costs **2.6x** the exposure-weighted mean square error of a
 single bend — 0.283 against 0.108 — and past two interior knots the error stops moving. One
-parameter was being asked to be two numbers, which is the defect in one line and needed no fit to
-see.
+parameter is being asked to be two numbers, which is rule 16's premise and is untouched by the
+retraction.
 
-**The probe this installs.** From today a declared baseline form is first fitted by
-exposure-weighted least squares to that same Nelson-Aalen curve, and its `sup g'`, its weighted
-error and its implied A/E by band are registered **before** the heavy fit. It costs milliseconds.
-Had it existed, the step-down would have been visible in seconds instead of after three and a
-half hours. Declared not to be evidence *for* a form — it is in-sample and marginal — only
-against one.
+### Rule 16 — The probe, built, and what it says about all three forms
+
+The instrument rule 16 now requires: a declared baseline form fitted by exposure-weighted least
+squares to the book's own monthly hazard, over the ages above `nonparametric.EXPOSURE_FLOOR`, read
+off `docs/tables/km_vs_model.parquet` — observed counts on the training half. `models/baseline.py`,
+held by sixteen tests.
+
+**It fits the object the package computes, which took two attempts.** `episode_hazards` builds
+
+    increment(a) = exp(-rho * eta_a) * ((a+1)**rho - a**rho)
+
+with `eta_a` the **cell's own** value, constant across the month — so the baseline is a per-month
+*multiplier* on a Weibull increment, not a reshaping of `log H`'s own curve. The first version of
+the probe fitted `log H` at one `u` per month, which makes `H` jump between months and takes the
+increment across two different `eta`: **the same error whose retraction is above, reproduced inside
+the instrument built to avoid it.** It read the band form at 1 of 6 bands in band where the right
+structure reads 6 of 6. An instrument that models something other than the model is worse than no
+instrument, and the test that catches it generates data from the package's increment with a known
+step and reads the step back.
+
+**All three forms, on the corrected object:**
+
+| form | marginal `rho` | weighted MSE | `sup g'` | 0-11 | 12-23 | 24-35 | 36-59 | 60-119 | 120-239 | in band |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Weibull alone, as published | 1.830 | 0.65458 | 0.0000 | **1.536** | **1.702** | **1.522** | 1.122 | **0.664** | **0.391** | 1 of 6 |
+| bands, rule 16's first form | 3.145 | 0.30629 | 0.0000 | 1.179 | 0.945 | 0.961 | 0.958 | 0.912 | 0.919 | 6 of 6 |
+| restricted basis, the fallback | 3.510 | 0.20652 | 0.8671 | **1.253** | **0.771** | 0.940 | 1.129 | 0.963 | 1.067 | 4 of 6 |
+
+**What this settles and what it does not.** It settles that the defect is real and large on the
+same instrument: the published Weibull reads **1 of 6** in sample and misses high over 12 to 35
+months and low from 60 on, which is the direction the out-of-sample criterion measured. It settles
+that `rho` is the compromise it was said to be — 1.83 alone, 3.15 and 3.51 once a baseline takes
+the long-age flattening off it.
+
+It settles **nothing** about which remedy to publish. The band form's 6 of 6 is a saturated factor
+reproducing the means of the criterion's own groups, which the register declared on 24 October
+would say nothing — and this is the arithmetic of that prediction arriving. The basis's 4 of 6 is
+not evidence against it either, for the same reason in reverse: three parameters on a different
+grouping are not saturated, so an in-sample reading of them is a real test, and a form that nearly
+passes a real test is not comparable with one that cannot fail a vacuous one.
+
+**So the comparison is out of sample, which is where rule 16 put it before any of this.** The
+probe's own declaration stands: evidence against a form, never for one.
 
 ### What the refused fit found anyway, recorded and not acted on
 
@@ -1025,10 +1071,8 @@ along age absorbs part of the age profile into whatever correlates with seasonin
 buyers are younger loans. It is rule 12's own warning generalising — "a covariate that survived
 on a straight line might not on a bend" — with the converse holding too.
 
-Recorded rather than carried forward. `config.CATEGORICAL_REFERENCE` is reverted with the rest of
-the specification, because what belongs there is what the **published** selection chose, and the
-selection that kept `buyer_type` is refused. The replacement form re-runs steps 7 to 10 cold and
-nothing about `buyer_type` is pre-committed either way.
+Recorded rather than carried forward, because `config.CATEGORICAL_REFERENCE` holds what the
+**published** selection chose and the band selection is not published yet.
 
 **And a defect in the calendar-side declaration, found while scoping the revert.** `eta = A[i] +
 B[j]`, and which side a covariate belongs to was written out as three separate expressions in

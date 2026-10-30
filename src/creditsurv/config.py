@@ -454,6 +454,53 @@ BOOK_WINDOW_MONTHS: Final = 12
 #: compare. `views.segments.age_bands` labels the same cut with strings for a table a person reads.
 AGE_BANDS: Final[tuple[int, ...]] = (0, 12, 24, 36, 60, 120, 240, 400)
 
+#: Rule 16's baseline along age: the offset that makes `log(age)` a number at age zero.
+#:
+#: The row is at risk over `(age, age + 1]` and this is that interval's midpoint -- the one point
+#: in it that is not an endpoint, so it is the interval's own centre and not a tuned parameter.
+AGE_BASIS_OFFSET: Final = 0.5
+
+#: Where the basis bends, in `u = log(age + AGE_BASIS_OFFSET)`. Declared before the fit.
+#:
+#: Five knots, so four degrees of freedom and -- with the linear term dropped for the collinearity
+#: with `rho * u` -- **three** columns. The interior three sit at the 25th, 50th and 75th centile
+#: of the **default-weighted** `u`, which is Royston-Parmar's own convention: knots go where the
+#: uncensored event times are, because that is where the curve is pinned down. Measured on
+#: `docs/tables/km_vs_model.parquet` -- observed counts on the training half, the table the model
+#: is estimated on -- over the ages carrying at least `nonparametric.EXPOSURE_FLOOR` loan-months:
+#: **ages 24.5, 43.4 and 70.9**.
+#:
+#: The boundary knots are the 1st and 99th centile of the same distribution, **ages 3.4 and
+#: 169.9**, and not the extreme event times the convention literally names. At ages 0, 1 and 2
+#: this book records 272, 45 and 199 defaults at hazards of 7.2e-06, 1.1e-06 and 4.7e-06 against
+#: age 3's 2.5e-04 -- and it cannot record a real one, because at three missed payments the loan
+#: has defaulted *by definition*, so a loan 90 days delinquent at age zero is a loan whose
+#: `loan_age` restarted at a modification. 516 of 1,439,685 defaults, 0.036%. Anchoring a cubic
+#: on them would bend the basis hardest where the event is impossible. The spline is linear below
+#: the first knot, which is the right shape there anyway: a hazard ramping from zero.
+#:
+#: 98.21% of the defaults above the exposure floor fall between the boundary knots.
+AGE_BASIS_KNOTS: Final[tuple[float, ...]] = (1.3547, 3.2203, 3.7825, 4.2677, 5.1383)
+
+#: The ages the monotonicity certificate is evaluated over, in the same `u`.
+#:
+#: Rule 16 says the check applies "over the ages carrying exposure", which is every age at or
+#: above `nonparametric.EXPOSURE_FLOOR`: **0 to 221 months**, 2,111,289,771 loan-months and
+#: 99.92% of the defaults. Wider than the knots on purpose -- the basis is linear outside them, so
+#: `g'` is constant there and the certificate covers the extrapolation as cheaply as the interior.
+AGE_BASIS_RANGE: Final[tuple[float, float]] = (-0.6931, 5.4004)
+
+#: The basis columns, in the order `models.baseline` builds and reads them.
+#:
+#: **Declared, not yet licensed.** Rule 16 fixes the order the forms are tried in -- bands first,
+#: the restricted basis only if bands do not reach section 5's out-of-sample age criterion -- and
+#: that criterion has not been measured on the band fit. These constants are the fallback's form,
+#: settled from the estimation table before anyone knows whether it will be needed, which is the
+#: strongest version of declaring a form in advance: nothing about them can be a response to a
+#: result. Nothing in the configuration names them until the bands have been scored.
+AGE_BASIS_COLUMNS: Final[tuple[str, ...]] = ("age_basis_1", "age_basis_2", "age_basis_3")
+
+
 #: Macro covariates the selection may not remove, because their purpose is to absorb rather than
 #: to be tested. `moratorium_regime` is here for the reason `harp` is in
 #: `procedure.BASE_CATEGORICAL`: a selection free to drop it would be free to read the macro
