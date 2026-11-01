@@ -8,6 +8,7 @@ its failures are visible too.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
@@ -368,6 +369,11 @@ loan-level right-censored one by AIC is not a comparison at all.
     # formula, which the model this report describes actually carries. A report that named
     # both "shape" would appear to state two contradictory ones.
     relaxed, ancillary = shape_formula(covariates, CATEGORICAL_REFERENCE)
+    # **Rule 14 already puts the relaxed covariate in the shape**, so the test of relaxing it is
+    # not defined: the "full" model is the fitted one, the parameter counts are equal, and the
+    # likelihood-ratio test raised -- which the end-to-end pipeline hid for days behind an earlier
+    # failure. The section then says what the model carries instead of testing a nesting it lacks.
+    already = isinstance(published_shape, str) and relaxed in re.findall(r"\w+", published_shape)
     shape_test = (
         shape_depends_on_covariates(
             encoded,
@@ -378,7 +384,7 @@ loan-level right-censored one by AIC is not a comparison at all.
             fitted=fitted,
             fit=fit,
         )
-        if extra_fits
+        if extra_fits and not already
         else None
     )
     why = (
@@ -400,7 +406,15 @@ the timing of losses even when it gets the total right.
 Tested on *{label(relaxed)}*{why}:
 """
     )
-    if shape_test is None:
+    if already:
+        report.text(
+            "> **Not a test this model can run.** Rule 14 already lets the shape read every "
+            f"covariate fixed at origination, *{label(relaxed)}* among them, so relaxing it "
+            "into the shape adds no parameter and there is no nested model to test against. "
+            "The question this section asks is answered by the shape the model carries, "
+            "stated with its formula at the end of this report."
+        )
+    elif shape_test is None:
         report.text(_SKIPPED.format(what="testing the shape", flag="--extra-fits"))
     else:
         report.table(shape_test, decimals=4)

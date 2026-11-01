@@ -48,3 +48,8 @@ Convalida PD Lifetime Freddie Mac*
 
 # Rust build products of the optional compiled kernel.
 target/
+
+# Claude Code: personal settings stay local; the 3.11 mypy leg runs in its own environment so the
+# main .venv is never re-synced underneath a running suite.
+.claude/settings.local.json
+.venv-py311/

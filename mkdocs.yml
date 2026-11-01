@@ -82,6 +82,7 @@ nav:
       - Rules written first: rules.md
       - The register of amendments: rules_register.md
       - How the code is arranged: architecture.md
+      - Engineering notes: development.md
       - Variable selection: variable_selection.md
       - The methodology report: reports/methodology.md
       - The selection record: reports/selection.md

@@ -94,7 +94,9 @@ uv run mkdocs build --strict
 
 CI runs lint, format, strict type checking, tests and a packaging build on Python 3.11 and
 3.12, builds the site on every pull request and publishes it on every merge to `main`.
-[`CLAUDE.md`](CLAUDE.md) holds the rules that are not obvious from the code.
+[`CLAUDE.md`](CLAUDE.md) holds the rules that apply to every task, `.claude/` the path-scoped
+rules, the skills and the hooks that enforce the rest, and
+[`docs/development.md`](docs/development.md) the measurements behind them.
 
 ## Licence
 
