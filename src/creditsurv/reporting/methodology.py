@@ -107,21 +107,6 @@ def _comparison_reading(regression: pd.DataFrame, against_km: pd.DataFrame, repo
     return "\n\n".join(reading)
 
 
-def _direction(rho: float) -> str:
-    """How the Weibull hazard moves with age, read off its shape parameter.
-
-    Stated rather than asserted: a report that says "the hazard rises" while its own
-    number says otherwise is worse than one that says nothing.
-    """
-    if rho > 1.0:
-        return "**rises** with loan age, which is the seasoning pattern mortgages are expected to "
-    if rho < 1.0:
-        return "**falls** with loan age, which is *not* the seasoning pattern mortgages usually "
-    return "is constant in loan age, so the exponential is not rejected and is the simpler "
-
-
-#: What a skipped section says instead of quietly disappearing. A report missing a
-#: section reads as a report whose author had nothing to say about it.
 _SKIPPED: Final = (
     "> **Not run.** {what} costs a fit of its own, which on the whole population is "
     "hours rather than seconds. Re-run with `{flag}` to compute it."
@@ -257,12 +242,16 @@ each.
     if exponential is not None:
         report.heading("1. Is the hazard constant? No fit required", level=3).text(
             f"""
-The exponential is a Weibull with shape one, so the constant-hazard hypothesis is
-exactly `log rho = 0` and reads straight off the fitted coefficient table.
+The exponential nests inside this model at the point where the hazard stops depending on
+age: every shape coefficient at zero -- rule 14 lets the shape read the covariates fixed at
+origination -- and, where rule 16's basis is in the scale, every basis coefficient at zero too,
+because with the basis present a shape of one is a hazard that still bends with age. So the
+test is the **joint** Wald test of all of them, read off the fitted covariance, no fit required.
 
-**rho = {exponential["rho"]:.4f}, z = {exponential["z"]:.0f}, p = {exponential["p_value"]:.2e}.**
-The hazard {_direction(exponential["rho"])}show, and the constant-hazard hypothesis
-is settled without estimating anything further.
+**Joint Wald statistic {exponential["joint_statistic"]:,.0f} on {exponential["joint_df"]:.0f}
+degrees of freedom, p = {exponential["joint_p_value"]:.2e}.** The reference loan's own shape is
+rho = {exponential["rho"]:.4f} (z = {exponential["z"]:.0f}), which is a statement about one
+loan and not about the hazard of the book.
 """
         )
 

@@ -24,6 +24,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
+# `config` imports nothing from the package, and both sit in the floor layer, so this cannot
+# cycle; it is the one name the registry needs to generate rule 16's basis entries.
+from creditsurv.config import AGE_BASIS_COLUMNS
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
@@ -477,53 +481,26 @@ _VARIABLES: Final[tuple[Variable, ...]] = (
         unit="indicator",
         source="CARES Act and Freddie Mac forbearance reporting",
     ),
-    _macro(
-        "age_basis_1",
-        "Seasoning basis 1",
-        "The first column of rule 16's baseline along age: a restricted cubic spline in "
-        "log(age + 1/2), on five knots at the 1st, 25th, 50th, 75th and 99th centile of the "
-        "default-weighted ages above the exposure floor -- ages 3.4, 24.5, 43.4, 70.9 and 169.9. "
-        "The three columns are **one term**: the object is the function they span, and no single "
-        "coefficient is interpretable on its own. The linear column is dropped, because the "
-        "Weibull's shape is it, so zero coefficients are the Weibull exactly nested. They read no "
-        "series -- the loan's own age is the whole of it -- and cost no cells, because "
-        "period = cohort + age already puts the age in the calendar key. Orthonormalised from "
-        "the declared knots by exact quadrature, which reads no data and brings a variance "
-        "inflation of 12,468 down to 1.1. Rule 16 of docs/rules.md; creditsurv.baseline builds it.",
-        unit="orthonormal",
-        source="the loan's own age, as origination month plus age",
-    ),
-    _macro(
-        "age_basis_2",
-        "Seasoning basis 2",
-        "The second column of rule 16's baseline along age: a restricted cubic spline in "
-        "log(age + 1/2), on five knots at the 1st, 25th, 50th, 75th and 99th centile of the "
-        "default-weighted ages above the exposure floor -- ages 3.4, 24.5, 43.4, 70.9 and 169.9. "
-        "The three columns are **one term**: the object is the function they span, and no single "
-        "coefficient is interpretable on its own. The linear column is dropped, because the "
-        "Weibull's shape is it, so zero coefficients are the Weibull exactly nested. They read no "
-        "series -- the loan's own age is the whole of it -- and cost no cells, because "
-        "period = cohort + age already puts the age in the calendar key. Orthonormalised from "
-        "the declared knots by exact quadrature, which reads no data and brings a variance "
-        "inflation of 12,468 down to 1.1. Rule 16 of docs/rules.md; creditsurv.baseline builds it.",
-        unit="orthonormal",
-        source="the loan's own age, as origination month plus age",
-    ),
-    _macro(
-        "age_basis_3",
-        "Seasoning basis 3",
-        "The third column of rule 16's baseline along age: a restricted cubic spline in "
-        "log(age + 1/2), on five knots at the 1st, 25th, 50th, 75th and 99th centile of the "
-        "default-weighted ages above the exposure floor -- ages 3.4, 24.5, 43.4, 70.9 and 169.9. "
-        "The three columns are **one term**: the object is the function they span, and no single "
-        "coefficient is interpretable on its own. The linear column is dropped, because the "
-        "Weibull's shape is it, so zero coefficients are the Weibull exactly nested. They read no "
-        "series -- the loan's own age is the whole of it -- and cost no cells, because "
-        "period = cohort + age already puts the age in the calendar key. Orthonormalised from "
-        "the declared knots by exact quadrature, which reads no data and brings a variance "
-        "inflation of 12,468 down to 1.1. Rule 16 of docs/rules.md; creditsurv.baseline builds it.",
-        unit="orthonormal",
-        source="the loan's own age, as origination month plus age",
+    # Rule 16's basis along age: **one term in three columns**, so one definition generated over
+    # `AGE_BASIS_COLUMNS` rather than three hand-copied entries that drift apart -- the copies had
+    # already disagreed with the module that owns the numbers. The figures live in
+    # `creditsurv.baseline`, which is cited rather than re-quoted.
+    *(
+        _macro(
+            name,
+            f"Seasoning basis {position}",
+            f"Column {position} of {len(AGE_BASIS_COLUMNS)} of rule 16's baseline along age: a "
+            "restricted cubic spline in log(age + 1/2) on five knots declared from the "
+            "estimation table, linear column dropped because the Weibull's shape is it, so zero "
+            "coefficients are the Weibull exactly nested. The columns are one term: the object is "
+            "the function they span, and no single coefficient is interpretable on its own. They "
+            "read no series and cost no cells, because period = cohort + age already puts the age "
+            "in the calendar key. Rule 16 of docs/rules.md; creditsurv.baseline builds them and "
+            "carries the knots and the conditioning figures.",
+            unit="orthonormal",
+            source="the loan's own age, as origination month plus age",
+        )
+        for position, name in enumerate(AGE_BASIS_COLUMNS, start=1)
     ),
     _macro(
         "housing_starts_growth",

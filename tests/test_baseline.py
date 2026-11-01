@@ -52,20 +52,28 @@ def test_the_basis_is_orthonormal_under_the_declared_measure() -> None:
     assert np.abs(gram - np.eye(width)).max() < 1e-9
 
 
-def test_the_basis_carries_no_intercept_and_no_linear_term() -> None:
-    """Rule 16's dropped column, as a property of the basis rather than of the formula.
+def test_the_basis_carries_no_intercept_and_spans_royston_parmar_exactly() -> None:
+    """The orthonormalisation is a change of coordinates, and this is what makes that true.
 
-    `rho` is the linear term and the intercept is the intercept; a basis with a component of
-    either would be fighting them for the same information, which is what the raw Royston-Parmar
-    columns do and what the orthonormalisation removes.
+    `eta` carries an intercept and **no free `u`** -- `rho * log t` enters through the increment
+    -- so a rotation of the curvature columns is harmless only if it stays inside
+    `span{1, z_2, ..., z_{m+1}}`. The first transform also projected out `u`, which moved every
+    column out of that span by a `u` weight of 0.910, -0.768 and 0.442 and changed a marginal
+    fit by 24.5 log-likelihood units. So: no component of the constant, and the two spans equal.
     """
     low, high = AGE_BASIS_RANGE
     grid = np.linspace(low, high, 200_001)
     columns = _panel(grid)
     weight = np.full(len(grid), (high - low) / len(grid))
-    for name, against in (("1", np.ones_like(grid)), ("u", grid)):
-        product = (columns * (against * weight)[:, None]).sum(axis=0) / (high - low)
-        assert np.abs(product).max() < 1e-3, f"the basis has a component of {name}"
+    constant = (columns * weight[:, None]).sum(axis=0) / (high - low)
+    assert np.abs(constant).max() < 1e-3, "the basis has a component of the constant"
+
+    raw = np.column_stack([np.ones_like(grid), baseline._truncated_power(grid, AGE_BASIS_KNOTS)])
+    declared = np.column_stack([np.ones_like(grid), columns])
+    for target, spanning in ((raw, declared), (declared, raw)):
+        solved, *_ = np.linalg.lstsq(spanning, target, rcond=None)
+        assert np.abs(spanning @ solved - target).max() < 1e-9
+    assert np.abs(baseline._TRANSFORM[:, 1]).max() == 0.0, "the transform must not touch u"
 
 
 def test_the_basis_is_linear_outside_the_boundary_knots() -> None:
@@ -147,7 +155,8 @@ def test_the_probe_recovers_a_weibull_it_is_given() -> None:
     out = baseline.probe(ages, np.full_like(ages, 1e6), defaults)
     assert out.marginal_rho == pytest.approx(rho, abs=0.02)
     assert abs(out.supremum_g_prime) < 0.05
-    assert out.weighted_mse < 1e-4
+    # A Poisson deviance, so relative to the events it is fitted to.
+    assert out.deviance / defaults.sum() < 1e-6
     assert set(out.describe()) >= {"marginal_rho", "actual_over_expected"}
 
 
@@ -198,15 +207,26 @@ def test_the_probe_recovers_a_baseline_multiplier_it_is_given() -> None:
 
 
 def test_the_probe_reads_the_published_weibulls_own_defect() -> None:
-    """The instrument is only worth having if it reproduces a defect already measured.
+    """Three properties of the probe on the book's own risk sets, each of which has to hold.
 
-    The published model is the Weibull alone, and its measured out-of-sample age profile misses
-    **high** over 12 to 35 months and **low** from 60 on. The probe is in sample and marginal, so
-    it cannot reproduce those numbers -- but if it does not reproduce their *direction* it is not
-    reading the same thing the criterion reads.
+    **Nesting.** The band form and the basis both nest the Weibull, and the probe is maximum
+    likelihood, so neither may fit worse; a deviance above the Weibull's would be the optimiser
+    failing, not the form.
+
+    **Saturation.** The band form's indicators are the criterion's own grouping, and the Poisson
+    score equations make a saturated factor reproduce the events of its groups exactly. That is
+    the register's declaration of 24 October 2026 -- "a saturated factor on the criterion's own
+    grouping reproduces the means of its own groups" -- as an identity rather than a warning. A
+    reading other than 1.000 here is an off-by-one in the indicators, which this test caught twice.
+
+    **Direction.** The marginal Weibull misses the way the out-of-sample criterion measured the
+    published model missing: low in the first year, high over 24 to 35 months, low on the seasoned
+    book. The first probe, a least-squares fit weighted by exposure, read the first year *high* --
+    the instrument had the sign wrong, because three ages of near-zero events dominated it.
     """
     import pandas as pd
 
+    from creditsurv.config import AGE_BANDS
     from creditsurv.models.nonparametric import EXPOSURE_FLOOR
 
     table = pd.read_parquet("docs/tables/km_vs_model.parquet")
@@ -214,17 +234,25 @@ def test_the_probe_reads_the_published_weibulls_own_defect() -> None:
     rows = whole[whole["at_risk"].to_numpy(dtype=float) >= EXPOSURE_FLOOR]
     if rows.empty:
         pytest.skip("the committed risk sets carry no age above the exposure floor")
-
-    out = baseline.probe(
+    arguments = (
         rows["age"].to_numpy(dtype=float),
         rows["at_risk"].to_numpy(dtype=float),
         rows["defaults"].to_numpy(dtype=float),
-        form=baseline.WEIBULL,
     )
-    profile = out.actual_over_expected
-    assert profile["12 to 23"] > 1.25, "the young bands should miss high"
-    assert profile["60 to 119"] < 0.80, "the seasoned bands should miss low"
-    assert out.supremum_g_prime == pytest.approx(0.0), "a straight line bends by nothing"
+    weibull = baseline.probe(*arguments, form=baseline.WEIBULL)
+    bands = baseline.probe(*arguments, form=baseline.bands(AGE_BANDS))
+    basis = baseline.probe(*arguments, form=baseline.BASIS)
+
+    assert bands.deviance <= weibull.deviance
+    assert basis.deviance <= weibull.deviance
+    assert all(
+        value == pytest.approx(1.0, abs=1e-6) for value in bands.actual_over_expected.values()
+    )
+    profile = weibull.actual_over_expected
+    assert profile["0 to 11"] < 1.0, "the first year should be over-predicted"
+    assert profile["24 to 35"] > 1.25, "the third year should be under-predicted"
+    assert profile["120 to 239"] < 0.80, "the seasoned book should be over-predicted"
+    assert weibull.supremum_g_prime == pytest.approx(0.0), "a straight line bends by nothing"
 
 
 def test_the_declared_basis_is_conditioned_well_enough_for_step_six() -> None:
@@ -259,6 +287,9 @@ def test_the_declared_basis_is_conditioned_well_enough_for_step_six() -> None:
     declared = inflation(baseline.age_basis(age))
 
     assert raw.max() > 1_000, "the raw columns were expected to be badly conditioned"
+    # The figures `creditsurv.baseline` quotes, pinned so a copy cannot drift from the measurement.
+    assert raw == pytest.approx([2_143, 12_596, 4_672], rel=0.01)
+    assert declared == pytest.approx([1.472, 1.217, 1.412], abs=0.01)
     assert declared.max() < VIF_THRESHOLD, (
         f"the declared basis carries VIF up to {declared.max():.2f}, at or above step 6's "
         f"threshold of {VIF_THRESHOLD}, so the selection could delete part of one function"

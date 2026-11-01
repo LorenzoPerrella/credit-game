@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from creditsurv.config import BANDED_REFERENCE, TIME_VARYING_CONTINUOUS
+from creditsurv.config import AGE_BASIS_COLUMNS, BANDED_REFERENCE, TIME_VARYING_CONTINUOUS
 from creditsurv.features import MACRO_DERIVED, MACRO_SOURCES
 from creditsurv.models.aft import coefficient_table
 from creditsurv.models.lifetime_pd import (
@@ -145,6 +145,13 @@ def marginal_effects(
     rows = []
     for name in continuous:
         if name not in baseline_panel.columns:
+            continue
+        # Rule 16's basis is the model's **time scale**: a one-sd shock to one of its columns is
+        # not an economy but a different age profile, and its coefficients are not separately
+        # interpretable -- the object is the function the three span. The stress scenario exempts
+        # it for the same reason (`tests/test_scenarios.py`); a marginal-effects table that shocked
+        # it would publish three rows nobody can read.
+        if name in AGE_BASIS_COLUMNS:
             continue
         if name in banded:
             moved = loans[name].map(banded[name])

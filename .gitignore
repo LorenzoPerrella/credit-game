@@ -48,3 +48,6 @@ Convalida PD Lifetime Freddie Mac*
 
 # Rust build products of the optional compiled kernel.
 target/
+
+# The 3.11 leg of mypy runs here, so the main .venv is never re-synced underneath a running suite.
+.venv-py311/

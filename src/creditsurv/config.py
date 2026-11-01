@@ -6,6 +6,7 @@ the model all describe the same variables, rather than drifting apart.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from enum import StrEnum
@@ -296,13 +297,22 @@ AGE_BASIS_OFFSET: Final = 0.5
 #: 98.21% of the defaults above the exposure floor fall between the boundary knots.
 AGE_BASIS_KNOTS: Final[tuple[float, ...]] = (1.3547, 3.2203, 3.7825, 4.2677, 5.1383)
 
-#: The ages the monotonicity certificate is evaluated over, in the same `u`.
+#: The ages the basis is orthonormalised over and the probe reads, as months of age.
 #:
-#: Rule 16 says the check applies "over the ages carrying exposure", which is every age at or
-#: above `nonparametric.EXPOSURE_FLOOR`: **0 to 221 months**, 2,111,289,771 loan-months and
-#: 99.92% of the defaults. Wider than the knots on purpose -- the basis is linear outside them, so
-#: `g'` is constant there and the certificate covers the extrapolation as cheaply as the interior.
-AGE_BASIS_RANGE: Final[tuple[float, float]] = (-0.6931, 5.4004)
+#: Every age at or above `nonparametric.EXPOSURE_FLOOR` on the estimation table: **0 to 221
+#: months**, 2,111,289,771 loan-months and 99.92% of the defaults. Wider than the knots on purpose
+#: -- the basis is linear outside them, so the extrapolation costs nothing to cover.
+AGE_BASIS_AGES: Final[tuple[int, int]] = (0, 221)
+
+#: The same range in `u = log(age + AGE_BASIS_OFFSET)`, computed and not typed.
+#:
+#: It was typed as `(-0.6931, 5.4004)`, four decimals truncated toward zero at both ends, which put
+#: `log(0.5) = -0.693147` and `log(221.5) = 5.400423` **outside** it: the two ages its own comment
+#: said it covered were the two it excluded, age 0's 272 defaults among them.
+AGE_BASIS_RANGE: Final[tuple[float, float]] = (
+    math.log(AGE_BASIS_AGES[0] + AGE_BASIS_OFFSET),
+    math.log(AGE_BASIS_AGES[1] + AGE_BASIS_OFFSET),
+)
 
 #: The basis columns, in the order `baseline` builds and reads them.
 #:
@@ -526,7 +536,8 @@ AGE_BANDS: Final[tuple[int, ...]] = (0, 12, 24, 36, 60, 120, 240, 400)
 #: coefficients are not separately interpretable, the object is the function, so `procedure`
 #: keeps them out of the screening and the VIF step rather than letting `stepwise_vif` delete two
 #: of the three columns of one function -- which it would, since it ranks protection rather than
-#: respecting it, and the raw columns carry a condition number of 57,402 on this book.
+#: respecting it, and the raw columns are badly conditioned -- `creditsurv.baseline` carries
+#: the figures.
 PROTECTED_MACRO: Final[tuple[str, ...]] = ("moratorium_regime", *AGE_BASIS_COLUMNS)
 
 #: The economic dimension each candidate measures, fixed before any selection result.
@@ -626,7 +637,11 @@ ELIMINATED: Final[dict[str, str]] = {
     # the score, the leverage and the debt burden that go with it. Rule 12 warned that "a
     # covariate that survived on a straight line might not on a bend"; this is that, and it
     # landed on a categorical rather than on the macro block, which came through unchanged.
-    "buyer_type": "step 7: p = 0.177 beside the loan block, where every other p-value reads 0.0000",
+    # `buyer_type` was eliminated here at step 7 on 19 October, at p = 0.177. The selection of 1
+    # November under rule 16's restricted basis keeps it -- screening at p = 3.5e-11 -- because
+    # the age now has its own coefficients and a first-time-buyer indicator is no longer standing
+    # in for the age profile. The band selection of 29 October had found the same and was set
+    # aside with that form; this one is the selection the configuration follows.
     # --- step 9: not identified beside a larger covariate of the same dimension ---
     #
     # **Rule 9's time cut, firing on its first run and catching what parity could not.** Both
@@ -720,11 +735,13 @@ CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
     # step 7. It stays in `procedure.CANDIDATE_CATEGORICAL`, which is the **input** and is fixed
     # before any fit; this is the **output**, so it is a subset of that input and not a copy.
     #
-    # It came back on 29 October under rule 16's age baseline -- p = 0.177 moved inside the
-    # threshold once the age had its own coefficients, a first-time-buyer indicator standing in
-    # for the age profile -- and left again when that fit was refused. The movement is a result
-    # and is recorded in `docs/rules_register.md`; what belongs here is only what the published
-    # selection chose.
+    # It came back on 29 October under the band form and left with it; it is back on 1 November
+    # under the restricted basis, which is the selection this configuration now follows. **And
+    # the configuration has to follow it, which it briefly did not**: with the record keeping it
+    # and this map leaving it out, `default_formula()` named a model the selection never chose,
+    # and `fits.selection_start` refused the selection's optimum as a warm start because the term
+    # sets differed -- which is how a `report` starts cold.
+    "buyer_type": "repeat",
 }
 
 

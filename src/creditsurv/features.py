@@ -604,11 +604,29 @@ def add_macro_family(
     #
     # `baseline` owns the arithmetic, including the data-free orthonormalisation without
     # which `stepwise_vif` would delete two of the three columns of one function.
+    #
+    # **All three or none.** A request for any column builds and stores the whole basis, because
+    # a subset is a different function of the age under the same name -- the outcome
+    # `procedure._whole_basis_or_none` refuses in the selection, and which this builder used to
+    # hand any caller that narrowed its column list.
+    #
+    # **Built on the distinct ages and indexed**, because an age is an integer in a few hundred
+    # values and a row count is tens of millions. Built per row, `age_basis` allocated a float64
+    # design five columns wide plus its truncated-power temporaries: measured at 80 bytes a row,
+    # about 5.25 GB of transient peak on the 59.7-million-row training half that `report` still
+    # expands, where one gap covariate costs 32. The lookup is ~400 rows and the per-row cost is
+    # one gather per column.
     if any(requested(name) for name in AGE_BASIS_COLUMNS):
-        basis = age_basis((observation - origination_month).to_numpy(dtype=np.int64))
+        ages = (observation - origination_month).to_numpy(dtype=np.int64)
+        if ages.size and ages.min() < 0:
+            message = (
+                f"A loan-month at age {int(ages.min())}: the observation precedes the origination, "
+                "so the basis along age has no value to give it."
+            )
+            raise ValueError(message)
+        lookup = age_basis(np.arange(int(ages.max()) + 1 if ages.size else 1))
         for position, name in enumerate(AGE_BASIS_COLUMNS):
-            if requested(name):
-                store(name, basis[:, position])
+            store(name, lookup[ages, position])
 
     # The refinancing benchmark is switched by term, repeating what the source data
     # says rather than what is convenient: a fifteen-year loan is refinanced against

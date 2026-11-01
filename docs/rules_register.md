@@ -1143,7 +1143,7 @@ wanted.
 
 The instrument rule 16 now requires: a declared baseline form fitted by exposure-weighted least
 squares to the book's own monthly hazard, over the ages above `nonparametric.EXPOSURE_FLOOR`, read
-off `docs/tables/km_vs_model.parquet` — observed counts on the training half. `models/baseline.py`,
+off `docs/tables/km_vs_model.parquet` — observed counts on the training half. `creditsurv/baseline.py`,
 held by sixteen tests.
 
 **It fits the object the package computes, which took two attempts.** `episode_hazards` builds
@@ -1182,6 +1182,103 @@ passes a real test is not comparable with one that cannot fail a vacuous one.
 
 **So the comparison is out of sample, which is where rule 16 put it before any of this.** The
 probe's own declaration stands: evidence against a form, never for one.
+
+**Corrected on 2 November 2026: the table above was computed by an instrument with four defects,
+and it is superseded.** Code review found three, and the fixes turned up a fourth. Each was
+verified before it was fixed:
+
+1. `bands()` inverted `log_age` with `exp(u) - 1.0` instead of `exp(u) - 1/2`, so every band edge
+   landed a month late. Verified: the `age >= 12` column read 0 at age 12.
+2. `AGE_BASIS_RANGE` was typed as `(-0.6931, 5.4004)`, four decimals truncated toward zero, so
+   ages 0 and 221 fell outside it and the probe dropped them. Age 0 carries 272 defaults.
+3. **The probe was weighted wrongly.** It fitted the log of the observed rate by least squares
+   weighted by loan-months at risk. The inverse variance of a log Poisson rate is the number of
+   *events*. Ages 0 to 2 carry 38 to 42 million loan-months each but only 45 to 272 defaults, and
+   with that weighting they counted as much as ages with ten thousand defaults: three ages made
+   97% of the probe's error. The result was a Weibull reading for the first year of **1.536, too
+   high, where maximum likelihood reads 0.657, too low.** The out-of-sample criterion measured
+   0.814 for the published model, so the instrument had the **direction** wrong.
+4. Fixing 1 exposed an off-by-one of the same kind one layer down. `exp(log(120.5)) - 0.5` is
+   119.99999999999999, so age 120 dropped out of the `age >= 120` column.
+
+The fixes: the range is computed from `AGE_BASIS_AGES = (0, 221)` and the probe filters on ages;
+`bands()` rounds to the integer age; the probe is now **Poisson maximum likelihood** with the
+Weibull increment as an offset, a grid in `rho` and Newton in the rest. Re-run on the same committed
+table:
+
+| form | marginal `rho` | deviance | `sup g'` | 0-11 | 12-23 | 24-35 | 36-59 | 60-119 | 120-239 | in band |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Weibull alone, as published | 1.390 | 110,825 | 0.0000 | **0.657** | 1.158 | **1.301** | 1.175 | 0.892 | **0.677** | 3 of 6 |
+| bands, rule 16's first form | 1.570 | 38,002 | 0.0000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 6 of 6 |
+| restricted basis, the fallback | 2.185 | **15,180** | 0.6149 | 1.005 | 0.992 | 1.007 | 0.996 | 0.999 | 1.020 | 6 of 6 |
+
+**What changes, and what does not.**
+
+- **The Weibull's direction now matches the criterion's.** It is low in the first year, high over
+  24 to 35 months and low on the seasoned book. The old table claimed the opposite for the first
+  year, and the sentence above saying the instrument "reads the same thing the criterion reads"
+  was true of the new instrument and false of the one it described.
+- **The band form reads exactly 1.000.** This is not a fit; it is the Poisson score equations: a
+  saturated factor reproduces the events of its own groups. It is the 24 October declaration
+  turned from a warning into an identity, and a test now holds it. A reading other than 1.000 is
+  an off-by-one in the indicators, and the test caught two.
+- **The basis has under half the band form's deviance** (15,180 against 38,002) with half the
+  parameters. Deviance is summed over all 222 ages, where the band form is exact only on group
+  totals. This is the first in-sample number in this series that discriminates between the two
+  remedies. It is still in sample and marginal, so it is still not evidence *for* a form.
+- **The out-of-sample 3 of 7 for the band form is unaffected.** It was computed from the fitted
+  model through `episode_hazards` and grouped by `views.segments.age_bands`, which touch neither
+  `bands()`, `AGE_BASIS_RANGE` nor the probe.
+
+**And the orthonormalisation was not the change of coordinates it was declared to be.** It projected
+the curvature columns off `{1, u}`, on the argument that `rho * u` carries the linear term. In this
+model it does not: `rho * log t` enters through the increment `(a+1)**rho - a**rho`, and `eta` has an
+intercept and no free `u`. So each column carried a `u` weight (0.910, -0.768, 0.442) that moved it
+**out** of Royston-Parmar's span, and a marginal fit came out 24.5 log-likelihood units and a
+different `rho` away from the raw span. The claim that the transform "cannot change the function,
+the likelihood or any prediction" was false. The transform now projects off the constant only, so
+`span{1, v} = span{1, z}` exactly (a test holds it to 1e-9) and the claim is true. The conditioning
+figures move with it:
+
+- raw columns: VIF 2,143 / 12,596 / 4,672, condition number 57,411, over the corrected range;
+- declared basis: VIF 1.472 / 1.217 / 1.412, condition number 3.71.
+
+The basis declaration above gave 2,136 / 12,468 / 4,601, 56,801 and 1.377 / 1.104 / 1.344, all of a
+range that dropped two ages and of the old transform. The figures now live in one place,
+`creditsurv.baseline`, and a test pins them.
+
+**One bullet of the prediction is withdrawn as ill-defined, and the withdrawal is dated after a fit
+was seen.** It said the marginal `rho` would rise from 1.83 "toward 3 or above", and that anything
+below 1.83 would mean the basis was not doing its job. Review showed that `rho` is not one quantity
+across these forms. It is the slope of `log H` in `log t` only when nothing else bends it, and the
+basis does bend it. On the same marginal data, equally good parameterisations put it at 1.47, 1.76
+or 2.19, so a threshold on it tests nothing. The selection of 1 November had already been fitted,
+with a reference shape of 2.27, when this was found. That is the reason to say so here rather than
+quietly drop the line. **The bullet that matters — 5 of 7 age bands or better out of sample — is
+untouched and has not been read.**
+
+**And protection now holds in every removal step, not only step 6.** The guard written for this basis
+covered step 6. Step 9's `not_identified` removes the smaller unstable covariate beside a larger one
+of the same dimension, and the declaration gave all three columns the dimension "the time scale".
+Each column was therefore the others' partner, and the smallest of three orthogonal coefficients
+flipping sign across one split would have been deleted as an ordinary step-9 elimination. Review
+found `age_basis_2` at +0.00059 on one split against +0.058 on the whole half: one small flip away.
+Step 8's `worst` had the same opening through its p-value arm. Protection is now one argument with
+one meaning in `stepwise_vif` (a floor), `worst` and `not_identified`, and it also covers
+`moratorium_regime`, which until now was safe only because nothing shared its dimension. Each of the
+three tests first reproduces the defect without the argument. The selection is re-run with the
+corrected code before anything is published.
+
+**Open, and not decided here: ages 0 to 2 are in the likelihood.** At three missed payments a loan
+has defaulted by definition, so a default at ages 0 to 2 is a dating artefact. Those ages are
+nevertheless 121.3 million loan-months and 516 defaults of the risk set. The first boundary knot is
+at age 3.4, so ages 0 to 3 sit on the basis's linear tail, which cannot produce the 50-fold step
+from age 2 (4.7e-06) to age 3 (2.5e-04). The shape absorbs it instead: dropping ages 0 to 2 moves a
+marginal `rho` from 1.757 to 1.603. A maximum-likelihood fit predicts 5,402 defaults at ages 0 to 2
+against 516 realised, and 4,799 at age 3 against 10,315, so the first-year band reads near 1 only
+because the two errors cancel. Taking ages 0 to 2 out of the default risk set is a change to the
+dependent variable for every model in this repository, not only the basis. It needs declaring
+before any fit, and it is put to a decision rather than made here.
 
 ### What the refused fit found anyway, recorded and not acted on
 

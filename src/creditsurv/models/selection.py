@@ -30,6 +30,7 @@ in-sample.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -43,15 +44,18 @@ from lifelines import (
 )
 from scipy import stats
 
+from creditsurv.config import AGE_BASIS_COLUMNS
 from creditsurv.data.panel import EVENT, WEIGHT, duration_view
 from creditsurv.models.aft import CONVERGENT_DISTRIBUTIONS, FitResult, Likelihood, fit_aft
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+    from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 
     from lifelines.fitters import ParametricUnivariateFitter
 
     from creditsurv.models.engine import Encoding
+
+log_ = logging.getLogger(__name__)
 
 #: Univariate families used for the marginal shape check.
 #:
@@ -305,12 +309,31 @@ def exponential_is_rejected(result: FitResult) -> dict[str, float]:
     log_rho = float(params.loc[("rho_", "Intercept")])
     standard_error = float(result.fitter.standard_errors_.loc[("rho_", "Intercept")])
     statistic = log_rho / standard_error
+
+    # **What the constant hazard is depends on what else the model carries.** `log rho = 0` is
+    # the exponential only for a scalar-shape Weibull. Rule 14 lets the shape read the covariates
+    # fixed at origination, so a constant hazard needs every shape coefficient at zero; and rule
+    # 16's basis bends the hazard through the scale, so it needs the basis at zero too -- with the
+    # basis present, `rho = 1` is a hazard that still bends with age. So the published test is the
+    # **joint** Wald test of everything the exponential sets to its null, and the intercept's own
+    # z is kept beside it for what it is: a statement about the reference loan's shape.
+    tested = [
+        index
+        for index in params.index
+        if index[0] == "rho_" or (index[0] == "lambda_" and str(index[1]) in AGE_BASIS_COLUMNS)
+    ]
+    theta = params.loc[tested].to_numpy(dtype=float)
+    covariance = result.fitter.variance_matrix_.loc[tested, tested].to_numpy(dtype=float)
+    joint = float(theta @ np.linalg.solve(covariance, theta))
     return {
         "log_rho": log_rho,
         "rho": float(np.exp(log_rho)),
         "standard_error": standard_error,
         "z": statistic,
         "p_value": float(2.0 * stats.norm.sf(abs(statistic))),
+        "joint_statistic": joint,
+        "joint_df": float(len(tested)),
+        "joint_p_value": float(stats.chi2.sf(joint, len(tested))),
     }
 
 
@@ -787,6 +810,7 @@ def stepwise_vif(
     threshold: float = VIF_THRESHOLD,
     priority: Sequence[str] = (),
     covariance: pd.DataFrame | None = None,
+    protected: Collection[str] = (),
 ) -> tuple[pd.DataFrame, list[str]]:
     """Drop the most inflated covariate, recompute, repeat.
 
@@ -800,8 +824,17 @@ def stepwise_vif(
     procedure has no view on which one the model is *for*. Left alone it drops
     whichever happens to have the larger factor, which is arbitrary and unstable
     across samples. Stating the order makes the choice explicit and repeatable.
+
+    ``protected`` names covariates that are **never** removed, which ``priority`` alone could not
+    promise: it ranked offenders and still dropped one when every offender was ranked high, so
+    "most protected last" and "protected" were the same thing and neither was a floor. When only
+    protected names remain above the threshold the loop stops, because what is left is a
+    collinearity between things the specification declared it keeps -- rule 16's basis is three
+    columns of one function -- and choosing which of them to delete is not a decision this step
+    has standing to make.
     """
-    protected = {name: rank for rank, name in enumerate(priority)}
+    rank = {name: position for position, name in enumerate(priority)}
+    floor = set(protected)
     surviving = list(columns)
     log: list[dict[str, object]] = []
     # Once: every later step's covariance is a submatrix of this one, so no step reads the
@@ -820,10 +853,21 @@ def stepwise_vif(
         if float(worst["vif"]) <= threshold:
             break
 
-        offenders = inflation[inflation["vif"] > threshold]["covariate"].tolist()
+        offenders = [
+            name
+            for name in inflation[inflation["vif"] > threshold]["covariate"].tolist()
+            if name not in floor
+        ]
+        if not offenders:
+            log_.info(
+                "variance inflation above %g remains among protected names only: %s",
+                threshold,
+                ", ".join(str(n) for n in inflation[inflation["vif"] > threshold]["covariate"]),
+            )
+            break
         # Among the offenders, drop the least protected. `offenders` is already
         # ordered by descending inflation, so an unprotected tie falls to the largest.
-        victim = min(offenders, key=lambda name: protected.get(name, -1))
+        victim = min(offenders, key=lambda name: rank.get(name, -1))
 
         log.append(
             {

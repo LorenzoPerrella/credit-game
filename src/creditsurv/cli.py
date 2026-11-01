@@ -1079,7 +1079,12 @@ def select(
 
     import pandas as pd
 
-    from creditsurv.config import MACRO_CANDIDATES, PROTECTED_MACRO, calendar_covariates
+    from creditsurv.config import (
+        AGE_BASIS_COLUMNS,
+        MACRO_CANDIDATES,
+        PROTECTED_MACRO,
+        calendar_covariates,
+    )
     from creditsurv.data.fred import load_macro_panel
     from creditsurv.data.panel import month_ordinal
     from creditsurv.data.store import cells_identity
@@ -1159,6 +1164,14 @@ def select(
         fits,
         stability=True,
         signs=EXPECTED_SIGNS if cause == DEFAULT_CAUSE else PREPAYMENT_SIGNS,
+        # Rule 16's baseline along age was declared for the **default** hazard. Whether the
+        # prepayment hazard gets the same basis is a decision the competing-risk work owes before
+        # its own run, and riding `PROTECTED_MACRO` into that selection would make it silently.
+        protected_macro=(
+            PROTECTED_MACRO
+            if cause == DEFAULT_CAUSE
+            else tuple(name for name in PROTECTED_MACRO if name not in AGE_BASIS_COLUMNS)
+        ),
     )
     written = selection.generate(record, reports_dir=reports_dir())
 

@@ -33,20 +33,31 @@ built from it has kinks at ages a reporting grouper chose. That prefers a smooth
 of smoothness, which decides a tie rather than refusing a form.
 
 **The basis is orthonormalised, and it has to be.** The raw Royston-Parmar curvature columns carry
-exposure-weighted **VIF 2,142 / 12,594 / 4,671** on this book, with a correlation condition number
-of **57,402** -- and `selection.stepwise_vif` ranks protection rather than respecting it, so step 6
-would delete two of the three columns of one function. The transform here is computed from the
-declared knots alone by exact quadrature and reads **no data**: it is a change of basis inside a
-fixed column span, so it cannot change the function, the likelihood or any prediction -- only the
-coordinates and the conditioning the polish's `lstsq` and `pinv` depend on. Measured, it brings
-the same VIFs to **1.40 / 1.12 / 1.37** and the condition number to **3.37**.
+exposure-weighted **VIF 2,143 / 12,596 / 4,672** on this book, with a correlation condition number
+of **57,411** -- and `selection.stepwise_vif` ranked protection rather than respecting it, so step 6
+could have deleted two of the three columns of one function. The transform is computed from the
+declared knots alone by exact quadrature and reads **no data**, and it orthogonalises against the
+**constant only**: so `span{1, v} = span{1, z}` exactly and, because the model carries an
+intercept, it is a change of coordinates that cannot change the function, the likelihood or any
+prediction -- only the conditioning the polish's `lstsq` and `pinv` depend on. Measured, it brings
+the VIFs to **1.472 / 1.217 / 1.412** and the condition number to **3.71**. These are the figures
+every other mention cites and `tests/test_baseline.py` pins, on `docs/tables/km_vs_model.parquet`
+over ages 0 to 221.
 
-**The linear column is dropped**, which is rule 16's first declared condition. With `rho` free the
-Weibull's `rho` *is* the linear term: `span{1, u, v_1, v_2, v_3}` is reached exactly either way,
-and carrying `u` as well would leave the pair identified only through the `O(1/age)` difference
-between `log(age)` and `log(age + 1/2)`. So the basis is spanned by the curvature columns and zero
-coefficients are the Weibull, exactly nested, which is what makes the likelihood-ratio test and
-the nested-model floor apply unchanged.
+Two earlier statements of this paragraph were wrong and are corrected here rather than elsewhere.
+The first set of figures, 2,136 / 12,468 / 4,601 and 56,801, came from a range that dropped ages 0
+and 221. And the first transform orthogonalised against `u` as well, which put each column outside
+Royston-Parmar's span -- see `_transform` -- so for it the "change of coordinates" claim was false.
+
+**The linear column is dropped**, which is rule 16's first declared condition. `rho * log t` already
+carries the linear trend in `log t` -- through the increment `(a+1)**rho - a**rho`, not as a column
+of `eta` -- and a `c * u` term in `eta` is absorbed, to first order, by rescaling the coefficients
+by `1 / (1 - c)` and the shape by `log(1 - c)`; it would be identified only through the discrete
+increment and the half-month offset, about 4.9 log-likelihood units on the marginal table. So the
+basis is spanned by the curvature columns and zero coefficients are the Weibull, exactly nested,
+which is what makes the likelihood-ratio test and the nested-model floor apply unchanged. What
+**does** change with the basis present is what `rho` means: it is no longer the slope of `log H` in
+`log t`, because `g` bends it, so a `rho` read off this model is not comparable with a Weibull's.
 
 **And a restricted basis extrapolates as a Weibull**, linear beyond its boundary knots by
 construction, so beyond age 170 -- where 98.2% of the defaults are already behind it -- `log H` is
@@ -63,6 +74,7 @@ from typing import TYPE_CHECKING, Any, Final
 import numpy as np
 
 from creditsurv.config import (
+    AGE_BASIS_AGES,
     AGE_BASIS_COLUMNS,
     AGE_BASIS_KNOTS,
     AGE_BASIS_OFFSET,
@@ -171,15 +183,31 @@ def _gram() -> np.ndarray:
 
 
 def _transform() -> np.ndarray:
-    """The curvature rows of the inverse Cholesky factor: `v = T @ [1, u, z_2, ...]`.
+    """The orthonormalising rows, embedded in the `[1, u, z_2, ...]` coordinates of `_raw`.
 
-    `G = L L^T`, so the functions `L^-1 [1, u, z...]` are orthonormal under the same inner product
-    and the `k`-th is a combination of the first `k + 1` originals -- Gram-Schmidt in the order
-    they are written. Dropping the first two rows drops the ones that *are* `1` and `u`, leaving a
-    basis orthogonal to both: the intercept and `rho * u` keep what belongs to them, and `g`
-    carries only curvature.
+    Gram-Schmidt of `[1, z_2, ..., z_{m+1}]` under the uniform measure, by the inverse Cholesky
+    factor of their Gram matrix: the functions `L^-1 [1, z...]` are orthonormal and the `k`-th is
+    a combination of the first `k + 1` originals. The first row is the constant and is dropped;
+    the rest carry no constant, so the intercept keeps what belongs to it. The `u` column of the
+    result is **zero**.
+
+    **`u` is not projected out, and that is the correction of 2 November 2026.** An earlier
+    version orthogonalised against `{1, u}` as well, on the argument that `rho * u` already
+    carries the linear term. It does not, in this model: `rho * log t` enters through the
+    increment `(a+1)**rho - a**rho`, not as a column of `eta`, so `eta` has an intercept and no
+    free `u`. Projecting `u` out of the curvature columns therefore moved the basis **out** of
+    Royston-Parmar's span -- each column carried a `u` weight of 0.910, -0.768 and 0.442 -- and a
+    marginal fit read 24.5 log-likelihood units and a different `rho` from the raw span. The claim
+    this module made, that the orthonormalisation is a change of coordinates that cannot change
+    the function, was false until this was changed. With only the constant projected out,
+    `span{1, v} = span{1, z}` exactly, and the claim holds.
     """
-    return np.asarray(np.linalg.inv(np.linalg.cholesky(_gram()))[2:, :], dtype=np.float64)
+    gram = _gram()
+    keep = [0, *range(2, gram.shape[0])]
+    inverse = np.linalg.inv(np.linalg.cholesky(gram[np.ix_(keep, keep)]))[1:, :]
+    embedded = np.zeros((inverse.shape[0], gram.shape[0]))
+    embedded[:, keep] = inverse
+    return np.asarray(embedded, dtype=np.float64)
 
 
 _TRANSFORM = _transform()
@@ -317,7 +345,13 @@ def bands(edges: Sequence[int]) -> Form:
     cuts = np.asarray(edges, dtype=np.float64)[1:]
 
     def columns(u: np.ndarray) -> np.ndarray:
-        age = np.exp(u) - 1.0
+        # The exact inverse of `log_age`. It was `np.exp(u) - 1.0`, which put every band edge
+        # one month late -- the `age >= 12` column read 0 at age 12 -- in the form whose
+        # in-sample profile the register quoted as 6 of 6.
+        # Rounded to the integer age the row is: `exp(log(120.5)) - 0.5` is 119.99999999999999,
+        # which dropped age 120 from the `age >= 120` column -- the same float-inclusion defect
+        # as the hand-typed range, one layer down. Ages are whole months, so `rint` is exact.
+        age = np.rint(np.exp(u) - AGE_BASIS_OFFSET)
         return np.column_stack([np.ones_like(u), u, *((age >= cut).astype(float) for cut in cuts)])
 
     def derivative(u: np.ndarray) -> np.ndarray:
@@ -330,6 +364,34 @@ def bands(edges: Sequence[int]) -> Form:
 BASIS: Final = Form(
     name="basis", columns=lambda u: _raw(u), derivative=lambda u: _raw_derivative(u)
 )
+
+
+def _poisson(columns: np.ndarray, events: np.ndarray, offset: np.ndarray) -> np.ndarray:
+    """Maximum likelihood of a log-linear Poisson rate with an offset, by Newton's method.
+
+    The probe used to fit the log of the observed rate by least squares weighted by exposure.
+    The inverse variance of a log Poisson rate is the number of **events**, not the exposure, so
+    ages 0 to 2 -- 38 to 42 million loan-months each and 45 to 272 defaults -- weighed as much as
+    ages with ten thousand, and three ages made 97% of the probe's error. It read the published
+    Weibull's first band as under-predicted at 1.536 where maximum likelihood reads it
+    over-predicted at 0.654, and the out-of-sample criterion measured 0.814: the instrument had
+    the direction wrong. The likelihood is convex in the coefficients, so Newton from a
+    least-squares start converges in a handful of steps.
+    """
+    start = np.log((events + 0.5) / np.exp(offset))
+    solved, *_ = np.linalg.lstsq(columns, start, rcond=None)
+    for _ in range(50):
+        mean = np.exp(np.clip(offset + columns @ solved, -700.0, 700.0))
+        gradient = columns.T @ (events - mean)
+        hessian = (columns * mean[:, None]).T @ columns
+        # Least squares rather than `solve`: a declared form can carry a column the data never
+        # reaches -- a band edge past the oldest age -- and then the Hessian is singular in
+        # that direction and the minimum-norm step leaves its coefficient at zero.
+        step = np.linalg.lstsq(hessian, gradient, rcond=None)[0]
+        solved = solved + step
+        if np.max(np.abs(step)) < 1e-12:
+            break
+    return np.asarray(solved, dtype=np.float64)
 
 
 @dataclass(frozen=True)
@@ -346,7 +408,7 @@ class Probe:
     loan_months: float
     defaults: float
     marginal_rho: float
-    weighted_mse: float
+    deviance: float
     minimum_log_slope: float
     supremum_g_prime: float
     basis_coefficients: tuple[float, ...]
@@ -361,7 +423,7 @@ class Probe:
             "loan_months": round(self.loan_months),
             "defaults": round(self.defaults),
             "marginal_rho": round(self.marginal_rho, 4),
-            "weighted_mse": round(self.weighted_mse, 6),
+            "deviance": round(self.deviance, 3),
             "minimum_log_slope": round(self.minimum_log_slope, 4),
             "supremum_g_prime": round(self.supremum_g_prime, 4),
             "basis_coefficients": [round(value, 6) for value in self.basis_coefficients],
@@ -405,7 +467,8 @@ def probe(
     reads it quite differently, and it is recorded here because an instrument that models
     something other than the model is worse than no instrument.
 
-    Weighted by loan-months at risk. **Declared not to be evidence for a form, only against one**:
+    Fitted by Poisson maximum likelihood -- see `_poisson` for why not least squares.
+    **Declared not to be evidence for a form, only against one**:
     it is in sample and marginal, where section 5's criterion is out of sample.
     """
     ages = np.asarray(ages, dtype=np.float64)
@@ -415,38 +478,36 @@ def probe(
     ages, at_risk, defaults = ages[order], at_risk[order], defaults[order]
 
     chosen = BASIS if form is None else form
-    low, high = AGE_BASIS_RANGE
     centre = log_age(ages)
-    observed = np.divide(defaults, at_risk, out=np.zeros_like(defaults), where=at_risk > 0)
-    kept = (observed > 0) & (centre >= low) & (centre <= high)
-    if not kept.any():
-        message = "No age in the risk sets carries both exposure and a realised default."
+    # On the **ages**, not on `u`: `math.log` and `np.log` can differ in the last bit, so an
+    # inclusion test on the transformed endpoints dropped age 221 by one ulp. And on exposure,
+    # not on a realised default: a Poisson likelihood reads an age with no default as evidence,
+    # where a regression on the log rate had to drop it.
+    first, last = AGE_BASIS_AGES
+    kept = (at_risk > 0) & (ages >= first) & (ages <= last)
+    if not kept.any() or defaults[kept].sum() <= 0:
+        message = "No age in the declared range carries both exposure and a realised default."
         raise ValueError(message)
 
     # `eta` is the cell's own value, so the form is read at the month's declared midpoint -- the
     # same point `features` stores the covariate at -- and not at the interval's two ends.
     design = chosen.columns(centre[kept])
-    target = np.log(observed[kept])
-    weight = np.sqrt(at_risk[kept])
-    span = ages[kept]
+    columns = np.column_stack([np.ones(int(kept.sum())), design[:, 2:]])
+    span, exposure, events = ages[kept], at_risk[kept], defaults[kept]
 
     best: tuple[float, float, np.ndarray] | None = None
     grid = np.linspace(0.2, 6.0, 1161) if shapes is None else np.asarray(shapes, dtype=np.float64)
     for rho in grid:
-        # The Weibull's own increment over the month, which the multiplier scales.
-        increment = np.log((span + 1.0) ** rho - span**rho)
-        # `g` enters as `-rho * g`, so the solved coefficients are `-rho` times the form's.
-        columns = np.column_stack([np.ones_like(span), design[:, 2:]])
-        solved, *_ = np.linalg.lstsq(
-            columns * weight[:, None], (target - increment) * weight, rcond=None
-        )
-        residual = float(
-            at_risk[kept] @ (target - increment - columns @ solved) ** 2 / at_risk[kept].sum()
-        )
-        if best is None or residual < best[1]:
-            best = (float(rho), residual, solved)
+        # The Weibull's own increment over the month, which the multiplier scales. `g` enters as
+        # `-rho * g`, so the solved coefficients are `-rho` times the form's.
+        offset = np.log(exposure) + np.log((span + 1.0) ** rho - span**rho)
+        solved = _poisson(columns, events, offset)
+        mean = np.exp(offset + columns @ solved)
+        loglik = float(events @ (offset + columns @ solved) - mean.sum())
+        if best is None or loglik > best[1]:
+            best = (float(rho), loglik, solved)
     assert best is not None
-    rho, error, solved = best
+    rho, _, solved = best
 
     # Back to the form's own coefficients, and to the slope reading in `g'` units.
     raw = np.concatenate([[solved[0]], [0.0], -solved[1:] / rho])
@@ -454,11 +515,15 @@ def probe(
     implied = 1.0 - slope / rho if rho else float("inf")
     curvature = raw[2:] @ np.linalg.pinv(_TRANSFORM[:, 2:]) if chosen is BASIS else raw[2:]
 
-    fitted = np.exp(
-        np.log((span + 1.0) ** rho - span**rho)
-        + np.column_stack([np.ones_like(span), design[:, 2:]]) @ solved
+    expected = np.exp(np.log(exposure) + np.log((span + 1.0) ** rho - span**rho) + columns @ solved)
+    positive = events > 0
+    error = float(
+        2.0
+        * (
+            np.sum(events[positive] * np.log(events[positive] / expected[positive]))
+            - np.sum(events - expected)
+        )
     )
-    expected = at_risk[kept] * fitted
     return Probe(
         form=chosen.name,
         knots=tuple(AGE_BASIS_KNOTS) if chosen is BASIS else (),
@@ -466,7 +531,7 @@ def probe(
         loan_months=float(at_risk[kept].sum()),
         defaults=float(defaults[kept].sum()),
         marginal_rho=rho,
-        weighted_mse=error,
+        deviance=error,
         minimum_log_slope=slope,
         supremum_g_prime=implied,
         basis_coefficients=tuple(float(value) for value in curvature),
