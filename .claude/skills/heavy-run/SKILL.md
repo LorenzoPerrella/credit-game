@@ -20,6 +20,10 @@ first, and the PreToolUse hook enforces both: **one heavy job at a time**, and *
      reached its first evaluation, at 202 M swap-ins;
    - a scoring script holding three years of observation reached **7.25 GB after 4 hours**;
    - the same scoring streamed in 250,000-cell batches ran at flat memory.
+   - **`creditsurv report` still holds the panel**: `_split` calls `split_cells(load_cells(...))`,
+     which loads the whole cell table and expands it half by half, about 12 GB before the
+     first fit. Never launch it beside agents or another job. Moving it to the encoding path
+     the campaign already uses is the open fix.
 3. **Mains power, and nothing else heavy.** `pmset -g batt` and the session-start status line.
 
 ## Launching

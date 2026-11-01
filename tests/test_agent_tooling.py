@@ -208,3 +208,15 @@ def test_every_rule_is_scoped_and_every_scope_matches_a_file(rule: Path) -> None
 
 def test_there_are_rules_to_check() -> None:
     assert len(RULES) >= 5
+
+
+@pytest.mark.parametrize(
+    "agent", sorted((ROOT / ".claude" / "agents").glob("*.md")), ids=lambda path: path.stem
+)
+def test_every_subagent_says_when_to_use_it_and_what_it_may_touch(agent: Path) -> None:
+    fields = _frontmatter(agent)
+    assert fields.get("name") == agent.stem
+    assert len(fields.get("description", "")) > 80
+    assert fields.get("tools"), (
+        f"{agent.name} should list its tools rather than inherit all of them"
+    )
