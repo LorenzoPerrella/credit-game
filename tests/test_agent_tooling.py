@@ -170,3 +170,41 @@ def test_every_skill_says_when_to_use_it_and_its_scripts_exist(skill: Path) -> N
 
 def test_there_are_skills_to_check() -> None:
     assert len(SKILLS) >= 5
+
+
+RULES = sorted((ROOT / ".claude" / "rules").glob("*.md"))
+
+
+def _paths(rule: Path) -> list[str]:
+    block = rule.read_text().split("---\n", 2)[1]
+    return [
+        line.strip().removeprefix("- ").strip().strip('"')
+        for line in block.splitlines()
+        if line.strip().startswith("- ")
+    ]
+
+
+def test_the_root_instructions_stay_short() -> None:
+    """Loaded into every session: the documentation's target is under 200 lines, this one's 150.
+
+    It was 822 lines and 63 KB, and long instructions are followed less, not more.
+    """
+    lines = (ROOT / "CLAUDE.md").read_text().splitlines()
+    assert len(lines) <= 150, f"CLAUDE.md is {len(lines)} lines; move what is not global to a rule"
+
+
+@pytest.mark.parametrize("rule", RULES, ids=lambda path: path.stem)
+def test_every_rule_is_scoped_and_every_scope_matches_a_file(rule: Path) -> None:
+    """A path-scoped rule loads only when a matching file is read, so a dead glob is a dead rule.
+
+    Renaming `models/baseline.py` to `baseline.py` would have silenced a rule pointing at the old
+    path, and nothing would have said so -- the class of check this project calls going mute.
+    """
+    patterns = _paths(rule)
+    assert patterns, f"{rule.name} has no paths, so it would load in every session"
+    for pattern in patterns:
+        assert any(ROOT.glob(pattern)), f"{rule.name}: `{pattern}` matches no file"
+
+
+def test_there_are_rules_to_check() -> None:
+    assert len(RULES) >= 5

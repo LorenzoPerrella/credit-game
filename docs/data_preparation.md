@@ -584,8 +584,8 @@ Four times the cells is not four times the work; it is another machine's worth o
 stock lifelines fit holds about 680 bytes a training row, 45-50 GB for this table, so fits
 run through `creditsurv.models.blocks` a block at a time, and the panel is never held beside
 its training and test halves.
-[CLAUDE.md](https://github.com/LorenzoPerrella/credit-game/blob/main/CLAUDE.md) keeps the
-rules that follow from it.
+[The engineering notes](development.md) keep the measurements behind the rules that follow
+from it.
 
 ## Reproducing
 
