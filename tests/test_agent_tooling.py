@@ -139,3 +139,34 @@ def test_every_hook_the_settings_name_exists_and_the_logs_are_unbuffered() -> No
         assert Path(script).is_file(), f"{script} is configured and missing"
     # A buffered log read mid-run looks like a stalled job; it was diagnosed as one.
     assert settings["env"]["PYTHONUNBUFFERED"] == "1"
+
+
+def _frontmatter(path: Path) -> dict[str, str]:
+    text = path.read_text()
+    assert text.startswith("---\n"), f"{path} has no frontmatter"
+    block = text.split("---\n", 2)[1]
+    fields = {}
+    for line in block.splitlines():
+        key, _, value = line.partition(":")
+        if value:
+            fields[key.strip()] = value.strip()
+    return fields
+
+
+SKILLS = sorted((ROOT / ".claude" / "skills").glob("*/SKILL.md"))
+
+
+@pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
+def test_every_skill_says_when_to_use_it_and_its_scripts_exist(skill: Path) -> None:
+    """The description is the only part Claude sees before invoking, so it must say when."""
+    fields = _frontmatter(skill)
+    assert fields.get("name") == skill.parent.name
+    assert len(fields.get("description", "")) > 80, f"{skill} needs a description that says when"
+    body = skill.read_text()
+    for script in {part for part in body.split() if "${CLAUDE_SKILL_DIR}/scripts/" in part}:
+        relative = script.split("${CLAUDE_SKILL_DIR}/", 1)[1].rstrip(",)`")
+        assert (skill.parent / relative).is_file(), f"{skill} names {relative}, which is missing"
+
+
+def test_there_are_skills_to_check() -> None:
+    assert len(SKILLS) >= 5
