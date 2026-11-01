@@ -183,7 +183,12 @@ jobs:
           uv run creditsurv portfolio
           uv run creditsurv fit
           uv run creditsurv backtest --as-of 2024-06
-          uv run creditsurv report --as-of 2024-06 --loans 200 --horizon 24
+          # `--loans` went when the projection book became a declared window of originations
+          # (`BOOK_WINDOW_MONTHS`) rather than the heaviest cells ever written, and this line kept
+          # it -- so the scheduled run failed every day on `No such option: --loans` and nothing
+          # read it. The simulated book draws from the last 96 months, so the year to 2024-06 has
+          # about 190 originations in it.
+          uv run creditsurv report --as-of 2024-06 --book-months 12 --horizon 24
 
       - name: Check the reports were written
         run: |
