@@ -43,6 +43,7 @@ import pandas as pd
 from lifelines import exceptions
 
 from creditsurv.config import (
+    AGE_BASIS_COLUMNS,
     BANDED_REFERENCE,
     MACRO_CANDIDATES,
     MACRO_ELIMINATION_PRIORITY,
@@ -76,7 +77,7 @@ from creditsurv.models.selection import (
 from creditsurv.models.specification import Specification
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     import numpy as np
 
@@ -157,6 +158,41 @@ class SelectionRecord:
             "formula": self.selected.formula,
             "ancillary": self.ancillary,
         }
+
+
+def _whole_basis_or_none(surviving: Iterable[str], offered: Iterable[str]) -> None:
+    """Refuse a basis the variance-inflation step has taken a column out of.
+
+    Rule 16's baseline along age is **one term in three columns**: its coefficients are not
+    separately interpretable, because the object is the function they span. "Drop the most
+    inflated column" is a meaningful operation on a set of covariates and not on a basis -- it
+    would leave a different function of the age, fitted and published under the same name.
+
+    `stepwise_vif` ranks protection rather than respecting it: `priority` decides which of two
+    offenders goes, and if every offender is protected one of them still goes. On this book it
+    cannot reach here -- the declared basis carries exposure-weighted VIF **1.377 / 1.104 /
+    1.344** against a threshold of 10, where the raw Royston-Parmar columns carry **2,136 /
+    12,468 / 4,601** and a condition number of 56,801, which is why the basis is orthonormalised
+    at all. But "cannot reach here" is a measurement of the basis against itself, and the step
+    reads it against every continuous candidate; a covariate that trends with age could inflate
+    one column and not the others.
+
+    So the outcome is refused rather than guarded against, which is this file's own idiom: a
+    partial basis raises where a whole one and an absent one both pass.
+    """
+    kept = set(surviving)
+    present = [name for name in AGE_BASIS_COLUMNS if name in set(offered)]
+    held = [name for name in present if name in kept]
+    if present and held and len(held) != len(present):
+        missing = sorted(set(present) - set(held))
+        message = (
+            f"Step 6 removed {', '.join(missing)} and kept {', '.join(held)}, which leaves part of "
+            "rule 16's baseline along age. A basis is one term in several columns -- the object is "
+            "the function they span, and its coefficients are not separately interpretable -- so a "
+            "subset of them is a different function of the age under the same name. Either the "
+            "whole basis survives or none of it does."
+        )
+        raise ValueError(message)
 
 
 def run_selection(
@@ -276,6 +312,7 @@ def run_selection(
         inflation["removed"].astype(str), inflation["vif"].to_numpy(dtype=float), strict=True
     ):
         eliminated[removed] = f"step 6: variance inflation {vif:.1f}, above {VIF_THRESHOLD:g}"
+    _whole_basis_or_none(surviving, continuous)
 
     base = Specification(
         continuous=tuple(name for name in loan if name in surviving),

@@ -37,7 +37,10 @@ ROOT = Path(creditsurv.__file__).parent
 #: a site, and the command line sits above all of it.
 LAYERS: tuple[tuple[str, ...], ...] = (
     # The floor: no `creditsurv` imports at all, or only the floor.
-    ("config", "names", "features"),
+    # `baseline` is rule 16's basis along age: declared constants and pure arithmetic over
+    # them, reading no data and no other module but `config`. It is in the floor because
+    # `features` builds its columns, and `features` is in the floor.
+    ("config", "names", "features", "baseline"),
     ("data",),
     # Exploratory statistics over frames the data layer produces. Above `data` because it
     # speaks its vocabulary -- `loan_months` is the cell table's weight column -- and below

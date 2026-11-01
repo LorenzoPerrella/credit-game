@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 from scipy.integrate import quad
 
+from creditsurv import baseline
 from creditsurv.config import AGE_BASIS_COLUMNS, AGE_BASIS_KNOTS, AGE_BASIS_OFFSET, AGE_BASIS_RANGE
-from creditsurv.models import baseline
 
 
 def _panel(points: np.ndarray) -> np.ndarray:
@@ -225,3 +225,57 @@ def test_the_probe_reads_the_published_weibulls_own_defect() -> None:
     assert profile["12 to 23"] > 1.25, "the young bands should miss high"
     assert profile["60 to 119"] < 0.80, "the seasoned bands should miss low"
     assert out.supremum_g_prime == pytest.approx(0.0), "a straight line bends by nothing"
+
+
+def test_the_declared_basis_is_conditioned_well_enough_for_step_six() -> None:
+    """The orthonormalisation is not cosmetic, and this is the number that says so.
+
+    The raw Royston-Parmar curvature columns carry exposure-weighted VIF in the thousands on this
+    book, and `stepwise_vif` **ranks** protection rather than respecting it: `priority` decides
+    which of two offenders goes, not whether one goes. So a basis fitted in the raw coordinates
+    would have had two of its three columns deleted at step 6, leaving a different function of the
+    age fitted and published under the same name.
+    """
+    import pandas as pd
+
+    from creditsurv.models.nonparametric import EXPOSURE_FLOOR
+    from creditsurv.models.selection import VIF_THRESHOLD
+
+    table = pd.read_parquet("docs/tables/km_vs_model.parquet")
+    whole = table[table["group"] == "all loans"].sort_values("age")
+    rows = whole[whole["at_risk"].to_numpy(dtype=float) >= EXPOSURE_FLOOR]
+    if rows.empty:
+        pytest.skip("the committed risk sets carry no age above the exposure floor")
+    age = rows["age"].to_numpy(dtype=float)
+    weight = rows["at_risk"].to_numpy(dtype=float)
+
+    def inflation(columns: np.ndarray) -> np.ndarray:
+        centred = columns - np.average(columns, axis=0, weights=weight)
+        covariance = (centred * weight[:, None]).T @ centred / weight.sum()
+        deviation = np.sqrt(np.diag(covariance))
+        return np.diag(np.linalg.inv(covariance / np.outer(deviation, deviation)))
+
+    raw = inflation(baseline._truncated_power(baseline.log_age(age), AGE_BASIS_KNOTS))
+    declared = inflation(baseline.age_basis(age))
+
+    assert raw.max() > 1_000, "the raw columns were expected to be badly conditioned"
+    assert declared.max() < VIF_THRESHOLD, (
+        f"the declared basis carries VIF up to {declared.max():.2f}, at or above step 6's "
+        f"threshold of {VIF_THRESHOLD}, so the selection could delete part of one function"
+    )
+
+
+def test_a_partial_basis_is_refused_rather_than_fitted() -> None:
+    """A basis is one term in several columns, so a subset of it is a different function.
+
+    `stepwise_vif` can in principle reach a protected name. The procedure refuses the outcome
+    instead of trying to make it unreachable, which is this project's idiom: a whole basis and an
+    absent basis both pass, a partial one raises.
+    """
+    from creditsurv.models.procedure import _whole_basis_or_none
+
+    offered = [*AGE_BASIS_COLUMNS, "ltv_change"]
+    _whole_basis_or_none(offered, offered)
+    _whole_basis_or_none(["ltv_change"], offered)
+    with pytest.raises(ValueError, match="part of rule 16's baseline"):
+        _whole_basis_or_none([AGE_BASIS_COLUMNS[0], "ltv_change"], offered)
