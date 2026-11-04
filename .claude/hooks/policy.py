@@ -306,7 +306,9 @@ def check(scope: list[str]) -> list[Violation]:
     italian = [
         path
         for path in paths
+        # This file holds the word list, and would otherwise warn about itself on every change.
         if path.endswith((".md", ".py"))
+        and path != ".claude/hooks/policy.py"
         and any(
             len(_ITALIAN.findall(line)) >= 3
             for _, _, added in _hunks(scope, path)

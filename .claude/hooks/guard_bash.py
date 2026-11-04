@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import policy
+from _jobs import code as _code
 from _jobs import is_heavy, on_battery, running_jobs
 
 PROJECT = Path(os.environ.get("CLAUDE_PROJECT_DIR", Path(__file__).resolve().parents[2]))
@@ -47,18 +48,6 @@ def verdict(command: str) -> str | None:
         if reason:
             return reason
     return None
-
-
-def _code(command: str) -> str:
-    """The command with heredoc bodies and quoted strings removed: what the shell will run.
-
-    Without this a commit whose message *mentions* `git add -A` or `prune-archives` is refused,
-    and this project's commit messages describe exactly those things. A heredoc body is data;
-    a quoted string is an argument. The residue is what can name a program.
-    """
-    text = re.sub(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2\b", "<<HEREDOC", command, flags=re.S)
-    text = re.sub(r"'[^']*'", "''", text)
-    return re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
 
 
 def _irreversible(command: str) -> str | None:

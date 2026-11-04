@@ -43,41 +43,53 @@ under-predicts.**
 
 ## Three regimes, one multiplier, eight grades
 
+<!-- recorded: 2026-10-01 -->
 A single out-of-time ratio near one says nothing beside the spread across regimes, and the
-previous model's was 0.920 on fifteen quiet months. So the model is cut three times -- at the end
-of 2018, 2020 and 2022 -- and each cut is scored on the 24 months after it and nothing more. The
-windows are closed for the same reason they are three: judged on everything after it, the 2018
-model would be judged on the pandemic as well.
+September model's was 0.920 on fifteen quiet months.
+<!-- /recorded -->
+So the model is cut three times -- at the end of 2018, 2020 and 2022 -- and each cut is scored on
+the 24 months after it and nothing more. The windows are closed for the same reason they are
+three: judged on everything after it, the 2018 model would be judged on the pandemic as well.
 
+<!-- recorded: 2026-10-23 -->
 | Cut | Scored on | Actual / expected | Gini |
 |---|---|---|---|
-| 2018-12 | 2019-01 to 2020-12 | **0.458** | 0.442 |
-| 2020-12 | 2021-01 to 2022-12 | 0.823 | 0.515 |
-| 2022-12 | 2023-01 to 2024-12 | **1.420** | 0.535 |
+| 2018-12 | 2019-01 to 2020-12 | **0.4920** | 0.4507 |
+| 2020-12 | 2021-01 to 2022-12 | **1.3211** | 0.5182 |
+| 2022-12 | 2023-01 to 2024-12 | 0.9849 | 0.5463 |
 
 Two of the three fail the declared band, in opposite directions, and that dispersion is the
 thing this report exists to publish rather than to average away. The 2018 model over-predicts a
 window the CARES Act emptied of defaults -- under the `exclude` policy a moratorium month is not
-an event, so the model expected 167,362 and the book produced 76,664. The 2022 model
-under-predicts a rate shock that reached a fixed-rate book through affordability rather than
-through the payment, which is a channel it does not observe.
+an event, so the model expected 155,834 and the book produced 76,664. The 2020 model
+under-predicts 2021 and 2022, when the book's youngest loans were the 2019 to 2021 originations
+whose under-prediction the [decision log](decisions.md) traces to a hazard with no floor; the
+year 2021 reads the same way in sample. The 2022 model lands inside the band.
+<!-- /recorded -->
 
 **The level is anchored and the shape is not touched.** One multiplier on the default hazard,
 estimated as actual over expected on the anchoring window of 2022-01 to 2024-12, moves every
 loan-month by the same factor -- so the ranking, and therefore every segment view, means what it
 meant before.
 
-The multiplier is **1.0111**, estimated on the shaped model this page describes, and it takes
-the test window to an actual over expected of **0.9065** with the Gini unchanged at **0.5461**.
+<!-- recorded: 2026-10-23 -->
+The multiplier is **1.0111**, estimated on the shaped model this page describes.
+<!-- /recorded -->
+It takes the test window to an actual over expected of **<!-- value: backtest.ae -->** with the
+Gini unchanged at **<!-- value: backtest.gini -->**.
 
-!!! note "An earlier version of this page quoted 1.1831, and it was of another model"
+!!! note "Earlier versions of this page quoted other models"
 
+    <!-- recorded: 2026-10-23 -->
     `creditsurv windows` fitted four models without rule 14's ancillary formula until 23 October
-    2026, so the 1.1831 this page carried — and the 1.134 to 0.958 it produced — were of a
-    **scalar-shape** specification the configuration does not declare. The third independent
-    validation found it on 19 October as N1; the corrected campaign ran on 23 October and the
-    figures above are its own. They are kept on the record here rather than quietly replaced,
+    2026, so the multiplier of 1.1831 this page carried -- and the 1.134 to 0.958 it produced --
+    were of a **scalar-shape** specification the configuration does not declare. The third
+    independent validation found it on 19 October as N1; the corrected campaign ran on 23 October
+    and the figures above are its own. The table of cuts went on reading the scalar-shape
+    campaign's 0.458, 0.823 and 1.420 until 4 November, when the check that a section page types
+    no number by hand found it. They are kept on the record here rather than quietly replaced,
     because a reader who saw the old ones is owed the reason they changed.
+    <!-- /recorded -->
 
 **The master scale, and why its criterion changed.** Eight grades of twelve-month PD on geometric
 thresholds. The rule asked for the 95% Jeffreys interval around what each grade's loans did and

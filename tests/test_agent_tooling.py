@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -446,6 +447,22 @@ def test_a_second_read_of_the_test_window_for_one_specification_is_flagged(
     assert _post("uv run creditsurv windows", tmp_path) == "", "a new specification reads afresh"
 
 
+def test_a_command_named_only_as_data_is_not_a_read_of_the_test_window(tmp_path: Path) -> None:
+    """On 4 November 2026 two reads were logged on a day none was made.
+
+    A heredoc that edited a page mentioning `creditsurv windows` counted as running it, and the
+    second edit was then reported as a re-read.
+    """
+    (tmp_path / "src" / "creditsurv").mkdir(parents=True)
+    (tmp_path / "src" / "creditsurv" / "config.py").write_text("FORMULA = 'a + b'\n")
+    for command in (
+        "python3 - <<'EOF'\ntext = 'creditsurv windows fitted four models'\nEOF",
+        'git commit -m "creditsurv views no longer fits"',
+    ):
+        assert _post(command, tmp_path) == ""
+    assert not (tmp_path / ".claude" / "state" / "test-window-reads.log").exists()
+
+
 def test_a_python_file_is_formatted_the_moment_it_is_written(tmp_path: Path) -> None:
     """Measured live: the next Edit on the reformatted file succeeds without a re-read."""
     if not (ROOT / ".venv" / "bin" / "ruff").exists():
@@ -460,3 +477,55 @@ def test_a_python_file_is_formatted_the_moment_it_is_written(tmp_path: Path) -> 
     )
     assert result.returncode == 0
     assert written.read_text() == "def f(x):\n    return x + 1\n"
+
+
+def test_a_number_typed_on_a_section_page_is_reported_when_written(tmp_path: Path) -> None:
+    """The early half of tests/test_docs_provenance.py, on the one file just written."""
+    (tmp_path / "docs").mkdir()
+    module = tmp_path / "src" / "creditsurv" / "site"
+    module.mkdir(parents=True)
+    (module / "provenance.py").write_text(
+        (ROOT / "src" / "creditsurv" / "site" / "provenance.py").read_text()
+    )
+    page = tmp_path / "docs" / "model.md"
+    page.write_text("The cut reads 1.420.\n\n<!-- value: backtest.ae -->\n")
+
+    def written(target: Path) -> str:
+        result = _run(
+            "docs_provenance.py",
+            {"tool_input": {"file_path": str(target)}},
+            CLAUDE_PROJECT_DIR=str(tmp_path),
+        )
+        assert result.returncode == 0, result.stderr
+        if not result.stdout.strip():
+            return ""
+        return str(json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
+
+    assert "line 1: 1.420" in written(page)
+    page.write_text("<!-- recorded: 2026-10-01 -->\nThe cut read 1.420.\n<!-- /recorded -->\n")
+    assert written(page) == ""
+    record = tmp_path / "docs" / "rules_register.md"
+    record.write_text("A history may read 1.420.\n")
+    assert written(record) == "", "a record is not a section page"
+
+
+def _tool_invocations(command: str) -> str:
+    """`uv run --no-sync -q --python 3.11 mypy` and `uv run mypy` are one check."""
+    command = re.sub(r"^.*?\buv run\b", "", command)
+    command = re.sub(r"\s(?:--no-sync|-q|--frozen)\b", " ", command)
+    command = re.sub(r"\s--(?:python|extra|group)\s+\S+", " ", command)
+    return " ".join(command.split())
+
+
+def test_every_check_the_verify_skill_runs_is_also_run_by_ci() -> None:
+    """A check added to one side only is a gate one party can pass and the other cannot."""
+    script = (ROOT / ".claude" / "skills" / "verify" / "scripts" / "verify.sh").read_text()
+    steps = [
+        _tool_invocations(line.split('"', 2)[2])
+        for line in re.sub(r"\\\n\s*", " ", script).splitlines()
+        if re.match(r'\s*step "', line)
+    ]
+    assert len(steps) >= 5, steps
+    ci = " ".join((ROOT / ".github" / "workflows" / "ci.yml").read_text().split())
+    missing = [step for step in steps if step.removesuffix(" -q") not in ci]
+    assert not missing, f"verify.sh runs checks the CI does not: {missing}"

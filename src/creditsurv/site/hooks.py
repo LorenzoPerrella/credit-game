@@ -15,7 +15,6 @@ beside coefficients from another.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -24,31 +23,44 @@ from mkdocs.utils import get_relative_url
 
 from creditsurv.site.content import TABLES, VALUES, Sources, to_markdown
 from creditsurv.site.figures import FIGURES, render
+from creditsurv.site.provenance import FENCE, INLINE_CODE, PLACEHOLDER, render_recorded
 
 if TYPE_CHECKING:
+    import re
     from collections.abc import Callable
 
     from mkdocs.config.defaults import MkDocsConfig
     from mkdocs.structure.files import Files
     from mkdocs.structure.pages import Page
 
-PLACEHOLDER: Final = re.compile(r"<!--\s*(figure|table|value):\s*([\w.]+)\s*-->")
-
-#: A fenced code block, possibly indented inside an admonition: a placeholder shown as an
-#: example is left alone.
-_FENCE: Final = re.compile(
-    r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?^[ \t]*\1[ \t]*$", re.MULTILINE | re.DOTALL
-)
+#: One definition, shared with the provenance check, so the page a reader sees and the page the
+#: test reads agree on what a placeholder is.
+_FENCE: Final = FENCE
 
 
 def substitute(markdown: str, replace: Callable[[re.Match[str]], str]) -> str:
-    """Replace the placeholders outside fenced code blocks."""
+    """Replace the placeholders outside fenced code blocks and outside inline code.
+
+    Inline code is skipped since 2 November 2026. Before that a page could not mention a
+    placeholder in prose: the build tried to fill it and failed on the name, and the workaround was
+    to elide the name by hand -- a rule written down instead of a defect fixed.
+    """
+
+    def outside_code(text: str) -> str:
+        parts, position = [], 0
+        for span in INLINE_CODE.finditer(text):
+            parts.append(PLACEHOLDER.sub(replace, text[position : span.start()]))
+            parts.append(span.group(0))
+            position = span.end()
+        parts.append(PLACEHOLDER.sub(replace, text[position:]))
+        return "".join(parts)
+
     pieces, position = [], 0
     for fence in _FENCE.finditer(markdown):
-        pieces.append(PLACEHOLDER.sub(replace, markdown[position : fence.start()]))
+        pieces.append(outside_code(markdown[position : fence.start()]))
         pieces.append(fence.group(0))
         position = fence.end()
-    pieces.append(PLACEHOLDER.sub(replace, markdown[position:]))
+    pieces.append(outside_code(markdown[position:]))
     return "".join(pieces)
 
 
@@ -125,7 +137,8 @@ def on_page_markdown(markdown: str, page: Page, config: MkDocsConfig, files: Fil
         _require(kind, name, VALUES[name].views, page)
         return VALUES[name].read(_sources())
 
-    return substitute(markdown, replace)
+    # A recorded block shows its date to the reader: a dated number declares itself dated.
+    return render_recorded(substitute(markdown, replace))
 
 
 def on_page_content(html: str, page: Page, config: MkDocsConfig, files: Files) -> str:

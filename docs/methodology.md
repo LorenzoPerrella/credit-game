@@ -96,7 +96,7 @@ originated in even and in odd years, round by round.
 <!-- figure: selection_stability -->
 
 **Materiality**: a macro covariate whose effect is real and too small to carry. Every p-value on
-this book is 0.0000, so the test is the effect itself -- one standard deviation moving log
+this book rounds to zero, so the test is the effect itself -- one standard deviation moving log
 survival time by less than 0.02, the threshold [rule 3](rules.md) fixed before any fit.
 
 <!-- table: selection_materiality -->
@@ -121,6 +121,7 @@ were then measured against the **Aalen-Johansen** cumulative incidence of defaul
 accounts for prepayment as a competing risk, over the 222 loan ages carrying at least the
 exposure floor:
 
+<!-- recorded: 2026-10-01 -->
 | Family | Mean absolute gap | Worst |
 |---|---|---|
 | Weibull | 0.1027 pp | 0.1607 pp |
@@ -130,6 +131,11 @@ Neither turns a declared sign, so neither is excluded, and the 0.047 pp between 
 the 0.1 pp tie the rule declared -- where the Weibull is kept because its hazard does not fall
 at long ages, which is where the data ends and the extrapolation begins. It is also the closer
 of the two, so the tie-break decides nothing here.
+
+This comparison was run before rule 12's bands and rule 14's shape, on two models neither of
+which is now configured, and the [family report](reports/family.md) says so. Rule 2's comparison
+under the bands is owed.
+<!-- /recorded -->
 
 **The question was reopened in October 2026 and the answer held.** Rule 2 chose on the distance
 from the observed incidence and had never asked whether the selected model **calibrates by

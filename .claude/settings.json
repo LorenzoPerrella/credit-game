@@ -56,6 +56,14 @@
               "${CLAUDE_PROJECT_DIR}/.claude/hooks/format_on_edit.py"
             ],
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/docs_provenance.py"
+            ],
+            "timeout": 10
           }
         ]
       }

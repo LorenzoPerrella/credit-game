@@ -25,7 +25,7 @@ Fourteen rules are written down before the fits they govern, so that no result c
 | A parametric survival model | a classifier; a Cox model | lifetime PD needs the timing, the censored loans, extrapolation past the data, a response to scenarios and a smooth term structure | [Methodology](methodology.md) |
 | Interval-censored monthly episodes with left truncation | `CoxTimeVaryingFitter`; loan-level durations | it is exactly the discrete-time likelihood with time-varying covariates, in a fully parametric model | [Home](index.md#the-idea-in-one-table) |
 | Nested tests and comparisons against Kaplan-Meier | the generalised gamma, which nests five families | it does not converge on the episode panel under any remedy tried, and on data generated from a Weibull it estimated the shape at 4.04 where the truth is 1 | [Methodology report](reports/methodology.md) |
-| The Weibull | the log-logistic, which has the better likelihood | rule 2 on the Aalen-Johansen incidence, 0.1027 pp against 0.1498. Reopened in October 2026 against the decile criterion rule 2 never considered, and the log-logistic taken through its own selection under the bands: it reads **6 of 10** deciles in band against the Weibull's 5, so neither family reads it alone and the family is not the answer | [Rules](rules.md), [Variable selection](variable_selection.md#the-distribution-family-and-why-the-weibull-was-kept-against-a-better-likelihood) |
+| The Weibull | the log-logistic, which has the better likelihood | rule 2 on the Aalen-Johansen incidence, inside the declared 0.1 pp tie and the closer of the two ([Methodology](methodology.md#the-distribution-family)). Reopened in October 2026 against the decile criterion rule 2 never considered, and the log-logistic taken through its own selection under the bands: it reads **6 of 10** deciles in band against the Weibull's 5, so neither family reads it alone and the family is not the answer | [Rules](rules.md), [Variable selection](variable_selection.md#the-distribution-family-and-why-the-weibull-was-kept-against-a-better-likelihood) |
 | One fit, scored out of time, never refitted | refitting at four dates under two macro assumptions | eight fits for one report, and a report on one model beside a backtest of another invites the reader to credit one with the other's performance | [Backtest report](reports/backtesting.md) |
 | A calendar cut | holding out random loans | random loans still train on the months they are judged on | [Calibration & backtest](calibration.md) |
 | Gini from the exposure-weighted Lorenz curve | a concordance index | the index needs pairs of subjects, and a cell is not a subject | [Backtest report](reports/backtesting.md#discrimination) |
@@ -100,6 +100,7 @@ Fourteen rules are written down before the fits they govern, so that no result c
 
 ## What the last stage decided, and what it could not
 
+<!-- recorded: 2026-10-17 -->
 Prepayment, the family, HARP and payment history are closed, each by the thing named above as
 what would close it -- the detail and the measured numbers are on the
 [validation response](validation.md#what-the-next-stage-closed). Three decisions inside that
@@ -126,9 +127,11 @@ reading them as bands recovered 10.2% of the gap. What it did **not** do is clos
 offered then was resolution inside the bands, and the section below records that this was measured
 and is wrong: the finer grid bought 0.015 on the worst decile, and the cause was the hazard's
 shape.
+<!-- /recorded -->
 
 ## What the shape stage found, and where this goes next
 
+<!-- recorded: 2026-10-17 -->
 **Resolution was not the constraint, and the measurement that says so cost a table.** Rule 7's
 ceiling was re-declared at 250 million cells from the engine's measured capacity *before* the
 rebuild, the finer 8 / 8 / 6 grid was built at 194,340,956 cells, and a selection under it chose
@@ -182,3 +185,4 @@ A hazard with a floor is an additive baseline, which is neither of the two famil
 declared. It would need its own rule and its own motive, written before the fit rather than
 after this one, and the grid deliberately stopped at four rather than reaching for a fifth
 specification chosen by which came closest on the criterion it is judged by.
+<!-- /recorded -->

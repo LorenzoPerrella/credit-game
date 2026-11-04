@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _jobs import is_heavy, running_jobs
+from _jobs import code, is_heavy, running_jobs
 
 PROJECT = Path(os.environ.get("CLAUDE_PROJECT_DIR", Path(__file__).resolve().parents[2]))
 STATE = PROJECT / ".claude" / "state"
@@ -185,7 +185,9 @@ def unpredicted_selection(command: str) -> str | None:
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
-        command = str(payload.get("tool_input", {}).get("command", ""))
+        # What the shell ran, not what it was handed as data: a heredoc or a quoted message that
+        # mentions a command is not that command.
+        command = code(str(payload.get("tool_input", {}).get("command", "")))
     except (ValueError, AttributeError):
         return 0
     now = float(os.environ.get("CREDITSURV_HOOK_NOW", time.time()))
