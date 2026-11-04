@@ -13,7 +13,9 @@ bash ${CLAUDE_SKILL_DIR}/scripts/verify.sh            # everything, ~7 minutes
 bash ${CLAUDE_SKILL_DIR}/scripts/verify.sh --no-tests # everything but pytest, ~1 minute
 ```
 
-It stops at the first red step. Fix that, then rerun.
+It stops at the first red step. Fix that, then rerun. When everything is green on a clean tree
+it writes `.claude/state/verified` with HEAD, which the hook requires before `gh pr create` or a
+push to a branch with an open PR -- so the suite is not optional before publishing.
 
 ## What it checks, and why each step is there
 
@@ -44,8 +46,7 @@ It stops at the first red step. Fix that, then rerun.
   a report names a formula the configuration has replaced. Regenerate it, or -- while the new
   specification is unscored -- give it the superseded notice the test looks for.
 
-## CI is not the same set
+## CI is a superset
 
-CI runs on pushes to `main` and on pull requests. The **end-to-end pipeline** runs only on the
-daily schedule and on `workflow_dispatch`, so a PR never exercises it: to check a branch against it,
-`gh workflow run ci.yml --ref <branch>`.
+CI runs every check here (`tests/test_agent_tooling.py` fails if this script gains one CI lacks),
+plus the `policy` job and the end-to-end pipeline on every PR.

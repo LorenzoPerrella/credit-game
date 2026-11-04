@@ -48,6 +48,7 @@ The current figures are on the pages linked beside them.
 
 ## Found along the way
 
+<!-- recorded: 2026-10-01 -->
 - **The block fit engine.** A stock lifelines fit needs 45 to 50 GB on the exact key; fits
   now run block by block on lifelines' own likelihood, polished to the optimum lifelines'
   optimiser stops up to 5.9 standard errors short of.
@@ -74,9 +75,11 @@ The current figures are on the pages linked beside them.
   again: that a polish stalling 557 standard errors out means a flat direction. The two
   quantities the comparison needed are identically equal, so the ratio reads one whatever the
   curvature. What the stall meant was the floor above.
+<!-- /recorded -->
 
 ## The second round, 17 October 2026
 
+<!-- recorded: 2026-10-17 -->
 A second independent validation read the model at commit `56ffa88` and did something the first
 did not: it **reproduced the published numbers with a scorer that imports nothing from this
 package** -- the FRED panel, the covariates and both families' interval probability rewritten from
@@ -166,9 +169,11 @@ cost nothing and because a reader currently finds three different models. The th
 round is placed **after the macro block and the one adoption**, not at the end, because the age
 baseline and the lifetime PD are built on top of it -- and building them against a specification
 that turns out wrong is what happened to the three September reports.
+<!-- /recorded -->
 
 ## The third round, 19 October 2026
 
+<!-- recorded: 2026-10-19 -->
 A third independent validation read the model at commit `f77f440` and again found **zero
 discrepancies between published and recomputed**, on its third independent implementation of the
 likelihood. Of the second round's eighteen findings, four are closed -- P2, P3, **P7** and C6 --
@@ -253,37 +258,49 @@ measuring anything else -- N1, N2, N3 -- then one round of `report`, `windows` a
 age baseline, the regime split, the prepayment rebuild and the declared floor. The rules and the
 register go first, because they cost nothing and because N7 is the finding that says they were not
 being kept.
+<!-- /recorded -->
 
 ## What the next stage closed
 
 Four of the five open items are closed, each by the thing the decision log said would close it.
 
+<!-- recorded: 2026-10-01 -->
 | | How it closed | Measured |
 |---|---|---|
 | **Prepayment** | A competing risk with a model of its own, selected by the same procedure under rule 6's priors. Lifetime PD is a cumulative incidence rather than `1 - S` | 33,797,300 prepayments beside 1,671,207 defaults; 17 covariates from 24 candidates |
 | **Weibull or log-logistic** | Rule 2, written before either fit and applied by `creditsurv family`: each family's **own** selected model against the Aalen-Johansen incidence. Neither turns a declared sign, so neither is excluded | Weibull 0.1027 pp mean gap against the log-logistic's 0.1498, over 222 loan ages |
 | **HARP** | A level in the key. The missing debt-to-income and the programme are the same set, so the ratio stays missing and the level absorbs the constant that fills it -- the dummy-variable adjustment, not an imputation | 238,849,701 loan-months, 8.6% of the book, 135,070 defaults |
 | **Payment history** | The state of the month **before** is in the key, since the state during the month is the event by definition | 1,518,761 of 1,671,207 defaults open the month two payments behind |
+<!-- /recorded -->
 
 And the level is anchored on a window of its own, which was the other half of the plan: one
 multiplier estimated on 2022-01 to 2024-12 moves the level and nothing else, leaving the Gini
 untouched because a single factor on every hazard cannot change an order.
 
+<!-- recorded: 2026-10-19 -->
 **The multiplier this paragraph quoted -- 1.1831, taking the test window from 1.134 to 0.958 --
-is of the model at the second round's commit.** The third round found that every anchoring number
-on the record comes from `creditsurv windows`, whose fits carry no shape, so 1.1831 and the 0.9695
-that replaced it on 19 October are both of a specification the configuration does not declare. The
-published model's own multiplier is measured when the shape reaches the campaign, and until then
-no anchored figure here describes it.
+was of the model at the second round's commit.** The third round found that every anchoring number
+on the record came from `creditsurv windows`, whose fits carried no shape, so 1.1831 and the
+0.9695 that replaced it on 19 October were both of a specification the configuration does not
+declare.
+<!-- /recorded -->
+
+The corrected campaign ran on 23 October with the shape, and its own anchored figures are on the
+[calibration page](calibration.md): the test window reads an actual over expected of
+<!-- value: backtest.ae --> and a Gini of <!-- value: backtest.gini -->, with every decile between
+<!-- value: backtest.deciles -->.
 
 ## Still open
 
+<!-- recorded: 2026-10-23 -->
 | | Why it is open |
 |---|---|
 | **Decile calibration** | Still failing, and now **explained**. The compression was the hazard's **shape**, not the resolution of the bands: letting it read the covariates fixed at origination takes the in-sample deciles from **5 of 10 inside 0.80 to 1.25 to 9 of 10** and flips the cycle criterion from 69.6% of calendar years in band to 73.9%. What remains is decile 1 alone, missing **high** at 1.676 in sample for the published fit `bc016657b2b40bfc` -- though not on the declared test window, where it reads 1.150 and all ten deciles hold -- and **83% of that miss is the 2019, 2020 and 2021 originations** -- 17% of the decile's exposure, 34% of its defaults, an actual over expected of 3.413, where every vintage to 2018 reads **1.082**. The cause is structural: those loans stack every favourable reading the model has at once and a **multiplicative hazard has no floor**, so the prediction reaches 1.5 defaults per 100,000 loan-months a month where the book does not go below about 5. A floor takes an additive baseline, which is another family. The exception is bounded at **0.11%** of the in-sample defaults. The resolution hypothesis was tested and is withdrawn: the finer 8 / 8 / 6 grid bought **0.015** on the worst decile for 2.12x the table |
-| **The level across regimes** | Actual over expected runs 0.458, 0.823 and 1.420 across the three declared cuts, in opposite directions. This is the identification restriction, not a fit: `period = cohort + age` holds identically, so calendar time enters only through six macro covariates, and a regime driven by another channel -- a moratorium suppressing the event in 2019-20, affordability in 2023-24 -- mis-levels the model. The anchoring is the declared remedy and it works on the window it is estimated on; by construction it cannot cover a regime it has not seen |
+| **The level across regimes** | Actual over expected runs 0.4920, 1.3211 and 0.9849 across the three declared cuts, two outside the band in opposite directions. This is the identification restriction, not a fit: `period = cohort + age` holds identically, so calendar time enters only through a few macro covariates, and a regime driven by another channel -- a moratorium suppressing the event in 2019-20, the youngest and safest vintages under-predicted in 2021-22 -- mis-levels the model. The anchoring is the declared remedy and it works on the window it is estimated on; by construction it cannot cover a regime it has not seen |
 | **Point-in-time macro** | FRED serves revised series. ALFRED's vintages were attempted and need an API key, so the limit is documented rather than closed |
+<!-- /recorded -->
 
+<!-- recorded: 2026-10-17 -->
 Both of those branches have been run and the plan they carried was wrong in its second half. The
 compiled core landed, a selection fell from the 10.5 hours four recorded runs averaged to **20.7
 minutes**, and rule 7's ceiling was re-declared at 250 million cells from the measured capacity --
@@ -292,3 +309,4 @@ needs to admit. The finer bands were then built, selected under and measured, an
 0.015** on the worst decile. Resolution was never the constraint, and the grid of family by shape
 that replaced it is in `docs/rules.md` with all four cells published. What is left is one decile,
 one cause, and a remediation that belongs to a family this project has not declared.
+<!-- /recorded -->

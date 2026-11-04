@@ -30,3 +30,16 @@ if [[ "${1:-}" != "--no-tests" ]]; then
 fi
 step "mkdocs build --strict" uv run --no-sync mkdocs build --strict
 printf '\n== all green\n'
+
+# The stamp the PreToolUse hook reads before a pull request is opened or pushed to: this exact
+# commit passed everything, on a clean tree. Without --no-tests only, since the suite is the
+# part a hook cannot afford to run itself.
+if [[ "${1:-}" != "--no-tests" ]]; then
+  if [[ -z "$(git status --porcelain)" ]]; then
+    mkdir -p .claude/state
+    git rev-parse HEAD > .claude/state/verified
+    printf -- '-- stamped %s as verified\n' "$(git rev-parse --short HEAD)"
+  else
+    printf -- '-- the tree has uncommitted changes, so no commit is stamped as verified\n'
+  fi
+fi

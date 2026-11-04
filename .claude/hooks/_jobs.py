@@ -54,6 +54,22 @@ class Job:
         return f"pid {self.pid}, running {running}, {self.rss_gb:.2f} GB: {self.command}"
 
 
+def code(command: str) -> str:
+    """The command with heredoc bodies and quoted strings removed: what the shell will run.
+
+    Shared by both Bash hooks. The PostToolUse one read the raw command until 4 November 2026 and
+    logged two reads of the test window on a day none was made: a heredoc that *edited a page*
+    mentioning `creditsurv windows` counted as running it.
+
+    Without this a commit whose message *mentions* `git add -A` or `prune-archives` is refused,
+    and this project's commit messages describe exactly those things. A heredoc body is data;
+    a quoted string is an argument. The residue is what can name a program.
+    """
+    text = re.sub(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2\b", "<<HEREDOC", command, flags=re.S)
+    text = re.sub(r"'[^']*'", "''", text)
+    return re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
+
+
 def is_heavy(command: str) -> bool:
     """Whether a shell command launches a heavy `creditsurv` subcommand (not its `--help`)."""
     return bool(HEAVY_COMMAND.search(command)) and "--help" not in command

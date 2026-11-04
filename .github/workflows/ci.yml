@@ -6,7 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    # 05:20 UTC daily. Only the live-data job runs on this trigger.
+    # 05:20 UTC daily: the quality matrix, the live-data check and the end-to-end pipeline.
     - cron: "20 5 * * *"
 
 concurrency:
@@ -122,6 +122,23 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v5
 
+  policy:
+    name: policy
+    # The repository invariants the commit hook checks on a staged diff, checked here on the
+    # whole pull request by the same module (.claude/hooks/policy.py): a hook binds only the
+    # agent that runs it, and a commit made by hand or on another machine passes it untouched.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The range is origin/main...HEAD, so the history to the merge base has to be here.
+          fetch-depth: 0
+
+      - name: Check the pull request's diff
+        run: python3 .claude/hooks/policy.py --range origin/${{ github.base_ref }}...HEAD
+
   network:
     name: live FRED check
     # Only on the nightly schedule or an explicit run. Never on a pull request:
@@ -148,10 +165,11 @@ jobs:
 
   pipeline-smoke:
     name: end-to-end pipeline
-    # Nightly and on demand. The full pipeline fetches live data, fits a model and
-    # writes reports, which is minutes rather than seconds -- too slow for the
-    # pull-request path, and it is integration breakage it catches, not logic.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # On every pull request as well as nightly. It was kept off the pull-request path as "minutes
+    # rather than seconds", and it takes 53 seconds; meanwhile `--loans` failed it every night
+    # from 29 October to 1 November 2026, because no pull request ran it and nobody read the
+    # schedule. Integration breakage is found where the change is made.
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -175,7 +193,14 @@ jobs:
       # aggregation run for real rather than being skipped.
       - name: Run the pipeline
         run: |
-          uv run creditsurv fetch-macro
+          # FRED is live, and an outage of a minute must not fail an unrelated pull request:
+          # three attempts, thirty seconds apart, before the job says the code is broken.
+          for attempt in 1 2 3; do
+            uv run creditsurv fetch-macro && break
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            echo "fetch-macro failed, attempt $attempt of 3; retrying in 30 s"
+            sleep 30
+          done
           uv run python tests/smoke_book.py
           uv run creditsurv ingest
           uv run creditsurv profile
@@ -209,3 +234,27 @@ jobs:
         with:
           name: reports
           path: docs/reports/
+
+  scheduled-failure:
+    name: report a scheduled failure
+    # A scheduled run that fails says so where it will be read: one tracking issue, opened on the
+    # first failure and commented on after that, instead of a red mark on a page nobody opens.
+    needs: [quality, network, pipeline-smoke]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Scheduled CI is failing"
+          number=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "Failed again: $RUN"
+          else
+            gh issue create --title "$title" --body "The scheduled run failed: $RUN"
+          fi

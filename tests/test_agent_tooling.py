@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -21,7 +22,13 @@ HOOKS = ROOT / ".claude" / "hooks"
 
 
 def _run(script: str, payload: object, **env: str) -> subprocess.CompletedProcess[str]:
-    environment = {**os.environ, "CREDITSURV_HOOK_SKIP_GATE": "1", **env}
+    # Offline too: a test that calls GitHub is a test of the network.
+    environment = {
+        **os.environ,
+        "CREDITSURV_HOOK_SKIP_GATE": "1",
+        "CREDITSURV_HOOK_OFFLINE": "1",
+        **env,
+    }
     return subprocess.run(
         [sys.executable, str(HOOKS / script)],
         input=payload if isinstance(payload, str) else json.dumps(payload),
@@ -59,6 +66,18 @@ def _reason(command: str, tmp_path: Path, ps: str = "", power: str = "ac") -> st
         ("git add -A", "git add <path>"),
         ("git add .", "git add <path>"),
         ("git commit -am 'wip'", "git add <path>"),
+        ("git commit -q -m 'no trailer'", "Co-Authored-By"),
+        # The gate would read the index from before the add, and let the commit through.
+        ("git add docs/rules.md && git commit -q -m 'x' -m 'Co-Authored-By: C <x@y>'", "separate"),
+        ("git rm old.py; git commit --amend --no-edit", "separate"),
+        ("git commit -q -i docs/rules.md -m 'x' -m 'Co-Authored-By: C <x@y>'", "separate"),
+        ("gh pr create --title t --body 'no footer'", "Generated with"),
+        (
+            "uv run python - <<'EOF'\nfrom creditsurv.data.store import load_cells\n"
+            "cells = load_cells('exclude')\nEOF",
+            "CellBlocks",
+        ),
+        ("uv run python -c 'import x; x.split_cells(y)'", "CellBlocks"),
     ],
 )
 def test_a_rule_that_was_broken_in_prose_is_refused_with_its_alternative(
@@ -80,8 +99,13 @@ def test_a_rule_that_was_broken_in_prose_is_refused_with_its_alternative(
         'pgrep -f "creditsurv report"',
         "caffeinate -dimsu uv run creditsurv report --no-extra-fits > log 2>&1",
         # A commit message describing the rules is data, not a command.
-        "git commit -q -F - <<'EOF'\nnever git add -A, never creditsurv prune-archives\nEOF",
-        'git commit -m "explain why git add -A is refused"',
+        "git commit -q -F - <<'EOF'\nnever git add -A, never creditsurv prune-archives\n\n"
+        "Co-Authored-By: Claude <noreply@anthropic.com>\nEOF",
+        'git commit -m "explain why git add -A is refused" -m "Co-Authored-By: Claude <x@y>"',
+        "git commit --amend --no-edit",
+        "uv run python -c 'from creditsurv.data.store import load_cells_window'",
+        # Mentioning the function in a string is not calling it: the first version refused this.
+        "uv run python - <<'EOF'\nnote = 'never call load_cells(...) on the whole table'\nEOF",
     ],
 )
 def test_ordinary_work_is_let_through(command: str, tmp_path: Path) -> None:
@@ -220,3 +244,304 @@ def test_every_subagent_says_when_to_use_it_and_what_it_may_touch(agent: Path) -
     assert fields.get("tools"), (
         f"{agent.name} should list its tools rather than inherit all of them"
     )
+
+
+_BASE_REGISTER = "# Register\n\n## 1 November\n\nAn entry.\n"
+
+
+def _repository(tmp_path: Path) -> Path:
+    """A throwaway git repository shaped like this one, for the diff-reading checks."""
+    root = tmp_path / "repo"
+    for path, text in {
+        "docs/rules.md": "# Rules\n",
+        "docs/rules_register.md": _BASE_REGISTER,
+        "src/creditsurv/config.py": "ECONOMIC_DIMENSION = {'a': 'x'}\nOTHER = 1\n",
+        "src/creditsurv/models/old.py": "class Kept:\n    pass\n",
+        "README.md": "readme\n",
+    }.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text)
+    for argv in (
+        ["init", "-q", "-b", "main"],
+        ["-c", "user.email=t@t", "-c", "user.name=t", "add", "."],
+        ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base"],
+    ):
+        subprocess.run(["git", *argv], cwd=root, check=True, capture_output=True)
+    return root
+
+
+def _policy(root: Path) -> list[object]:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("policy_under_test", HOOKS / "policy.py")
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclasses look their module up here
+    spec.loader.exec_module(module)
+    module.ROOT = root  # type: ignore[attr-defined]
+    return list(module.check(["--cached"]))
+
+
+def _stage(root: Path, edits: dict[str, str | None]) -> None:
+    for path, text in edits.items():
+        target = root / path
+        if text is None:
+            target.unlink()
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+
+
+@pytest.mark.parametrize(
+    ("edits", "rule"),
+    [
+        ({"docs/rules.md": "# Rules\n\nA new rule.\n"}, "rules-without-register"),
+        (
+            {"docs/rules_register.md": "# Register\n\n## 1 November\n\nRewritten.\n"},
+            "register-rewritten",
+        ),
+        (
+            {"src/creditsurv/config.py": "ECONOMIC_DIMENSION = {'a': 'y'}\nOTHER = 1\n"},
+            "declared-constant",
+        ),
+        ({"data/processed/cells.parquet": "x"}, "data-artefact"),
+        ({"src/creditsurv/fits.pickle": "x"}, "data-artefact"),
+        ({"scripts/tool.py": "print(1)\n"}, "new-top-level"),
+        ({".github/workflows/site.yml": "on: push\n"}, "new-workflow"),
+    ],
+)
+def test_the_policy_refuses_what_governance_forbids(
+    edits: dict[str, str | None], rule: str, tmp_path: Path
+) -> None:
+    root = _repository(tmp_path)
+    _stage(root, edits)
+    found = [v for v in _policy(root) if v.blocking]  # type: ignore[attr-defined]
+    assert rule in {v.rule for v in found}, f"{rule} not raised; got {found}"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "edits",
+    [
+        {
+            "docs/rules.md": "# Rules\n\nNew.\n",
+            "docs/rules_register.md": _BASE_REGISTER + "\n## 2 November\n\nNew rule.\n",
+        },
+        {"docs/rules_register.md": _BASE_REGISTER + "\n## 2 November\n\nMore.\n"},
+        {"src/creditsurv/config.py": "ECONOMIC_DIMENSION = {'a': 'x'}\nOTHER = 2\n"},
+        {"docs/tables/view.parquet": "x", "README.md": "readme, longer\n"},
+    ],
+)
+def test_the_policy_lets_ordinary_change_through(
+    edits: dict[str, str | None], tmp_path: Path
+) -> None:
+    root = _repository(tmp_path)
+    _stage(root, edits)
+    assert not [v for v in _policy(root) if v.blocking]  # type: ignore[attr-defined]
+
+
+def test_a_renamed_model_module_is_a_warning_not_a_refusal(tmp_path: Path) -> None:
+    root = _repository(tmp_path)
+    subprocess.run(
+        ["git", "mv", "src/creditsurv/models/old.py", "src/creditsurv/models/new.py"],
+        cwd=root,
+        check=True,
+    )
+    found = _policy(root)
+    assert any(v.rule == "module-renamed" and not v.blocking for v in found)  # type: ignore[attr-defined]
+
+
+def test_a_pull_request_waits_for_a_verified_clean_commit(tmp_path: Path) -> None:
+    """The suite and the 3.11 leg are too slow for a hook, so the hook checks the stamp instead."""
+    root = _repository(tmp_path)
+    command = "gh pr create --title t --body 'x\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'"
+    environment = {"CLAUDE_PROJECT_DIR": str(root), "CREDITSURV_HOOK_SKIP_GATE": ""}
+
+    def decide() -> str:
+        result = subprocess.run(
+            [sys.executable, str(HOOKS / "guard_bash.py")],
+            input=json.dumps({"tool_input": {"command": command}}),
+            capture_output=True,
+            text=True,
+            env={**os.environ, **environment},
+            timeout=30,
+            check=False,
+        )
+        return result.stdout
+
+    assert "no verification has been recorded" in decide()
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (root / ".claude" / "state").mkdir(parents=True)
+    (root / ".claude" / "state" / "verified").write_text(head + "\n")
+    subprocess.run(["git", "update-index", "--assume-unchanged", "README.md"], cwd=root, check=True)
+    (root / ".gitignore").write_text(".claude/state/\n")
+    subprocess.run(["git", "add", ".gitignore"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "ignore"],
+        cwd=root,
+        check=True,
+    )
+    assert "the last verification was of" in decide(), "a stamp of an older commit must not count"
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (root / ".claude" / "state" / "verified").write_text(head + "\n")
+    assert decide() == "", "a verified, clean commit opens the pull request"
+    (root / "README.md").write_text("dirty\n")
+    subprocess.run(
+        ["git", "update-index", "--no-assume-unchanged", "README.md"], cwd=root, check=True
+    )
+    assert "uncommitted changes" in decide()
+
+
+def _post(command: str, state: Path, **env: str) -> str:
+    environment = {"CLAUDE_PROJECT_DIR": str(state), **env}
+    result = _run("post_bash.py", {"tool_input": {"command": command}}, **environment)
+    assert result.returncode == 0, result.stderr
+    if not result.stdout.strip():
+        return ""
+    return str(json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
+
+
+_BUSY = "  4079  01-07:20:57 7599660 /u/.venv/bin/python /u/.venv/bin/creditsurv report\n"
+
+
+def test_a_heavy_job_that_pages_is_reported(tmp_path: Path) -> None:
+    """The 31-hour report averaged about 108,000 swap-ins a minute, and nothing said so."""
+    table = tmp_path / "ps.txt"
+    table.write_text(_BUSY)
+    seams = {"CREDITSURV_HOOK_PS": str(table)}
+    assert (
+        _post("ls", tmp_path, CREDITSURV_HOOK_SWAPINS="1000", CREDITSURV_HOOK_NOW="0", **seams)
+        == ""
+    )
+    note = _post(
+        "ls", tmp_path, CREDITSURV_HOOK_SWAPINS="1001000", CREDITSURV_HOOK_NOW="600", **seams
+    )
+    assert "paging" in note
+    assert "100,000 swap-ins a minute" in note
+    calm = _post(
+        "ls", tmp_path, CREDITSURV_HOOK_SWAPINS="1001100", CREDITSURV_HOOK_NOW="1200", **seams
+    )
+    assert calm == ""
+
+
+def test_a_kill_that_leaves_a_heavy_job_alive_is_reported(tmp_path: Path) -> None:
+    table = tmp_path / "ps.txt"
+    table.write_text(_BUSY)
+    note = _post("kill -TERM 4078", tmp_path, CREDITSURV_HOOK_PS=str(table))
+    assert "still alive" in note
+    assert "pid 4079" in note
+    table.write_text("")
+    assert _post("kill -TERM 4079", tmp_path, CREDITSURV_HOOK_PS=str(table)) == ""
+
+
+def test_a_second_read_of_the_test_window_for_one_specification_is_flagged(
+    tmp_path: Path,
+) -> None:
+    """Rule 1 reads the test window once; the log makes that checkable."""
+    (tmp_path / "src" / "creditsurv").mkdir(parents=True)
+    (tmp_path / "src" / "creditsurv" / "config.py").write_text("FORMULA = 'a + b'\n")
+    assert _post("uv run creditsurv windows", tmp_path) == ""
+    assert "already been read" in _post("uv run creditsurv views", tmp_path)
+    (tmp_path / "src" / "creditsurv" / "config.py").write_text("FORMULA = 'a + b + c'\n")
+    assert _post("uv run creditsurv windows", tmp_path) == "", "a new specification reads afresh"
+
+
+def test_a_command_named_only_as_data_is_not_a_read_of_the_test_window(tmp_path: Path) -> None:
+    """On 4 November 2026 two reads were logged on a day none was made.
+
+    A heredoc that edited a page mentioning `creditsurv windows` counted as running it, and the
+    second edit was then reported as a re-read.
+    """
+    (tmp_path / "src" / "creditsurv").mkdir(parents=True)
+    (tmp_path / "src" / "creditsurv" / "config.py").write_text("FORMULA = 'a + b'\n")
+    for command in (
+        "python3 - <<'EOF'\ntext = 'creditsurv windows fitted four models'\nEOF",
+        'git commit -m "creditsurv views no longer fits"',
+    ):
+        assert _post(command, tmp_path) == ""
+    assert not (tmp_path / ".claude" / "state" / "test-window-reads.log").exists()
+
+
+def test_a_python_file_is_formatted_the_moment_it_is_written(tmp_path: Path) -> None:
+    """Measured live: the next Edit on the reformatted file succeeds without a re-read."""
+    if not (ROOT / ".venv" / "bin" / "ruff").exists():
+        pytest.skip("ruff is not installed in the project environment")
+    (tmp_path / ".venv").symlink_to(ROOT / ".venv")
+    written = tmp_path / "probe.py"
+    written.write_text("import sys,os\ndef f( x ):\n    return x+1\n")
+    result = _run(
+        "format_on_edit.py",
+        {"tool_input": {"file_path": str(written)}},
+        CLAUDE_PROJECT_DIR=str(tmp_path),
+    )
+    assert result.returncode == 0
+    assert written.read_text() == "def f(x):\n    return x + 1\n"
+
+
+def test_a_number_typed_on_a_section_page_is_reported_when_written(tmp_path: Path) -> None:
+    """The early half of tests/test_docs_provenance.py, on the one file just written."""
+    (tmp_path / "docs").mkdir()
+    module = tmp_path / "src" / "creditsurv" / "site"
+    module.mkdir(parents=True)
+    (module / "provenance.py").write_text(
+        (ROOT / "src" / "creditsurv" / "site" / "provenance.py").read_text()
+    )
+    page = tmp_path / "docs" / "model.md"
+    page.write_text("The cut reads 1.420.\n\n<!-- value: backtest.ae -->\n")
+
+    def written(target: Path) -> str:
+        result = _run(
+            "docs_provenance.py",
+            {"tool_input": {"file_path": str(target)}},
+            CLAUDE_PROJECT_DIR=str(tmp_path),
+        )
+        assert result.returncode == 0, result.stderr
+        if not result.stdout.strip():
+            return ""
+        return str(json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
+
+    assert "line 1: 1.420" in written(page)
+    page.write_text("<!-- recorded: 2026-10-01 -->\nThe cut read 1.420.\n<!-- /recorded -->\n")
+    assert written(page) == ""
+    record = tmp_path / "docs" / "rules_register.md"
+    record.write_text("A history may read 1.420.\n")
+    assert written(record) == "", "a record is not a section page"
+
+
+def _tool_invocations(command: str) -> str:
+    """`uv run --no-sync -q --python 3.11 mypy` and `uv run mypy` are one check."""
+    command = re.sub(r"^.*?\buv run\b", "", command)
+    command = re.sub(r"\s(?:--no-sync|-q|--frozen)\b", " ", command)
+    command = re.sub(r"\s--(?:python|extra|group)\s+\S+", " ", command)
+    return " ".join(command.split())
+
+
+def test_every_check_the_verify_skill_runs_is_also_run_by_ci() -> None:
+    """A check added to one side only is a gate one party can pass and the other cannot."""
+    script = (ROOT / ".claude" / "skills" / "verify" / "scripts" / "verify.sh").read_text()
+    steps = [
+        _tool_invocations(line.split('"', 2)[2])
+        for line in re.sub(r"\\\n\s*", " ", script).splitlines()
+        if re.match(r'\s*step "', line)
+    ]
+    assert len(steps) >= 5, steps
+    ci = " ".join((ROOT / ".github" / "workflows" / "ci.yml").read_text().split())
+    missing = [step for step in steps if step.removesuffix(" -q") not in ci]
+    assert not missing, f"verify.sh runs checks the CI does not: {missing}"
+
+
+def test_a_commit_message_read_from_a_file_is_read_for_its_trailer(tmp_path: Path) -> None:
+    """An amend rewording a message through `-F` was refused for a trailer the file carried."""
+    signed = tmp_path / "signed.txt"
+    signed.write_text("subject\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
+    bare = tmp_path / "bare.txt"
+    bare.write_text("subject\n")
+    assert _reason(f"git commit -q --amend -F {signed}", tmp_path) is None
+    reason = _reason(f"git commit -F {bare}", tmp_path)
+    assert reason is not None
+    assert "Co-Authored-By" in reason

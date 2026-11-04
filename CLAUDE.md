@@ -65,22 +65,17 @@ runs it themselves if they mean it.
 
 ## Conventions
 
-- **Verification before a push or a merge is the `verify` skill**:
-  - ruff and the formatter;
-  - mypy on 3.12, and on 3.11 in the isolated `.venv-py311`, **never** by re-syncing `.venv`;
-  - `pytest -m "not network"`;
-  - `mkdocs build --strict`.
-
-  The commit hook runs ruff, the formatter and mypy, and refuses a red commit.
+- **The hooks enforce the mechanical conventions** (`.claude/settings.json`, reasons in
+  `docs/development.md`): a Python file is formatted when written; a commit is refused on red lint,
+  format, types or targeted tests, on missing attribution, on blanket staging and on the
+  repository invariants in `.claude/hooks/policy.py`, which CI runs on every PR as well; a push
+  to a PR needs the `verify` skill's stamp for that exact commit.
 - **Comments say why, with the measurement that settled it.** Commit messages carry the number that
   justified the change.
 - **Notebooks carry evidence, not logic.** Every statistic is a tested function in the package. A
   scratch script that computes something worth keeping is a function that has not been written yet.
 - **Tests use fixtures in Freddie Mac's own pipe-delimited format**, so every test that needs data
   also exercises the loader. There is no synthetic panel.
-- **Stage named paths.** Agents and scratch work leave files in the tree.
-- **One CI workflow** (`.github/workflows/ci.yml`), with publishing jobs that wait on the tests.
-  **No new top-level folder** for one file: look for where it naturally belongs.
 - Repository docs, code comments, commit messages and PR descriptions are in English.
 
 ## Where the state is

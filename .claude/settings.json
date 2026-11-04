@@ -9,7 +9,9 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/session_status.py"],
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/session_status.py"
+            ],
             "timeout": 15
           }
         ]
@@ -22,8 +24,46 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard_bash.py"],
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard_bash.py"
+            ],
             "timeout": 300
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/post_bash.py"
+            ],
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/format_on_edit.py"
+            ],
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/docs_provenance.py"
+            ],
+            "timeout": 10
           }
         ]
       }

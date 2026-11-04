@@ -636,13 +636,30 @@ reports under `docs/reports/` -- among them `moratorium.md`, where the event def
 chosen, and `selection.md`, where the specification was.
 
 **Figures, tables and numbers on the site are placed, never typed.** A page writes
-`<!-- figure: … -->`, `<!-- table: … -->` or `<!-- value: … -->` (the name is elided here because the site hook fills placeholders even in inline code); the hook in
+`<!-- figure: name -->`, `<!-- table: name -->` or `<!-- value: name -->`; the hook in
 `creditsurv.site.hooks` fills them at build time from `docs/tables`, the aggregates
 `creditsurv views` computes locally from the cached fit and the parquet. CI cannot read the
 data, so those tables are committed, and the build fails on a placeholder naming nothing, a
 view the manifest lacks, or model views from more than one fit. `creditsurv views` never
 fits: it stops when the report's fit is not in the cache. Scoring the training half for it
 takes the footprint near 15 GB, so nothing else heavy runs beside it.
+
+**And "never typed" is a test now, because for weeks it was only a sentence.** On 4 November 2026
+the section pages held **79 precise numbers typed by hand** -- decimals of three or more places
+and percentages of two -- and the row of regime cuts on `calibration.md` and `validation.md` still
+read the scalar-shape campaign's 0.458 / 0.823 / 1.420 eleven days after the shaped one had
+measured 0.4920 / 1.3211 / 0.9849. Of the 79, **three** were copies of a value the site already
+places, about fifteen were stale, and the rest were history: what a validation round or an earlier model
+read, correct for its date and wrong without one. `creditsurv.site.provenance` now separates the
+three -- a number is placed, or it sits between `<!-- recorded: YYYY-MM-DD -->` and
+`<!-- /recorded -->` and the site shows the date, or `tests/test_docs_provenance.py` fails -- and
+the long records (the rules, the register, these notes, the plans) stay outside it, because
+everything in them is dated by where it stands. Two things the triage found that the check could
+not: `model.md` said `financial_conditions` had left the model and `policy_rate_change` was still
+in it, both the reverse of the selection of 19 October, in prose with no number to flag. **A dated
+stale number is still stale**, so the check makes a page honest about its dates and not about its
+content. The placeholders are no longer filled inside inline code either; the old workaround of
+eliding the name by hand was a rule written down instead of a defect fixed.
 
 ## The finer bands were tried, and the diagnosis they leave behind
 

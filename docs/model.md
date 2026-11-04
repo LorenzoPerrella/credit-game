@@ -47,10 +47,12 @@ a single hazard, which overstates it at long horizons.
 
 The prepayment model is selected by the same procedure under its own declared priors -- a credit
 score that lengthens survival shortens the time to repayment, so the two sets of priors cannot be
-one -- and what survives says what one would hope: the fall in the market rate since origination
-at -0.198 per standard deviation and equity volatility at -0.215 are its largest effects, while
-inflation, its change, volatility change and sentiment were all eliminated for turning their
-signs. A refinancing is decided by the rate on offer, not by the business cycle at large. The
+one -- and what survives says what one would hope:
+<!-- recorded: 2026-10-01 -->
+the fall in the market rate since origination at -0.198 per standard deviation and equity
+volatility at -0.215 are its largest effects, while inflation, its change, volatility change and
+sentiment were all eliminated for turning their signs.
+<!-- /recorded --> A refinancing is decided by the rate on offer, not by the business cycle at large. The
 record is in the [prepayment selection](reports/selection_weibull_prepayment.md).
 
 ## Reading a coefficient
@@ -69,20 +71,29 @@ training half. The categorical ones are each level against its reference.
     <!-- table: coefficients -->
 
 ??? warning "Three readings to hold loosely"
-    - *Financial conditions* (`financial_conditions`) is **no longer in this model**: step 10
-      removed it at -0.0155 per standard deviation, under the 0.02 of rule 3, which had named it
-      in advance. It survives in the prepayment block.
-    - *Policy rate change since origination* (`policy_rate_change`) has no declared prior, and
-      rule 15 **withdraws it as a candidate** for that reason: a policy rate above where the loan
-      was written lengthens survival here, which reads as the central bank cutting into recessions
-      rather than as a payment channel a fixed-rate mortgage does not have -- and the second
-      validation measured what that reading costs. The term lowered the predicted hazard 33% in
-      2023 and 36% in 2024, about **80% of the level drift** since 2021, and on the 2022 regime
-      cut it is the difference between 1.420 and 0.959. It is still in the published model until
-      the selection that removes it has run.
-    - Housing carries two covariates, the position, *loan-to-value change since origination*
-      (`ltv_change`), and the construction cycle, *housing starts growth* (`housing_starts_growth`). The stability step separates a pair only when the smaller one
-      changes sign, and neither did.
+    - *Financial conditions* (`financial_conditions`) **is in this model**, and was not in the one
+      before it.
+      <!-- recorded: 2026-10-17 -->
+      The selection of 17 October removed it at step 10, at -0.0155 per standard deviation,
+      under the 0.02 of rule 3, which had named it in advance.
+      <!-- /recorded -->
+      The selection of 19 October, with rule 12's bands, keeps it through every step, and *equity volatility*, with which it
+      shares most of its movement, goes instead for its sign.
+    - *Policy rate change since origination* (`policy_rate_change`) is **not in this model**: it
+      had no declared prior, and rule 15 withdrew it as a candidate for that reason. A policy rate
+      above where the loan was written lengthened survival, which reads as the central bank
+      cutting into recessions rather than as a payment channel a fixed-rate mortgage does not
+      have.
+      <!-- recorded: 2026-10-19 -->
+      The second validation measured what the reading cost: the term lowered the predicted hazard
+      33% in 2023 and 36% in 2024, about **80% of the level drift** since 2021, and on the
+      scalar-shape model's 2022 regime cut it was the difference between 1.420 and 0.959. The
+      selection without it read 0.9715 there, close to what was predicted.
+      <!-- /recorded -->
+    - Housing enters through one covariate, the position, *loan-to-value change since
+      origination* (`ltv_change`). The construction cycle, *housing starts growth*
+      (`housing_starts_growth`), was removed at step 9: it shares the housing dimension with
+      `ltv_change`, the larger of the two, and its effect changes sign across the time cut.
 
 ## The term structure
 

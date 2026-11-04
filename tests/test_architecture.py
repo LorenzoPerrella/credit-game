@@ -195,3 +195,47 @@ def test_the_numerical_core_imports_nothing_from_the_package(deep: str) -> None:
         f"{module} -> {imported}" for module in inside for imported in graph[module] - inside
     }
     assert not reaching, f"{deep} must take arrays and nothing else: " + ", ".join(sorted(reaching))
+
+
+# Two conventions that were prose and are state of the repository, so they are tests: a hook
+# would bind only the agent, and a commit made by hand would pass it.
+
+
+def test_a_notebook_carries_evidence_and_no_logic() -> None:
+    """Every statistic is a tested function in the package; a notebook calls it and shows it.
+
+    A function or a class defined in a cell is an algorithm in the wrong place.
+    """
+    import json
+
+    notebooks = sorted((ROOT.parents[1] / "notebooks").glob("*.ipynb"))
+    defined = []
+    for notebook in notebooks:
+        cells = json.loads(notebook.read_text(encoding="utf-8"))["cells"]
+        for number, cell in enumerate(cells):
+            if cell["cell_type"] != "code":
+                continue
+            source = "".join(cell["source"])
+            # IPython's magics and shell escapes are not Python.
+            lines = [
+                line for line in source.splitlines() if not line.lstrip().startswith(("%", "!"))
+            ]
+            for node in ast.walk(ast.parse("\n".join(lines))):
+                if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                    defined.append(f"{notebook.name} cell {number}: {node.name}")
+    assert not defined, f"Logic defined in notebooks, which belongs in the package: {defined}"
+
+
+def test_no_thread_count_is_read_off_the_hardware() -> None:
+    """`config.KERNEL_THREADS` is declared, because the parts a sum is split into decide its last
+    digits: a count from `os.cpu_count()` would make a fit's last digits a property of the machine.
+    """
+    readers = []
+    for path in sorted(ROOT.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+            if name in {"cpu_count", "process_cpu_count", "sched_getaffinity"}:
+                readers.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+    assert not readers, f"Thread counts read off the hardware: {readers}"
