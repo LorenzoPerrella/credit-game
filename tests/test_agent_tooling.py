@@ -533,3 +533,15 @@ def test_every_check_the_verify_skill_runs_is_also_run_by_ci() -> None:
     ci = " ".join((ROOT / ".github" / "workflows" / "ci.yml").read_text().split())
     missing = [step for step in steps if step.removesuffix(" -q") not in ci]
     assert not missing, f"verify.sh runs checks the CI does not: {missing}"
+
+
+def test_a_commit_message_read_from_a_file_is_read_for_its_trailer(tmp_path: Path) -> None:
+    """An amend rewording a message through `-F` was refused for a trailer the file carried."""
+    signed = tmp_path / "signed.txt"
+    signed.write_text("subject\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
+    bare = tmp_path / "bare.txt"
+    bare.write_text("subject\n")
+    assert _reason(f"git commit -q --amend -F {signed}", tmp_path) is None
+    reason = _reason(f"git commit -F {bare}", tmp_path)
+    assert reason is not None
+    assert "Co-Authored-By" in reason

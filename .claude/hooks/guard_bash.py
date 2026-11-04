@@ -115,6 +115,12 @@ def _attribution(code: str, raw: str) -> str | None:
     """
     committing = re.search(r"\bgit\s+commit\b", code)
     reused = re.search(r"--no-edit\b|\s-[cC]\s", code)
+    # A message or a body read from a file is in the file, not in the command: the amend that
+    # reworded a message through `-F` was refused for a trailer the file carried.
+    for name in re.findall(r"(?:\s-F\s*|--file[= ]|--body-file[= ])\s*([^\s;&|]+)", code):
+        if name != "-":
+            with contextlib.suppress(OSError, UnicodeDecodeError):
+                raw += "\n" + Path(name).expanduser().read_text(encoding="utf-8")
     if committing and not reused and "Co-Authored-By:" not in raw:
         return (
             "This commit carries no `Co-Authored-By:` line, and every commit Claude writes ends "
