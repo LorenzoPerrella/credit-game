@@ -7,15 +7,16 @@ description: Commit, push, open and merge pull requests in credit-game the way t
 
 ## Commits
 
-- **Stage named paths.** `git add -A`, `git add .` and `git commit -a` are refused by the hook,
-  because agents and scratch work leave files in the tree. Check `git status --short` first.
-- **The commit gate** (PreToolUse) runs ruff, the formatter and mypy, and refuses a red commit. The
-  full suite and the 3.11 leg are the `verify` skill's job, before pushing.
+- **Stage named paths**; the hook refuses blanket staging. Check `git status --short` first.
+- **The commit gate runs before the whole compound command.** A refused `git add … && git commit`
+  staged nothing either, so after a refusal fix, then add and commit in a fresh call, and check
+  `git show --stat HEAD` that the commit holds every file: one did not, and was amended.
 - **The message carries the number that justified the change**: the measurement, the before and
   after, the count of what was wrong. "fix the probe" is not a message; "the probe read the
   first year 1.536 high where maximum likelihood reads 0.657 low" is.
 - Write it in English, with the subject as the finding rather than the action where possible.
-- End it with the attribution line the session's system reminder gives (`Co-Authored-By: ...`).
+- End it with the attribution line the session's system reminder gives; the hook refuses a
+  commit without `Co-Authored-By:`.
 - Pass long messages through a heredoc (`git commit -q -F - <<'EOF'`). The hook reads only the
   command outside heredocs and quotes, so a message describing a refused command is fine.
 
@@ -33,8 +34,8 @@ description: Commit, push, open and merge pull requests in credit-game the way t
 
 ## Merging
 
-- Merge when CI is green on the PR: quality on 3.11 and 3.12, and the site build. The end-to-end
-  pipeline does not run on PRs (schedule and `workflow_dispatch` only), so dispatch it for a branch
-  that touches the CLI: `gh workflow run ci.yml --ref <branch>`.
+- Merge when CI is green on the PR: quality on 3.11 and 3.12, the site build, `policy` and the
+  end-to-end pipeline, which runs on every PR. Opening or pushing to a PR needs the `verify`
+  stamp for HEAD on a clean tree.
 - The user's standing instruction is to merge PRs as they become ready.
 - Squash-merge, keep the branch until its follow-up is done, then delete it.
