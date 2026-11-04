@@ -8,9 +8,9 @@ description: Commit, push, open and merge pull requests in credit-game the way t
 ## Commits
 
 - **Stage named paths**; the hook refuses blanket staging. Check `git status --short` first.
-- **The commit gate runs before the whole compound command.** A refused `git add … && git commit`
-  staged nothing either, so after a refusal fix, then add and commit in a fresh call, and check
-  `git show --stat HEAD` that the commit holds every file: one did not, and was amended.
+- **Stage and commit in separate calls.** The gate runs before the whole command, so in
+  `git add … && git commit` it would read the index from before the add; the hook refuses the
+  pair. After a commit, `git show --stat HEAD` confirms it holds every file.
 - **The message carries the number that justified the change**: the measurement, the before and
   after, the count of what was wrong. "fix the probe" is not a message; "the probe read the
   first year 1.536 high where maximum likelihood reads 0.657 low" is.

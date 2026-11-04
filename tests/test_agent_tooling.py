@@ -67,6 +67,10 @@ def _reason(command: str, tmp_path: Path, ps: str = "", power: str = "ac") -> st
         ("git add .", "git add <path>"),
         ("git commit -am 'wip'", "git add <path>"),
         ("git commit -q -m 'no trailer'", "Co-Authored-By"),
+        # The gate would read the index from before the add, and let the commit through.
+        ("git add docs/rules.md && git commit -q -m 'x' -m 'Co-Authored-By: C <x@y>'", "separate"),
+        ("git rm old.py; git commit --amend --no-edit", "separate"),
+        ("git commit -q -i docs/rules.md -m 'x' -m 'Co-Authored-By: C <x@y>'", "separate"),
         ("gh pr create --title t --body 'no footer'", "Generated with"),
         (
             "uv run python - <<'EOF'\nfrom creditsurv.data.store import load_cells\n"

@@ -135,7 +135,21 @@ def _commit_gate(code: str, raw: str) -> str | None:
     Seconds, where CI found the same things in minutes. The full suite and the 3.11 leg are the
     `verify` skill's, and the push gate below insists they ran.
     """
-    if not re.search(r"\bgit\s+commit\b", code) or os.environ.get("CREDITSURV_HOOK_SKIP_GATE"):
+    if not re.search(r"\bgit\s+commit\b", code):
+        return None
+    # This hook runs before the whole command, so in `git add x && git commit` it reads the index
+    # as it was *before* the add: on 4 November 2026 a probe staging docs/rules.md alone was
+    # committed straight through the policy check that refuses exactly that, and lint, types and
+    # the targeted tests would have read the old index the same way.
+    if re.search(r"\bgit\s+(add|rm|mv|stage)\b", code) or re.search(
+        r"\bgit\s+commit\b[^;&|]*\s(--include|--only|-[a-zA-Z]*[io]\b)", code
+    ):
+        return (
+            "Stage and commit in separate calls: this gate runs before the whole command, so it "
+            "would check the index as it was before the staging. `git add <paths>` first, then "
+            "`git commit`."
+        )
+    if os.environ.get("CREDITSURV_HOOK_SKIP_GATE"):
         return None
     blocking = [v.render() for v in policy.check(["--cached"]) if v.blocking]
     if blocking:
