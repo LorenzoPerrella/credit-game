@@ -53,3 +53,5 @@ target/
 # main .venv is never re-synced underneath a running suite.
 .claude/settings.local.json
 .venv-py311/
+# Hook state: the verification stamp, caches, the test-window log. Per machine, never committed.
+.claude/state/

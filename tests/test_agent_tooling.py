@@ -59,6 +59,14 @@ def _reason(command: str, tmp_path: Path, ps: str = "", power: str = "ac") -> st
         ("git add -A", "git add <path>"),
         ("git add .", "git add <path>"),
         ("git commit -am 'wip'", "git add <path>"),
+        ("git commit -q -m 'no trailer'", "Co-Authored-By"),
+        ("gh pr create --title t --body 'no footer'", "Generated with"),
+        (
+            "uv run python - <<'EOF'\nfrom creditsurv.data.store import load_cells\n"
+            "cells = load_cells('exclude')\nEOF",
+            "CellBlocks",
+        ),
+        ("uv run python -c 'import x; x.split_cells(y)'", "CellBlocks"),
     ],
 )
 def test_a_rule_that_was_broken_in_prose_is_refused_with_its_alternative(
@@ -80,8 +88,13 @@ def test_a_rule_that_was_broken_in_prose_is_refused_with_its_alternative(
         'pgrep -f "creditsurv report"',
         "caffeinate -dimsu uv run creditsurv report --no-extra-fits > log 2>&1",
         # A commit message describing the rules is data, not a command.
-        "git commit -q -F - <<'EOF'\nnever git add -A, never creditsurv prune-archives\nEOF",
-        'git commit -m "explain why git add -A is refused"',
+        "git commit -q -F - <<'EOF'\nnever git add -A, never creditsurv prune-archives\n\n"
+        "Co-Authored-By: Claude <noreply@anthropic.com>\nEOF",
+        'git commit -m "explain why git add -A is refused" -m "Co-Authored-By: Claude <x@y>"',
+        "git commit --amend --no-edit",
+        "uv run python -c 'from creditsurv.data.store import load_cells_window'",
+        # Mentioning the function in a string is not calling it: the first version refused this.
+        "uv run python - <<'EOF'\nnote = 'never call load_cells(...) on the whole table'\nEOF",
     ],
 )
 def test_ordinary_work_is_let_through(command: str, tmp_path: Path) -> None:
@@ -220,3 +233,154 @@ def test_every_subagent_says_when_to_use_it_and_what_it_may_touch(agent: Path) -
     assert fields.get("tools"), (
         f"{agent.name} should list its tools rather than inherit all of them"
     )
+
+
+_BASE_REGISTER = "# Register\n\n## 1 November\n\nAn entry.\n"
+
+
+def _repository(tmp_path: Path) -> Path:
+    """A throwaway git repository shaped like this one, for the diff-reading checks."""
+    root = tmp_path / "repo"
+    for path, text in {
+        "docs/rules.md": "# Rules\n",
+        "docs/rules_register.md": _BASE_REGISTER,
+        "src/creditsurv/config.py": "ECONOMIC_DIMENSION = {'a': 'x'}\nOTHER = 1\n",
+        "src/creditsurv/models/old.py": "class Kept:\n    pass\n",
+        "README.md": "readme\n",
+    }.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text)
+    for argv in (
+        ["init", "-q", "-b", "main"],
+        ["-c", "user.email=t@t", "-c", "user.name=t", "add", "."],
+        ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base"],
+    ):
+        subprocess.run(["git", *argv], cwd=root, check=True, capture_output=True)
+    return root
+
+
+def _policy(root: Path) -> list[object]:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("policy_under_test", HOOKS / "policy.py")
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclasses look their module up here
+    spec.loader.exec_module(module)
+    module.ROOT = root  # type: ignore[attr-defined]
+    return list(module.check(["--cached"]))
+
+
+def _stage(root: Path, edits: dict[str, str | None]) -> None:
+    for path, text in edits.items():
+        target = root / path
+        if text is None:
+            target.unlink()
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+
+
+@pytest.mark.parametrize(
+    ("edits", "rule"),
+    [
+        ({"docs/rules.md": "# Rules\n\nA new rule.\n"}, "rules-without-register"),
+        (
+            {"docs/rules_register.md": "# Register\n\n## 1 November\n\nRewritten.\n"},
+            "register-rewritten",
+        ),
+        (
+            {"src/creditsurv/config.py": "ECONOMIC_DIMENSION = {'a': 'y'}\nOTHER = 1\n"},
+            "declared-constant",
+        ),
+        ({"data/processed/cells.parquet": "x"}, "data-artefact"),
+        ({"src/creditsurv/fits.pickle": "x"}, "data-artefact"),
+        ({"scripts/tool.py": "print(1)\n"}, "new-top-level"),
+        ({".github/workflows/site.yml": "on: push\n"}, "new-workflow"),
+    ],
+)
+def test_the_policy_refuses_what_governance_forbids(
+    edits: dict[str, str | None], rule: str, tmp_path: Path
+) -> None:
+    root = _repository(tmp_path)
+    _stage(root, edits)
+    found = [v for v in _policy(root) if v.blocking]  # type: ignore[attr-defined]
+    assert rule in {v.rule for v in found}, f"{rule} not raised; got {found}"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "edits",
+    [
+        {
+            "docs/rules.md": "# Rules\n\nNew.\n",
+            "docs/rules_register.md": _BASE_REGISTER + "\n## 2 November\n\nNew rule.\n",
+        },
+        {"docs/rules_register.md": _BASE_REGISTER + "\n## 2 November\n\nMore.\n"},
+        {"src/creditsurv/config.py": "ECONOMIC_DIMENSION = {'a': 'x'}\nOTHER = 2\n"},
+        {"docs/tables/view.parquet": "x", "README.md": "readme, longer\n"},
+    ],
+)
+def test_the_policy_lets_ordinary_change_through(
+    edits: dict[str, str | None], tmp_path: Path
+) -> None:
+    root = _repository(tmp_path)
+    _stage(root, edits)
+    assert not [v for v in _policy(root) if v.blocking]  # type: ignore[attr-defined]
+
+
+def test_a_renamed_model_module_is_a_warning_not_a_refusal(tmp_path: Path) -> None:
+    root = _repository(tmp_path)
+    subprocess.run(
+        ["git", "mv", "src/creditsurv/models/old.py", "src/creditsurv/models/new.py"],
+        cwd=root,
+        check=True,
+    )
+    found = _policy(root)
+    assert any(v.rule == "module-renamed" and not v.blocking for v in found)  # type: ignore[attr-defined]
+
+
+def test_a_pull_request_waits_for_a_verified_clean_commit(tmp_path: Path) -> None:
+    """The suite and the 3.11 leg are too slow for a hook, so the hook checks the stamp instead."""
+    root = _repository(tmp_path)
+    command = "gh pr create --title t --body 'x\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'"
+    environment = {"CLAUDE_PROJECT_DIR": str(root), "CREDITSURV_HOOK_SKIP_GATE": ""}
+
+    def decide() -> str:
+        result = subprocess.run(
+            [sys.executable, str(HOOKS / "guard_bash.py")],
+            input=json.dumps({"tool_input": {"command": command}}),
+            capture_output=True,
+            text=True,
+            env={**os.environ, **environment},
+            timeout=30,
+            check=False,
+        )
+        return result.stdout
+
+    assert "no verification has been recorded" in decide()
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (root / ".claude" / "state").mkdir(parents=True)
+    (root / ".claude" / "state" / "verified").write_text(head + "\n")
+    subprocess.run(["git", "update-index", "--assume-unchanged", "README.md"], cwd=root, check=True)
+    (root / ".gitignore").write_text(".claude/state/\n")
+    subprocess.run(["git", "add", ".gitignore"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "ignore"],
+        cwd=root,
+        check=True,
+    )
+    assert "the last verification was of" in decide(), "a stamp of an older commit must not count"
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (root / ".claude" / "state" / "verified").write_text(head + "\n")
+    assert decide() == "", "a verified, clean commit opens the pull request"
+    (root / "README.md").write_text("dirty\n")
+    subprocess.run(
+        ["git", "update-index", "--no-assume-unchanged", "README.md"], cwd=root, check=True
+    )
+    assert "uncommitted changes" in decide()
