@@ -21,7 +21,13 @@ HOOKS = ROOT / ".claude" / "hooks"
 
 
 def _run(script: str, payload: object, **env: str) -> subprocess.CompletedProcess[str]:
-    environment = {**os.environ, "CREDITSURV_HOOK_SKIP_GATE": "1", **env}
+    # Offline too: a test that calls GitHub is a test of the network.
+    environment = {
+        **os.environ,
+        "CREDITSURV_HOOK_SKIP_GATE": "1",
+        "CREDITSURV_HOOK_OFFLINE": "1",
+        **env,
+    }
     return subprocess.run(
         [sys.executable, str(HOOKS / script)],
         input=payload if isinstance(payload, str) else json.dumps(payload),
@@ -384,3 +390,73 @@ def test_a_pull_request_waits_for_a_verified_clean_commit(tmp_path: Path) -> Non
         ["git", "update-index", "--no-assume-unchanged", "README.md"], cwd=root, check=True
     )
     assert "uncommitted changes" in decide()
+
+
+def _post(command: str, state: Path, **env: str) -> str:
+    environment = {"CLAUDE_PROJECT_DIR": str(state), **env}
+    result = _run("post_bash.py", {"tool_input": {"command": command}}, **environment)
+    assert result.returncode == 0, result.stderr
+    if not result.stdout.strip():
+        return ""
+    return str(json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
+
+
+_BUSY = "  4079  01-07:20:57 7599660 /u/.venv/bin/python /u/.venv/bin/creditsurv report\n"
+
+
+def test_a_heavy_job_that_pages_is_reported(tmp_path: Path) -> None:
+    """The 31-hour report averaged about 108,000 swap-ins a minute, and nothing said so."""
+    table = tmp_path / "ps.txt"
+    table.write_text(_BUSY)
+    seams = {"CREDITSURV_HOOK_PS": str(table)}
+    assert (
+        _post("ls", tmp_path, CREDITSURV_HOOK_SWAPINS="1000", CREDITSURV_HOOK_NOW="0", **seams)
+        == ""
+    )
+    note = _post(
+        "ls", tmp_path, CREDITSURV_HOOK_SWAPINS="1001000", CREDITSURV_HOOK_NOW="600", **seams
+    )
+    assert "paging" in note
+    assert "100,000 swap-ins a minute" in note
+    calm = _post(
+        "ls", tmp_path, CREDITSURV_HOOK_SWAPINS="1001100", CREDITSURV_HOOK_NOW="1200", **seams
+    )
+    assert calm == ""
+
+
+def test_a_kill_that_leaves_a_heavy_job_alive_is_reported(tmp_path: Path) -> None:
+    table = tmp_path / "ps.txt"
+    table.write_text(_BUSY)
+    note = _post("kill -TERM 4078", tmp_path, CREDITSURV_HOOK_PS=str(table))
+    assert "still alive" in note
+    assert "pid 4079" in note
+    table.write_text("")
+    assert _post("kill -TERM 4079", tmp_path, CREDITSURV_HOOK_PS=str(table)) == ""
+
+
+def test_a_second_read_of_the_test_window_for_one_specification_is_flagged(
+    tmp_path: Path,
+) -> None:
+    """Rule 1 reads the test window once; the log makes that checkable."""
+    (tmp_path / "src" / "creditsurv").mkdir(parents=True)
+    (tmp_path / "src" / "creditsurv" / "config.py").write_text("FORMULA = 'a + b'\n")
+    assert _post("uv run creditsurv windows", tmp_path) == ""
+    assert "already been read" in _post("uv run creditsurv views", tmp_path)
+    (tmp_path / "src" / "creditsurv" / "config.py").write_text("FORMULA = 'a + b + c'\n")
+    assert _post("uv run creditsurv windows", tmp_path) == "", "a new specification reads afresh"
+
+
+def test_a_python_file_is_formatted_the_moment_it_is_written(tmp_path: Path) -> None:
+    """Measured live: the next Edit on the reformatted file succeeds without a re-read."""
+    if not (ROOT / ".venv" / "bin" / "ruff").exists():
+        pytest.skip("ruff is not installed in the project environment")
+    (tmp_path / ".venv").symlink_to(ROOT / ".venv")
+    written = tmp_path / "probe.py"
+    written.write_text("import sys,os\ndef f( x ):\n    return x+1\n")
+    result = _run(
+        "format_on_edit.py",
+        {"tool_input": {"file_path": str(written)}},
+        CLAUDE_PROJECT_DIR=str(tmp_path),
+    )
+    assert result.returncode == 0
+    assert written.read_text() == "def f(x):\n    return x + 1\n"
