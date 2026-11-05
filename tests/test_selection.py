@@ -666,3 +666,47 @@ def test_the_prior_a_sign_is_read_against_is_the_cause_s_own() -> None:
     assert signs_against_prior(fitted, PREPAYMENT_SIGNS) == ["unemployment_change"]
     # No map given is the default model's, as every caller before this expected.
     assert signs_against_prior(fitted) == signs_against_prior(fitted, EXPECTED_SIGNS)
+
+
+def test_the_joint_wald_test_survives_a_shape_level_the_data_do_not_identify() -> None:
+    """The end-to-end book of a few hundred loans left a shape level without exposure, and the
+    joint test died on `Singular matrix` inside `report`. It is the generalised statistic there,
+    on the rank, and the ordinary one wherever the covariance has full rank."""
+    from types import SimpleNamespace
+
+    from creditsurv.models.selection import exponential_is_rejected
+
+    index = pd.MultiIndex.from_tuples(
+        [("lambda_", "Intercept"), ("rho_", "Intercept"), ("rho_", "a"), ("rho_", "b")]
+    )
+    params = pd.Series([7.0, 0.5, 0.2, 0.2], index=index)
+    covariance = pd.DataFrame(np.diag([0.01, 0.04, 0.09, 0.09]), index=index, columns=index)
+    full = exponential_is_rejected(
+        SimpleNamespace(  # type: ignore[arg-type]
+            distribution="weibull",
+            fitter=SimpleNamespace(
+                params_=params,
+                standard_errors_=pd.Series(np.sqrt(np.diag(covariance)), index=index),
+                variance_matrix_=covariance,
+            ),
+        )
+    )
+    assert full["joint_df"] == 3
+    assert full["joint_statistic"] == pytest.approx(0.25 / 0.04 + 2 * 0.04 / 0.09)
+
+    # `a` and `b` perfectly collinear: one direction between them is not identified.
+    singular = covariance.copy()
+    singular.loc[("rho_", "a"), ("rho_", "b")] = 0.09
+    singular.loc[("rho_", "b"), ("rho_", "a")] = 0.09
+    reduced = exponential_is_rejected(
+        SimpleNamespace(  # type: ignore[arg-type]
+            distribution="weibull",
+            fitter=SimpleNamespace(
+                params_=params,
+                standard_errors_=pd.Series(np.sqrt(np.diag(singular)), index=index),
+                variance_matrix_=singular,
+            ),
+        )
+    )
+    assert reduced["joint_df"] == 2
+    assert np.isfinite(reduced["joint_statistic"])

@@ -324,7 +324,17 @@ def exponential_is_rejected(result: FitResult) -> dict[str, float]:
     ]
     theta = params.loc[tested].to_numpy(dtype=float)
     covariance = result.fitter.variance_matrix_.loc[tested, tested].to_numpy(dtype=float)
-    joint = float(theta @ np.linalg.solve(covariance, theta))
+    # A shape level with no exposure leaves the covariance singular, as on the end-to-end book of
+    # a few hundred loans, where lifelines has already fallen back to a pseudo-inverse Hessian. The
+    # Wald statistic is then the generalised one, on the degrees of freedom the data identify;
+    # with full rank, as on the production book, `solve` is used and nothing changes.
+    # Decided on the rank, not on an exception: a matrix singular in exact arithmetic can leave
+    # `solve` a pivot of rounding error, and the statistic is then enormous rather than refused.
+    degrees = int(np.linalg.matrix_rank(covariance, hermitian=True))
+    if degrees == len(tested):
+        joint = float(theta @ np.linalg.solve(covariance, theta))
+    else:
+        joint = float(theta @ np.linalg.pinv(covariance, hermitian=True) @ theta)
     return {
         "log_rho": log_rho,
         "rho": float(np.exp(log_rho)),
@@ -332,8 +342,8 @@ def exponential_is_rejected(result: FitResult) -> dict[str, float]:
         "z": statistic,
         "p_value": float(2.0 * stats.norm.sf(abs(statistic))),
         "joint_statistic": joint,
-        "joint_df": float(len(tested)),
-        "joint_p_value": float(stats.chi2.sf(joint, len(tested))),
+        "joint_df": float(degrees),
+        "joint_p_value": float(stats.chi2.sf(joint, degrees)),
     }
 
 
