@@ -1506,3 +1506,40 @@ is not licensed by this measurement.
 PD that does not depend on it is the one that measures the product directly. That route is a
 prepayment model on the current cells, which any incidence needs, and the declared cumulative
 PD by vintage against the Aalen-Johansen incidence.
+
+### Rule 6 — The prepayment model on the current cells: criteria and prediction, before the selection
+
+No prepayment model exists on the table every published fit is made on. The one on record
+(`docs/reports/selection_weibull_prepayment.json`) was selected on cells since rebuilt, under the
+linear form rule 12 replaced. The second validation measured it out of sample (L2): A/E 0.767,
+deciles inverted from 1.51 to 0.49, Gini 0.18. A lifetime PD is a cumulative incidence and needs
+this hazard, so it is re-selected now, before anything about a lifetime PD is measured.
+
+**What is run.** `creditsurv select --cause prepayment` on the training half up to 2021-12, under
+rule 6's five priors, with the reversal rule of step 8 for every other candidate as rule 6 says.
+The model is the selection's own fit of what it chooses, as for the restricted basis.
+
+**The criteria, declared now.** Section 5's three cross-sectional criteria, read on the prepayment
+hazard against the loan-months that ended in prepayment:
+
+- actual over expected overall within 0.80 to 1.25;
+- the exposure-weighted Gini above 0.45;
+- every decile within 0.80 to 1.25.
+
+They are read on the declared test window, 2025-01 to 2026-03, once, and **unanchored**, because
+rule 4 anchors the default hazard and nothing else. They are reported beside the same three on
+the campaign's windows, which is where a reader can see whether a test-window figure is a
+regime's.
+
+**The prediction.**
+
+- **The ordering is no longer inverted**: Gini above 0.45 and the deciles rising with predicted
+  risk. The old model's inversion came from a selection that could not read banded covariates as
+  bands, and rule 12 now makes it.
+- **The level is the uncertain part**, and no direction is predicted for it. 2025 is a year of
+  rates well above most note rates, which is the strongest lock-in on record. A model fitted to
+  2021 has seen falling rates, not lock-in at this depth, so an overall miss outside the band would
+  be a regime and not a defect. It would be recorded as that, and not corrected on the test window.
+- `mortgage_rate_decline` keeps rule 6's sign, **negative**: a market rate below the note rate
+  shortens the time to repayment. A reversal here would mean the model reads refinancing
+  backwards, and would be a finding against the specification, not a covariate to drop quietly.

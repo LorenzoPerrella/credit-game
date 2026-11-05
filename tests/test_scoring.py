@@ -321,3 +321,36 @@ def test_the_window_criteria_read_a_month_at_a_time_are_the_backtests_own(
     np.testing.assert_allclose(
         criteria.by_vintage()["expected"].to_numpy(), by_year.to_numpy(), rtol=1e-12
     )
+
+
+def test_the_window_criteria_of_the_prepayment_cause_count_prepayments(
+    on_shelf: Path, fitted: FitResult, macro_module: pd.DataFrame
+) -> None:
+    """The same pass for the competing model: its events are the prepayments, a default is
+    censoring, and nothing is anchored."""
+    from creditsurv.backtest.scoring import window_criteria
+    from creditsurv.models.anchoring import Anchor
+
+    unanchored = Anchor(
+        multiplier=1.0,
+        window=("none", "none"),
+        actual_defaults=0,
+        expected_defaults=0,
+        loan_months=0,
+    )
+    first, last = pd.Period("2014-01", freq="M"), pd.Period("2014-06", freq="M")
+    criteria = window_criteria(
+        fitted,
+        COVARIATES,
+        anchor=unanchored,
+        moratorium="exclude",
+        macro=macro_module,
+        first=first,
+        last=last,
+        cause="prepayment",
+    )
+    whole = _window(macro_module, str(first), str(last))
+    prepaid = float((ended_in(whole, "prepayment") * whole[WEIGHT].astype(float)).sum())
+    defaulted = float((ended_in(whole) * whole[WEIGHT].astype(float)).sum())
+    assert criteria.actual_defaults == pytest.approx(prepaid)
+    assert prepaid != defaulted, "the fixture must tell the two causes apart"
