@@ -1465,3 +1465,44 @@ exposure:
 
 The 2019-20 window holds the 2020 vintage only at ages under 12 and inside the moratorium, so
 it is reported and not read.
+
+### Age or vintage: the declared comparison does not decide
+
+Measured on the campaign's windows with the cut fits, unanchored, in 12.8 minutes. Actual over
+expected by origination year, with the 30-year rate averaged over the origination year:
+
+| vintage | rate | 2019-20 | 2021-22 | 2023-24 |
+|---|---|---|---|---|
+| 2016 | 3.65 | 0.4414 | 1.3692 | 0.5930 |
+| 2017 | 3.99 | 0.5241 | 1.6001 | 0.7073 |
+| 2018 | 4.54 | 0.5194 | **1.9665** | **0.8854** |
+| 2019 | 3.93 | 0.3730 | 1.8115 | 0.7733 |
+| 2020 | 3.11 | 0.4112 | 1.4929 | 0.9666 |
+| 2021 | 2.96 | | 0.9084 | 1.0806 |
+| 2022 | 5.33 | | 0.5792 | 1.2932 |
+| 2023 | 6.80 | | | 1.3179 |
+| 2024 | 6.72 | | | 0.7654 |
+
+**The declared comparison**, vintage 2018 against 2020-21 taken together (their defaults over
+their expected):
+
+- **2021-22:** 1.9665 to 1.1526, falling, which is the vintage reading;
+- **2023-24:** 0.8854 to 1.0456, rising, which is the age reading.
+
+The two windows disagree, so by the rule declared at 18:10 this **does not decide**. The model's
+failure is not attributed to the vintage, and step 3 of the plan, an origination-rate covariate,
+is not licensed by this measurement.
+
+**Recorded and not used as evidence**, because neither was declared:
+
+- In 2021-22 the 2020-21 vintages are under two years old. That is where the first year's
+  definitional lag already reads low in sample (0.727), so the comparison there carries a
+  confound the declaration did not name.
+- From vintage 2018 to 2019 the rate falls, 4.54 to 3.93, and actual over expected falls in
+  both windows, 1.97 to 1.81 and 0.89 to 0.77. That is the vintage reading's direction, on a
+  pair chosen after the fact.
+
+**What follows.** The attribution cannot be made from these windows, so the route to a lifetime
+PD that does not depend on it is the one that measures the product directly. That route is a
+prepayment model on the current cells, which any incidence needs, and the declared cumulative
+PD by vintage against the Aalen-Johansen incidence.
