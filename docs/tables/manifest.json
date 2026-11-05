@@ -19,7 +19,7 @@
       "deciles_passed"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "ae_by_age_band": {
     "title": "Actual against expected by loan age",
@@ -38,7 +38,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "ae_by_decile": {
     "title": "Actual against expected by decile of predicted risk",
@@ -57,7 +57,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "ae_by_vintage": {
     "title": "Actual against expected by vintage year",
@@ -76,7 +76,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "ae_by_year": {
     "title": "Actual against expected by calendar year",
@@ -95,7 +95,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "backtest_by_age_band": {
     "title": "Backtest by seasoning band",
@@ -114,7 +114,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "backtest_by_decile": {
     "title": "Backtest by decile of predicted risk",
@@ -133,7 +133,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "backtest_by_month": {
     "title": "Backtest by month",
@@ -152,7 +152,7 @@
       "actual_over_expected"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "book_by_segment": {
     "title": "The book by month and segment",
@@ -191,7 +191,7 @@
       "effect_1sd"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "covariates_over_time": {
     "title": "Macro covariates over time",
@@ -204,7 +204,7 @@
       "mean"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "km_vs_model": {
     "title": "Kaplan-Meier against the model, by segment",
@@ -227,7 +227,7 @@
       "deviation"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "lending_by_segment": {
     "title": "Lending by vintage year and segment",
@@ -274,7 +274,7 @@
       "adverse_multiple"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "scored_book": {
     "title": "The book on the shelf, scored",
@@ -307,7 +307,7 @@
       "correlation"
     ],
     "fit": null,
-    "generated": "2026-10-21 10:43 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "selection_correlation": {
     "title": "Selection: correlation",
@@ -320,7 +320,7 @@
       "correlation"
     ],
     "fit": null,
-    "generated": "2026-10-21 10:43 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "selection_elimination": {
     "title": "Selection: elimination",
@@ -336,7 +336,7 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-10-21 10:43 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "selection_fits": {
     "title": "Selection: fits",
@@ -358,7 +358,7 @@
       "cached"
     ],
     "fit": null,
-    "generated": "2026-10-21 10:43 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "selection_inflation": {
     "title": "Selection: inflation",
@@ -372,7 +372,7 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-10-21 10:43 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "selection_materiality": {
     "title": "Selection: materiality",
@@ -387,7 +387,7 @@
       "remaining"
     ],
     "fit": null,
-    "generated": "2026-10-21 10:43 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "selection_screening": {
     "title": "Selection: screening",
@@ -407,7 +407,7 @@
       "lr_statistic"
     ],
     "fit": null,
-    "generated": "2026-10-21 10:43 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "selection_stability": {
     "title": "Selection: stability",
@@ -426,7 +426,7 @@
       "round"
     ],
     "fit": null,
-    "generated": "2026-10-21 10:43 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "term_structure_by_segment": {
     "title": "PD term structure by segment",
@@ -442,7 +442,7 @@
       "marginal_pd"
     ],
     "fit": "bc016657b2b40bfc",
-    "generated": "2026-10-21 09:34 UTC"
+    "generated": "2026-11-05 00:39 UTC"
   },
   "underwriting_by_vintage": {
     "title": "Underwriting by vintage",
