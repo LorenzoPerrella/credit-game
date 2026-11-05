@@ -309,3 +309,15 @@ def test_the_window_criteria_read_a_month_at_a_time_are_the_backtests_own(
         rtol=1e-12,
     )
     assert 0 <= criteria.bands_inside() <= len(criteria.age_bands)
+
+    # The crossing by origination year adds up to the bands and to the whole, and is the window
+    # crossed by its own origination year.
+    crossed = criteria.by_vintage_and_age
+    summed = crossed.groupby("age_band", observed=True)[["events", "expected"]].sum()
+    np.testing.assert_allclose(summed["expected"].to_numpy(), expected.to_numpy(), rtol=1e-12)
+    assert crossed["exposure"].sum() == criteria.loan_months
+    vintage = pd.PeriodIndex(whole["origination_period"]).year
+    by_year = (hazard * exposure).groupby(vintage).sum()
+    np.testing.assert_allclose(
+        criteria.by_vintage()["expected"].to_numpy(), by_year.to_numpy(), rtol=1e-12
+    )

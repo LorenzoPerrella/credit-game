@@ -1421,3 +1421,47 @@ eliminated again, and the selection record is the published one. The basis stays
 measurement are kept in `docs/reports/selection_age_basis.json`. Both declared forms along age
 have now read 3 of 7. **No fourth form is declared on the strength of either.** The model card
 keeps the lifetime PD as not fit, and the twelve-month PD as fit.
+
+### Age or vintage: what the two forms' common failure is measured against, declared first
+
+Both declared forms along age read 3 of 7 on the test window, with the same residual: young bands
+under-predicted, seasoned bands over-predicted. The published fit holds **6 of 7 in sample**
+(0.727, 1.184, 1.248, 1.074, 0.862, 0.937, 1.145) and 2 of 7 out of it. In one window of fifteen
+months `period = cohort + age`, so "12 to 35 months" is the 2022-2024 originations and "60 and
+over" is the 2010-2020 ones. The failure may be of the age or of the vintage.
+
+**What cannot be decided, stated before anything is measured.** The linear part of an age
+effect and the linear part of a vintage effect cannot be separated. That is the identity itself,
+and no crossing of windows undoes it. A first draft of this plan, written on 5 November, said
+that a vintage effect would leave the age profile flat *within* each vintage. That is withdrawn
+before any run. Inside a 24-month window a vintage spans about 24 months of age, so removing
+vintage levels removes the age profile mechanically, and the reading would be vacuous.
+
+**What can be decided: a vintage covariate that is not monotone in the vintage.** The 30-year
+mortgage rate at origination fell from about 4.5% (2018) to about 3% (2020-21) and rose to about
+7% (2023). Over the vintages 2018 to 2021 the two readings predict opposite directions inside one
+window:
+
+- **age:** younger is under-predicted, so actual over expected **rises** from vintage 2018 to
+  vintages 2020-21;
+- **vintage, through the conditions of origination:** a lower origination rate means a lighter
+  payment, so actual over expected **falls** from vintage 2018 to vintages 2020-21, and rises
+  again for 2022 onwards.
+
+**The measurement.** `window_criteria` crossed by origination year and age band, on the
+campaign's three windows: 2019-20, 2021-22 and 2023-24. The fits are the three cuts already
+cached, `2885150746775c27`, `91c018cd9286c4ad` and `6b98fbff8570f641`, each the configured
+specification with the shape. They are unanchored, because a multiplier scales every vintage
+alike and cannot move a comparison between them. **The declared test window is not read**: it
+judges, it does not diagnose, and choosing the next specification on it would be tuning on it.
+
+**How it is read.** The windows 2021-22 and 2023-24 both hold vintages 2018 and 2020-21 with
+exposure:
+
+- the vintage reading is supported if actual over expected falls from vintage 2018 to the mean
+  of 2020-21 **in both**;
+- the age reading is supported if it rises in both;
+- anything else is recorded as not deciding.
+
+The 2019-20 window holds the 2020 vintage only at ages under 12 and inside the moratorium, so
+it is reported and not read.
