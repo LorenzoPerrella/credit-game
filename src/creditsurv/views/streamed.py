@@ -44,6 +44,9 @@ if TYPE_CHECKING:
 #: quantile, which is finer than the deciles themselves can distinguish.
 HISTOGRAM_BINS: int = 10_000
 
+#: How many batch tables a recipe holds before they are added into one.
+FOLD_EVERY: int = 16
+
 
 def _hazard(fitted: FitResult, frame: pd.DataFrame, covariates: Sequence[str]) -> np.ndarray:
     return predicted_hazard(fitted, frame, covariates).to_numpy(dtype=float)
@@ -87,7 +90,13 @@ def accumulate(
             for name, (fitted, covariates) in models.items()
         }
         for recipe in recipes:
-            pieces[recipe.name].append(recipe.build(frame, hazards))
+            held = pieces[recipe.name]
+            held.append(recipe.build(frame, hazards))
+            # Folded as it goes, because the tables are sums. Kept whole to the end, every
+            # batch's table of every recipe stayed alive: 291 batches of the training half
+            # took `views` to a 22 GB footprint on a 16 GB machine on 5 November 2026.
+            if len(held) >= FOLD_EVERY:
+                pieces[recipe.name] = [_summed(held, recipe.keys)]
     return {
         recipe.name: recipe.finish(_summed(pieces[recipe.name], recipe.keys)) for recipe in recipes
     }

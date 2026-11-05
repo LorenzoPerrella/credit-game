@@ -641,6 +641,60 @@ def test_the_in_sample_views_are_the_same_accumulated_as_computed_whole(
             )
 
 
+def test_folding_the_batch_tables_as_they_come_changes_no_table(
+    streamed_cells: Path, macro_module: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sums are added every `FOLD_EVERY` batches instead of once at the end.
+
+    Kept whole, every batch's table of every recipe stayed alive to the end: `views` reached a
+    22 GB footprint on the training half on 5 November 2026 and had to be killed, where folded it
+    peaked at 2.17 GB. Folding every two batches here, over eleven, exercises it; the test above
+    reads six batches and never reaches the default of sixteen.
+    """
+    from creditsurv.data.panel import CellBlocks, cells_to_episodes
+    from creditsurv.models.aft import fit_aft
+    from creditsurv.views import streamed
+    from creditsurv.views.model import in_sample_recipes
+
+    covariates = ["credit_score", "original_ltv"]
+    cells = pd.read_parquet(streamed_cells)
+    held = cells_to_episodes(cells, macro_module, covariates=covariates)
+    fitted = fit_aft(held, covariates, " + ".join(covariates), weights_col=WEIGHT)
+    source = CellBlocks(
+        str(streamed_cells),
+        macro_module,
+        tuple(covariates),
+        rows=len(cells) // 11 + 1,
+        model_only=False,
+    ).prepared()
+    boundaries = streamed.decile_boundaries(source(), fitted, covariates)
+
+    def tables(every: int) -> dict[str, pd.DataFrame]:
+        monkeypatch.setattr(streamed, "FOLD_EVERY", every)
+        return streamed.accumulate(
+            source(),
+            {"weibull": (fitted, covariates)},
+            in_sample_recipes(primary="weibull", families=[], boundaries=boundaries),
+        )
+
+    whole, folded = tables(10**9), tables(2)
+    assert set(folded) == set(whole)
+    for name, table in folded.items():
+        reference = whole[name]
+        assert list(table.columns) == list(reference.columns), name
+        assert len(table) == len(reference), name
+        for column in table.columns:
+            if pd.api.types.is_float_dtype(table[column]):
+                np.testing.assert_allclose(
+                    table[column].to_numpy(),
+                    reference[column].to_numpy(),
+                    rtol=1e-12,
+                    err_msg=f"{name}.{column}",
+                )
+            else:
+                assert table[column].astype(str).tolist() == reference[column].astype(str).tolist()
+
+
 def test_the_views_command_scores_from_the_cell_file(
     streamed_cells: Path,
     macro_module: pd.DataFrame,
