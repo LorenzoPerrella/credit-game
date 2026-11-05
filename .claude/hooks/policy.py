@@ -216,8 +216,8 @@ def check(scope: list[str]) -> list[Violation]:
         out.append(
             Violation(
                 "rules-without-register",
-                f"{RULES} changes and {REGISTER} does not. Rule 17: an amendment is recorded "
-                "in the register in the same change, with what changed and why.",
+                f"{RULES} changes and {REGISTER} does not. {RULES} forbids amending it without the "
+                "register recording what changed and when, in the same change.",
             )
         )
 

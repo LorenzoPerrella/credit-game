@@ -352,18 +352,40 @@ def _calls(source: str) -> set[str]:
     return names
 
 
+#: An interpreter that runs what follows it: `python`, `python3.12` with its flags, optionally under
+#: `uv run`, or `uv run` handed a script. Only the options of `uv run` that take a value are
+#: allowed one, or `uv run --no-sync pytest` reads `pytest` as the value of `--no-sync`.
+_UV_OPTIONS = (
+    r"(?:\s+(?:--(?:python|extra|group|with|project|directory|env-file|package)[ =]\S+"
+    r"|-[-\w]+))*"
+)
+_PYTHON = r"\bpython[\d.]*(?:\s+-[A-Za-z]+)*"
+_RUNS = rf"(?:(?:\buv\s+run{_UV_OPTIONS}\s+)?{_PYTHON}|\buv\s+run{_UV_OPTIONS})"
+
+
 def _scripts(raw: str) -> list[str]:
-    """Each piece of Python the command runs: heredoc bodies, `-c` arguments, named `.py` files."""
-    heredoc = r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n(.*?)\n\s*\1\b"
-    sources = [body for _, body in re.findall(heredoc, raw, re.S)]
+    """Each piece of Python the command **runs**: a heredoc fed to an interpreter, a `-c`
+    argument, a `.py` file an interpreter is handed.
+
+    Only what an interpreter runs. Until 5 November 2026 every `.py` named anywhere in the
+    command was parsed, so `grep -n ... src/creditsurv/cli.py` and `pytest tests/test_scoring.py`
+    were refused for the `load_cells` the views command calls and a fixture test calls on a
+    few hundred cells -- and a `cat > file <<EOF` that wrote such a file would have been too.
+    """
+    heredoc = r"(?m)^([^\n]*?)<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n(.*?)\n\s*\2\b"
+    sources = [
+        body
+        for prefix, _, body in re.findall(heredoc, raw, re.S)
+        if re.search(_RUNS + r"(?:\s+-)?\s*$", prefix)
+    ]
     # `-c` only outside heredoc bodies: a body is data, and one that held a `-c '...'` test string
     # was read as a command and refused.
-    outside = re.sub(heredoc, "<<HEREDOC", raw, flags=re.S)
+    outside = re.sub(heredoc, r"\1<<HEREDOC", raw, flags=re.S)
     sources += [
         match[1] or match[2]
         for match in re.findall(r"""\s-c\s+(['"])((?:(?!\1).)*)\1|\s-c\s+(\S+)""", outside, re.S)
     ]
-    for name in re.findall(r"(\S+\.py)\b", _code(raw)):
+    for name in re.findall(_RUNS + r"\s+(\S+\.py)\b", _code(raw)):
         script = Path(name) if Path(name).is_absolute() else PROJECT / name
         if script.is_file() and ".claude/hooks" not in str(script):
             with contextlib.suppress(OSError):

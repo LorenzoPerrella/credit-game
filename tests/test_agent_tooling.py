@@ -78,6 +78,8 @@ def _reason(command: str, tmp_path: Path, ps: str = "", power: str = "ac") -> st
             "CellBlocks",
         ),
         ("uv run python -c 'import x; x.split_cells(y)'", "CellBlocks"),
+        ("uv run --no-sync python src/creditsurv/cli.py views", "CellBlocks"),
+        ("uv run --python 3.11 python -I src/creditsurv/cli.py", "CellBlocks"),
     ],
 )
 def test_a_rule_that_was_broken_in_prose_is_refused_with_its_alternative(
@@ -106,6 +108,11 @@ def test_a_rule_that_was_broken_in_prose_is_refused_with_its_alternative(
         "uv run python -c 'from creditsurv.data.store import load_cells_window'",
         # Mentioning the function in a string is not calling it: the first version refused this.
         "uv run python - <<'EOF'\nnote = 'never call load_cells(...) on the whole table'\nEOF",
+        # A file named but not run: grepped, handed to pytest, or written by a heredoc. All three
+        # were refused on 5 November 2026 for the `load_cells` the views command calls.
+        "grep -n load_cells src/creditsurv/cli.py",
+        "uv run --no-sync pytest -q tests/test_views.py",
+        "cat > scratch.py <<'EOF'\nfrom creditsurv.data.store import load_cells\nload_cells()\nEOF",
     ],
 )
 def test_ordinary_work_is_let_through(command: str, tmp_path: Path) -> None:
@@ -144,7 +151,9 @@ def test_the_session_starts_with_the_state_of_the_machine() -> None:
     context = json.loads(result.stdout)["hookSpecificOutput"]
     assert context["hookEventName"] == "SessionStart"
     assert "Branch" in context["additionalContext"]
-    assert "heavy creditsurv job" in context["additionalContext"]
+    # Either "No heavy creditsurv job is running" or "Heavy creditsurv jobs alive": the test
+    # failed only while a job ran, on the capital, which is how it looked flaky for two days.
+    assert "heavy creditsurv job" in context["additionalContext"].lower()
 
 
 def test_every_hook_the_settings_name_exists_and_the_logs_are_unbuffered() -> None:
@@ -437,6 +446,12 @@ def test_a_kill_that_leaves_a_heavy_job_alive_is_reported(tmp_path: Path) -> Non
     assert "pid 4079" in note
     table.write_text("")
     assert _post("kill -TERM 4079", tmp_path, CREDITSURV_HOOK_PS=str(table)) == ""
+    # A probe is not a kill: a loop waiting on the job was reported as leaving it alive.
+    table.write_text(_BUSY)
+    assert (
+        _post("while kill -0 4079; do sleep 30; done", tmp_path, CREDITSURV_HOOK_PS=str(table))
+        == ""
+    )
 
 
 def test_a_second_read_of_the_test_window_for_one_specification_is_flagged(
