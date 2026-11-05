@@ -439,9 +439,9 @@ def _categorised(encoded: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFra
     return encoded.assign(**{name: encoded[name].astype("category") for name in text})
 
 
-#: Memory the row-by-time prediction grid may occupy, in bytes. 256 MB leaves room for
-#: the copies lifelines makes internally while staying large enough that the per-block
-#: overhead is negligible against the arithmetic.
+#: Memory one block of the prediction may occupy, in bytes: the design lifelines builds for it and
+#: the few row vectors beside it. 256 MB keeps the per-block overhead negligible against the
+#: arithmetic.
 _PREDICTION_BUDGET: Final = 256 * 1024 * 1024
 
 
@@ -459,28 +459,34 @@ def episode_hazards(
     carries. This is the quantity the episode likelihood is built from, and the
     building block for every survival curve in the project.
 
-    lifelines predicts a full row-by-time grid, of which exactly two cells per row are
-    wanted. Asking for it in one call is the obvious implementation and it does not
-    survive contact with this panel: 15.9 million rows over a 327-month grid is a
-    **41.5 GB** array, on a machine with 16 GB. The process is killed by the kernel
-    with no traceback, two and a half hours into a run, at the first line that touches
-    a full-size prediction -- which is a memorable way to discover an O(rows x horizon)
-    allocation.
+    **Two times a row, not a grid.** Until November 2026 this asked lifelines'
+    ``predict_cumulative_hazard`` for every age from zero to the oldest row's -- a row-by-time
+    grid of ~400 columns on this book -- and kept two cells of each row. That is 200 times the
+    arithmetic needed, and it is why a scoring pass over two test windows took six hours. The
+    cumulative hazard is evaluated here at ``a`` and ``a + 1`` only, through the fitter's own
+    ``_cumulative_hazard``: the function ``predict_cumulative_hazard`` itself calls, with the
+    same parameters and the same design, and which lifelines' own ``conditional_after`` branch
+    already calls with one time per row. So the formula is lifelines' and not a second copy of
+    it; ``tests/test_aft.py`` holds the two paths together to 1e-12.
 
-    So the rows are processed in blocks sized to a memory budget rather than to a row
-    count: the wider the age grid, the fewer rows per block. The arithmetic inside a
-    block is unchanged, so the result is identical to the single-call version -- which
-    a test asserts, because "identical apart from chunking" is exactly the kind of
-    claim that quietly stops being true.
+    The rows are processed in blocks sized to a memory budget on the design's width. Before the
+    grid went, one call on 15.9 million rows was a **41.5 GB** array and the kernel killed the
+    process two and a half hours into a run with no traceback.
 
     ``columns`` narrows each block to the covariates. A caller holding the training half
     of the whole population passes the frame and the names instead of copying the
     covariates out first, which on the exact key is ~3 GB taken only to be sliced.
     """
-    horizon = int(ages.max()) + 2
-    grid = np.arange(0.0, float(horizon))
-    block = _block_size(horizon, budget_bytes)
+    from lifelines.utils import DataframeSlicer
+
+    fitter = result.fitter
+    # Exactly what `predict_cumulative_hazard` hands its `_cumulative_hazard`.
+    parameters = {
+        name: fitter.params_.loc[name].to_numpy() for name in fitter._fitted_parameter_names
+    }
+    block = _block_size(len(fitter.params_), budget_bytes)
     narrow = None if columns is None else list(columns)
+    at = np.asarray(ages, dtype=float)
 
     hazard = np.empty(len(frame), dtype=float)
     for start in range(0, len(frame), block):
@@ -488,17 +494,16 @@ def episode_hazards(
         rows = frame.iloc[start:stop]
         if narrow is not None:
             rows = rows.loc[:, narrow]
-        at = ages[start:stop]
-        cumulative = result.fitter.predict_cumulative_hazard(rows, times=grid).to_numpy()
-        positions = np.arange(cumulative.shape[1])
-        increment = cumulative[at + 1, positions] - cumulative[at, positions]
-        hazard[start:stop] = 1.0 - np.exp(-increment)
+        design = DataframeSlicer(fitter.regressors.transform_df(rows))
+        entry = fitter._cumulative_hazard(parameters, at[start:stop], design)
+        exit_ = fitter._cumulative_hazard(parameters, at[start:stop] + 1.0, design)
+        hazard[start:stop] = 1.0 - np.exp(-(np.asarray(exit_) - np.asarray(entry)))
     return hazard
 
 
-def _block_size(horizon: int, budget_bytes: int = _PREDICTION_BUDGET) -> int:
-    """How many rows can be predicted at once within the budget."""
-    return max(int(budget_bytes / (horizon * 8)), 1)
+def _block_size(width: int, budget_bytes: int = _PREDICTION_BUDGET) -> int:
+    """How many rows can be predicted at once: the design, plus about six row vectors."""
+    return max(int(budget_bytes / ((width + 6) * 8)), 1)
 
 
 def coefficient_table(result: FitResult) -> pd.DataFrame:
