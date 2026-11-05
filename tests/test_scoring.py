@@ -259,3 +259,53 @@ def test_the_score_command_scores_the_published_fit_and_writes_the_cells(
     cells = pd.read_parquet(written)
     assert {"pd_12m", "pd_12m_floored", "grade", WEIGHT} <= set(cells.columns)
     assert (cells["pd_12m_floored"] >= REGULATORY_PD_FLOOR).all()
+
+
+def test_the_window_criteria_read_a_month_at_a_time_are_the_backtests_own(
+    on_shelf: Path, fitted: FitResult, macro_module: pd.DataFrame
+) -> None:
+    """The overall ratio, the Gini and the deciles against `runner.score` on the whole window,
+    and the age bands against the window grouped by `config.AGE_BANDS`."""
+    from creditsurv.backtest.runner import score
+    from creditsurv.backtest.scoring import window_criteria
+    from creditsurv.views.segments import age_bands
+
+    anchor = anchor_streamed(
+        fitted, COVARIATES, moratorium="exclude", macro=macro_module, window=WINDOW
+    )
+    first, last = pd.Period("2014-01", freq="M"), pd.Period("2014-06", freq="M")
+    criteria = window_criteria(
+        fitted,
+        COVARIATES,
+        anchor=anchor,
+        moratorium="exclude",
+        macro=macro_module,
+        first=first,
+        last=last,
+    )
+    whole = _window(macro_module, str(first), str(last))
+    hazard = pd.Series(anchor.apply(predicted_hazard(fitted, whole, COVARIATES)), index=whole.index)
+    reference = score(fitted, whole, COVARIATES, as_of=first - 1, hazard=hazard)
+
+    assert criteria.loan_months == reference.loan_months
+    assert criteria.actual_defaults == pytest.approx(reference.actual_defaults, rel=1e-12)
+    assert criteria.expected_defaults == pytest.approx(reference.expected_defaults, rel=1e-12)
+    assert criteria.gini == pytest.approx(reference.gini, rel=1e-9)
+    np.testing.assert_allclose(
+        criteria.deciles["ratio"].to_numpy(), reference.calibration["ratio"].to_numpy(), rtol=1e-9
+    )
+
+    band = age_bands(whole)
+    exposure = whole[WEIGHT].astype(float)
+    expected = (hazard * exposure).groupby(band, observed=True).sum()
+    actual = (
+        (pd.Series(ended_in(whole), index=whole.index) * exposure)
+        .groupby(band, observed=True)
+        .sum()
+    )
+    np.testing.assert_allclose(
+        criteria.age_bands["actual_over_expected"].to_numpy(),
+        (actual / expected).to_numpy(),
+        rtol=1e-12,
+    )
+    assert 0 <= criteria.bands_inside() <= len(criteria.age_bands)
