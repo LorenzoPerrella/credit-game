@@ -782,6 +782,33 @@ because it would have caught a coherence failure, there being none, but because 
 profile of a declared form is the cheapest thing in this project to look at and it was never
 looked at.
 
+## 17. The regulatory PD floor, and what it is not
+
+Declared 5 November 2026, before any published output carries it, on the user's decision: the
+Basel III / CRR3 retail floor, as a **second object** beside the model's own PD.
+
+**The floor is 0.05%** on the twelve-month PD of every exposure: Basel III's final framework for
+retail exposures (CRE 32) and Article 164(1) of the CRR as amended by CRR3, for retail exposures
+secured by residential property. It is a regulatory constant, not a parameter of this model, and
+nothing here estimates or tunes it.
+
+- **It is applied to the twelve-month PD and to nothing else**: `pd_12m_floored = max(pd_12m,
+  0.0005)`, where `pd_12m` is the anchored quantity section 5's master scale is measured on.
+  Not to the monthly hazard, and not to the coefficients.
+- **Both objects are published, side by side.** The model's `pd_12m` is what the model says. The
+  floored one is what a regulatory calculation would use. A table that shows one of them says which.
+- **No criterion is evaluated on the floored PD.** Section 5 judges the model, and a floor raises
+  the expectation of the safest loans, so it could take a decile that under-predicts into the band
+  without the model changing. Every criterion therefore reads `pd_12m`, and this rule cannot turn
+  a failure into a pass.
+- **What it is not: the fix for the missing hazard floor.** Section 14 found that a multiplicative
+  hazard has no floor, and that the safest new production is predicted at about 0.5 to 1.5
+  defaults per 100,000 loan-months a month where the book realises about 3 to 5. A regulatory
+  floor on a twelve-month PD hides that in the regulatory number and leaves it in the model. The
+  standing remedy is still the one section 14 names: an additive baseline, or section 16's age
+  baseline. So the share of the book the floor binds on is published with every scored book, as
+  the size of what it hides.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.

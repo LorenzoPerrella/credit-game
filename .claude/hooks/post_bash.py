@@ -96,7 +96,8 @@ def paging(now: float) -> str | None:
 
 
 def survivors(command: str) -> str | None:
-    if not re.search(r"\b(kill|pkill)\b", command):
+    # `kill -0` asks whether a process exists and kills nothing; a loop waiting on a job uses it.
+    if not re.search(r"\b(kill|pkill)\b(?!\s+-0\b)", command):
         return None
     jobs = running_jobs()
     if not jobs:

@@ -73,6 +73,35 @@ class ModelViews:
     fingerprint: str
 
 
+def published_fit(
+    *, as_of: str, moratorium: str, formula: str, ancillary: str | None
+) -> tuple[str, FitResult]:
+    """The cached fit of exactly this specification, which every consumer of the model scores.
+
+    Shared by `views` and `score`, so the two cannot mean different models by the same name.
+    """
+    found = find_fits(
+        as_of=as_of,
+        moratorium=moratorium,
+        formula=formula,
+        distribution=DISTRIBUTION,
+        ancillary=ancillary,
+        purpose=None,
+    )
+    if not found:
+        message = (
+            f"No cached fit of this specification at {as_of}. Run `creditsurv report` or "
+            "`creditsurv fit --streamed` first: nothing that scores a model fits one."
+        )
+        raise NoCachedFit(message)
+    fingerprint = found[0][0]
+    fitted = load_fit(fingerprint)
+    if not isinstance(fitted, FitResult):
+        message = f"The cached fit {fingerprint} cannot be read, and nothing that scores fits."
+        raise NoCachedFit(message)
+    return fingerprint, fitted
+
+
 def model_views(
     *,
     as_of: str,
@@ -101,26 +130,10 @@ def model_views(
     # scale-only fit of the same formula is a miss rather than a near-enough hit. With rule 14's
     # shape part of the specification the two are different models, and the site publishing the
     # wrong one would say nothing about it.
-    found = find_fits(
-        as_of=as_of,
-        moratorium=moratorium,
-        formula=formula,
-        distribution=DISTRIBUTION,
-        ancillary=ancillary,
-        purpose=None,
+    fingerprint, fitted = published_fit(
+        as_of=as_of, moratorium=moratorium, formula=formula, ancillary=ancillary
     )
-    if not found:
-        message = (
-            f"No cached fit of this specification at {as_of}. Run `creditsurv report` or "
-            "`creditsurv fit --streamed` first: views never fit."
-        )
-        raise NoCachedFit(message)
-    fingerprint, described = found[0]
-    fitted = load_fit(fingerprint)
-    if not isinstance(fitted, FitResult):
-        message = f"The cached fit {fingerprint} cannot be read; views never fit."
-        raise NoCachedFit(message)
-    log.info("scoring with fit %s (%s cells)", fingerprint, f"{described.get('rows'):,}")
+    log.info("scoring with fit %s", fingerprint)
 
     cut = month_ordinal(pd.Period(as_of, freq="M"))
     source = cell_source(

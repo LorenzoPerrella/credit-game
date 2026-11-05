@@ -1083,3 +1083,44 @@ index encodes its own value, but the loan key inflates and the `encoding_fingerp
 so `fit` and `select` shared no reading of the same table. `config.calendar_covariates` is now the
 one declaration and all four sites call it. The published path was never affected: `select` and
 `windows` both had the right list.
+
+## 5 November 2026
+
+### Rule 17 — The regulatory PD floor, declared before anything carries it
+
+**What changed.** A new section 17: the twelve-month PD is published with a second, floored
+object beside it, `max(pd_12m, 0.0005)`, the Basel III / CRR3 retail floor. It is the user's
+decision. It is declared here before `creditsurv score`, the first command to carry it, has
+scored anything a page publishes.
+
+**Why it is admissible without a result to justify it.** It changes no fit, no coefficient and no
+hazard, and **no criterion reads it**: section 5 is evaluated on the model's own `pd_12m`, so
+the floor cannot turn a failure into a pass. The constant is regulatory, not estimated.
+
+**What it is declared not to be.** It is not the remedy for section 14's missing hazard floor.
+It moves the safest loans' regulatory number and leaves the model where it was. The share of a
+scored book the floor binds on is published with the book, as the measure of what it hides.
+
+**Not a prediction.** No number is forecast here, because nothing is fitted. The first scored
+book reports the share below the floor, whatever it is.
+
+### Two decisions that close open questions, with no fit behind them
+
+**Ages 0 to 2 stay in the risk set.** They carry 516 defaults (272, 45 and 199), 0.036% of the
+1,440,771 the training half records, at hazards of 7.2e-06, 1.1e-06 and 4.7e-06 against age 3's
+2.5e-04 (`docs/tables/km_vs_model.parquet`, observed counts). They cannot be real
+defaults at those ages: at three missed payments a loan has defaulted by definition, so a loan
+90 days delinquent at age zero is one whose `loan_age` restarted at a modification. Removing them
+would change the dependent variable of every model on the record, and every cached fit with it,
+to correct 0.036% of the events. The restricted basis declared on `feat/age-spline` puts its
+boundary knot at 3.4 months for this reason, so the one form that could bend on them does not.
+This is a decision, not a deferral. It is reopened only if a form is declared that reads the
+first three months.
+
+**The lifetime PD is not offered as validated.** The shape along age holds **2 of 7** bands on
+the test window (fit `bc016657b2b40bfc`, anchored at 1.0111), where section 5 asks for five. A
+lifetime PD is that shape integrated. `creditsurv score` therefore delivers the twelve-month PD
+alone, the quantity the master scale measured at 8 of 8. The term structure `views` publishes is
+a description of the model and is labelled as one. This holds until rule 16's restricted basis
+is measured out of sample against the 5 of 7 its prediction declares (on `feat/age-spline`).
+

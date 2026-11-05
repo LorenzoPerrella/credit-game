@@ -46,6 +46,7 @@ from creditsurv.views.tables import View
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from creditsurv.backtest.scoring import ScoredBook
     from creditsurv.backtest.splits import Split
     from creditsurv.models.aft import FitResult
 
@@ -670,3 +671,42 @@ def in_sample_views(accumulated: Mapping[str, pd.DataFrame], *, as_of: str) -> l
             )
         )
     return views
+
+
+def scored_book_view(book: ScoredBook) -> View:
+    """The book on the shelf on the master scale: one row a grade, and one for the whole book.
+
+    Aggregates only -- loans, their share and the mean of each PD -- because the scored cells are
+    profiles of loans and stay under ``data/``. The whole-book row carries what the book's PD
+    rests on: the anchoring multiplier and its window, and the share of loans the regulatory floor
+    binds on, which rule 17 publishes as the size of what the floor hides.
+    """
+    grades = book.by_grade()
+    grades.insert(0, "group", grades.pop("grade").map(lambda grade: f"grade {grade}"))
+    summary = book.summary()
+    whole = pd.DataFrame(
+        [
+            {
+                "group": "all loans",
+                "loans": float(summary["loans"]),
+                "share": 1.0,
+                "pd_12m": summary["pd_12m"],
+                "pd_12m_floored": summary["pd_12m_floored"],
+            }
+        ]
+    )
+    frame = pd.concat([whole, grades], ignore_index=True)
+    frame["month"] = str(book.month)
+    frame["multiplier"] = book.anchor.multiplier
+    frame["anchoring_window"] = summary["anchoring_window"]
+    frame["share_below_floor"] = summary["share_below_floor"]
+    frame["share_in_arrears"] = summary["share_in_arrears"]
+    return View(
+        "scored_book",
+        "The book on the shelf, scored",
+        f"Every loan at risk in {book.month}, at its own covariates, with the anchored "
+        f"twelve-month PD the master scale is measured on (multiplier {book.anchor.multiplier:.4f} "
+        f"on {summary['anchoring_window']}) and the regulatory floor of rule 17 beside it.",
+        frame,
+        source="fit",
+    )

@@ -201,6 +201,18 @@ def load_cells_window(
     return _categorised(cells)
 
 
+def last_observed_month(policy: str = DEFAULT_POLICY) -> int:
+    """The last month the table observes, as a month ordinal: the book on the shelf is its book."""
+    path = _cells_or_say_how(policy)
+    with _reader() as con:
+        found = con.execute(f"SELECT max(origination_month + age) FROM read_parquet('{path}')")
+        row = found.fetchone()
+    if row is None or row[0] is None:
+        message = f"The cell table at {path} is empty."
+        raise ValueError(message)
+    return int(row[0])
+
+
 def load_originations(policy: str = DEFAULT_POLICY, *, first: int, last: int) -> pd.DataFrame:
     """Every origination profile written between two month ordinals, with its true weight.
 

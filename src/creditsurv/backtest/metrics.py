@@ -245,14 +245,26 @@ def weighted_gini(predicted: pd.Series, observed: pd.Series, exposure: pd.Series
     Returns twice the area between that curve and the diagonal, so it lands on the
     same 0-to-1 scale as a Gini from a concordance index, and means the same thing:
     zero is no ordering, one is perfect.
+
+    **Ties are one point of the curve, not an order.** Cells sharing a key share a hazard,
+    so on this book many rows tie, and sorted one by one their order was whatever the read
+    and an unstable sort left: the same six months of a fixture book gave 0.32705 read a
+    month at a time and 0.32711 read whole. Summed by predicted value first, a tie is a
+    straight segment of the curve, which is the average over every order of the tied rows,
+    and the statistic no longer depends on how the cells arrived.
     """
-    frame = pd.DataFrame(
-        {
-            "predicted": predicted.to_numpy(dtype=float),
-            "events": observed.to_numpy(dtype=float),
-            "exposure": exposure.to_numpy(dtype=float),
-        }
-    ).sort_values("predicted", ascending=False)
+    frame = (
+        pd.DataFrame(
+            {
+                "predicted": predicted.to_numpy(dtype=float),
+                "events": observed.to_numpy(dtype=float),
+                "exposure": exposure.to_numpy(dtype=float),
+            }
+        )
+        .groupby("predicted", sort=True)[["events", "exposure"]]
+        .sum()
+        .iloc[::-1]
+    )
 
     total_events = float(frame["events"].sum())
     total_exposure = float(frame["exposure"].sum())

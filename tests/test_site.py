@@ -8,6 +8,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
+import numpy as np
 import pandas as pd
 import pytest
 from mkdocs.exceptions import PluginError
@@ -31,7 +32,7 @@ from creditsurv.views.model import (
 )
 from creditsurv.views.portfolio import portfolio_views
 from creditsurv.views.selection import selection_views
-from creditsurv.views.tables import IDENTIFYING, MANIFEST, load_manifest, write_views
+from creditsurv.views.tables import IDENTIFYING, MANIFEST, View, load_manifest, write_views
 from fixtures import (
     DEFAULT_PARAMS,
     build_panel,
@@ -103,6 +104,7 @@ def published(
             horizon_months=24,
         ),
     ]
+    model.append(_scored_book(split.test, test_hazard))
     write_views(model, tables, fit="fixture")
 
     with pytest.MonkeyPatch.context() as patch:
@@ -128,6 +130,37 @@ def published(
 
     write_views(selection_views(reports_dir()), tables)
     yield Sources(tables, reports)
+
+
+def _scored_book(test: pd.DataFrame, hazard: np.ndarray) -> View:
+    """What `creditsurv score --publish` writes, from the fixture's own test hazards."""
+    from creditsurv.backtest.metrics import annualised, grade_of
+    from creditsurv.backtest.scoring import REGULATORY_PD_FLOOR, ScoredBook
+    from creditsurv.models.anchoring import Anchor
+    from creditsurv.views.model import scored_book_view
+
+    twelve = annualised(hazard)
+    cells = pd.DataFrame(
+        {
+            WEIGHT: test[WEIGHT].to_numpy(),
+            "hazard": hazard,
+            "pd_12m": twelve,
+            "pd_12m_floored": np.maximum(twelve, REGULATORY_PD_FLOOR),
+            "grade": grade_of(twelve),
+            "delinquency_state": "current",
+        }
+    )
+    anchor = Anchor(
+        multiplier=1.0,
+        window=("2013-01", "2013-12"),
+        actual_defaults=1.0,
+        expected_defaults=1.0,
+        loan_months=1.0,
+    )
+    book = ScoredBook(
+        month=pd.Period("2014-03", freq="M"), fit="fixture", anchor=anchor, cells=cells
+    )
+    return scored_book_view(book)
 
 
 @pytest.fixture

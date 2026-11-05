@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
     import pandas as pd
 
+    from creditsurv.models.aft import FitResult
+
 COVARIATES = ["credit_score", "ltv_change", "unemployment_change"]
 FORMULA = "credit_score + ltv_change + unemployment_change"
 
@@ -139,7 +141,7 @@ def test_chunked_prediction_matches_a_single_call(encoded: pd.DataFrame) -> None
     # A budget small enough to force many blocks on a fixture this size.
     blocked = aft.episode_hazards(result, frame, ages, budget_bytes=8 * 1024)
 
-    assert aft._block_size(int(ages.max()) + 2) > 1
+    assert aft._block_size(len(result.fitter.params_)) > 1
     # Not bit-for-bit: BLAS multiplies differently shaped matrices along different
     # blockings, so the last bit of a dot product moves. Measured at 8e-16 absolute on
     # a hazard of order 1e-3 -- a tolerance this tight would still catch any change
@@ -147,11 +149,54 @@ def test_chunked_prediction_matches_a_single_call(encoded: pd.DataFrame) -> None
     np.testing.assert_allclose(blocked, whole, rtol=1e-12, atol=1e-15)
 
 
-def test_the_block_size_shrinks_as_the_horizon_grows() -> None:
-    """The budget is on memory, not on rows: a wider age grid means fewer rows."""
+def _hazards_on_the_grid(result: FitResult, frame: pd.DataFrame, ages: np.ndarray) -> np.ndarray:
+    """The implementation `episode_hazards` replaced: lifelines' whole row-by-time grid."""
+    grid = np.arange(0.0, float(ages.max()) + 2)
+    cumulative = result.fitter.predict_cumulative_hazard(frame, times=grid).to_numpy()
+    positions = np.arange(cumulative.shape[1])
+    hazard: np.ndarray = 1.0 - np.exp(
+        -(cumulative[ages + 1, positions] - cumulative[ages, positions])
+    )
+    return hazard
+
+
+@pytest.mark.parametrize("distribution", ["weibull", "loglogistic"])
+@pytest.mark.parametrize("shaped", [False, True])
+def test_two_times_a_row_is_lifelines_own_prediction(
+    encoded: pd.DataFrame, distribution: str, shaped: bool
+) -> None:
+    """The cumulative hazard at `a` and `a + 1` only, against lifelines' public grid.
+
+    The grid was ~400 columns of which two were kept, which is what made a scoring pass hours.
+    Both families, and the shape on a covariate as rule 14 fits it, because the shortcut calls
+    the fitter's private `_cumulative_hazard` and a lifelines release could change what it takes.
+    """
+    from creditsurv.models import aft
+
+    covariates = ["credit_score", "ltv_change", "unemployment_change"]
+    result = fit_aft(
+        encoded,
+        covariates,
+        " + ".join(covariates),
+        distribution=distribution,
+        ancillary="credit_score" if shaped else None,
+    )
+    frame = encoded.loc[:, covariates]
+    ages = encoded["age"].to_numpy(dtype=int)
+
+    np.testing.assert_allclose(
+        aft.episode_hazards(result, frame, ages),
+        _hazards_on_the_grid(result, frame, ages),
+        rtol=1e-12,
+        atol=1e-15,
+    )
+
+
+def test_the_block_size_is_set_by_the_width_of_the_design() -> None:
+    """The budget is on memory: a wider design means fewer rows a block, and never none."""
     from creditsurv.models.aft import _block_size
 
-    assert _block_size(60) > _block_size(327)
+    assert _block_size(10) > _block_size(40)
     assert _block_size(10**9) == 1
 
 

@@ -65,6 +65,7 @@ SECTION_PAGES: Final[tuple[str, ...]] = (
     "portfolio.md",
     "methodology.md",
     "model.md",
+    "model_card.md",
     "calibration.md",
     "validation.md",
     "decisions.md",
