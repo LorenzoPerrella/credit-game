@@ -849,3 +849,18 @@ def test_the_windows_command_cuts_anchors_and_grades_end_to_end(
     assert "multiplier" in body
     assert "Twelve-month PD by grade" in body
     assert "The cycle, in sample" in body
+
+
+def test_the_gini_does_not_depend_on_the_order_tied_cells_arrive_in() -> None:
+    """Cells sharing a key share a hazard, so a sort one by one ordered the ties by the read."""
+    from creditsurv.backtest.metrics import weighted_gini
+
+    rng = np.random.default_rng(7)
+    predicted = pd.Series(rng.choice([0.001, 0.002, 0.004], size=600))
+    exposure = pd.Series(rng.integers(1, 50, size=600).astype(float))
+    observed = pd.Series(rng.binomial(1, 0.3, size=600) * exposure)
+    reference = weighted_gini(predicted, observed, exposure)
+    for seed in range(5):
+        order = np.random.default_rng(seed).permutation(600)
+        shuffled = weighted_gini(predicted.iloc[order], observed.iloc[order], exposure.iloc[order])
+        assert shuffled == pytest.approx(reference, rel=1e-12)
