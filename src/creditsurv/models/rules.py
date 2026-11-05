@@ -128,6 +128,7 @@ def worst(
     signs: Mapping[str, int] = EXPECTED_SIGNS,
     skip: Collection[str] = (),
     banded: Collection[str] = (),
+    protected: Collection[str] = (),
 ) -> Removal | None:
     """The covariate step 8 removes next, and why -- or ``None`` when every one stays.
 
@@ -165,11 +166,19 @@ def worst(
     covariate band by band and publishes `sign_agrees` for each, which is where a backwards
     band would be visible. A joint test across the bands would be a different rule and would
     have to be declared before the fit rather than written here.
+
+    ``protected`` names covariates the specification keeps whatever this step reads: rule 1's
+    regime indicator and rule 16's basis along age. They are judged by nothing here, because a
+    basis coefficient has no interpretable sign of its own -- the object is the function the
+    three columns span -- and a step that removed one would leave a different function of the age
+    under the same name. Until 2 November 2026 they were safe only because `signs` carried no
+    prior for them and step 7 never screened them, which is a coincidence and not a rule.
     """
     backwards: list[tuple[float, str, float, float]] = []
     reversed_: list[tuple[float, str, float, float]] = []
     thin: list[tuple[float, str, float, float]] = []
-    for name in (term for term in spec.continuous if term not in skip and term not in banded):
+    excluded = {*skip, *banded, *protected}
+    for name in (term for term in spec.continuous if term not in excluded):
         coefficient = number(terms, name, "coef")
         z = coefficient / number(terms, name, "se(coef)")
         p_value = number(terms, name, "p")
@@ -271,15 +280,23 @@ def _across(indexed: pd.DataFrame, name: str, table: pd.DataFrame) -> str:
     )
 
 
-def not_identified(table: pd.DataFrame) -> Removal | None:
+def not_identified(table: pd.DataFrame, protected: Collection[str] = ()) -> Removal | None:
     """The smallest unstable covariate that sits beside a larger one of its dimension.
 
     An unstable covariate with no such partner is kept and left visible in the table: the
     rule is about information entering twice, and there is no second entry to prefer.
+
+    ``protected`` names covariates that stay in the table -- their stability is still published
+    -- but are never the one removed. Rule 16's basis needs this and not by coincidence: its three
+    columns share one dimension, "the time scale", so each is the others' partner, and the
+    smallest of three orthogonal curvature coefficients is exactly the one a sign flip across a
+    split would catch. `moratorium_regime` had been safe only because nothing shares its
+    dimension.
     """
     ranked = table.assign(size=table["effect_all"].abs()).sort_values("size")
+    kept = set(protected)
     for row in ranked.itertuples(index=False):
-        if row.stable:
+        if row.stable or row.covariate in kept:
             continue
         partners = ranked[
             (ranked["dimension"] == row.dimension)

@@ -24,6 +24,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
+# `config` imports nothing from the package, and both sit in the floor layer, so this cannot
+# cycle; it is the one name the registry needs to generate rule 16's basis entries.
+from creditsurv.config import AGE_BASIS_COLUMNS
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
@@ -476,6 +480,27 @@ _VARIABLES: Final[tuple[Variable, ...]] = (
         "Rule 1 of docs/rules.md, and config.MORATORIUM_REGIME for the window.",
         unit="indicator",
         source="CARES Act and Freddie Mac forbearance reporting",
+    ),
+    # Rule 16's basis along age: **one term in three columns**, so one definition generated over
+    # `AGE_BASIS_COLUMNS` rather than three hand-copied entries that drift apart -- the copies had
+    # already disagreed with the module that owns the numbers. The figures live in
+    # `creditsurv.baseline`, which is cited rather than re-quoted.
+    *(
+        _macro(
+            name,
+            f"Seasoning basis {position}",
+            f"Column {position} of {len(AGE_BASIS_COLUMNS)} of rule 16's baseline along age: a "
+            "restricted cubic spline in log(age + 1/2) on five knots declared from the "
+            "estimation table, linear column dropped because the Weibull's shape is it, so zero "
+            "coefficients are the Weibull exactly nested. The columns are one term: the object is "
+            "the function they span, and no single coefficient is interpretable on its own. They "
+            "read no series and cost no cells, because period = cohort + age already puts the age "
+            "in the calendar key. Rule 16 of docs/rules.md; creditsurv.baseline builds them and "
+            "carries the knots and the conditioning figures.",
+            unit="orthonormal",
+            source="the loan's own age, as origination month plus age",
+        )
+        for position, name in enumerate(AGE_BASIS_COLUMNS, start=1)
     ),
     _macro(
         "housing_starts_growth",

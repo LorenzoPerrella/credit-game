@@ -6,6 +6,7 @@ the model all describe the same variables, rather than drifting apart.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from enum import StrEnum
@@ -268,6 +269,61 @@ STATIC_CONTINUOUS: Final[tuple[str, ...]] = (
 #: reference would then have to agree with that dtype across the SQL and the formula.
 ORDINAL: Final[tuple[str, ...]] = ("term_years",)
 
+#: Rule 16's baseline along age: the offset that makes `log(age)` a number at age zero.
+#:
+#: The row is at risk over `(age, age + 1]` and this is that interval's midpoint -- the one point
+#: in it that is not an endpoint, so it is the interval's own centre and not a tuned parameter.
+AGE_BASIS_OFFSET: Final = 0.5
+
+#: Where the basis bends, in `u = log(age + AGE_BASIS_OFFSET)`. Declared before the fit.
+#:
+#: Five knots, so four degrees of freedom and -- with the linear term dropped for the collinearity
+#: with `rho * u` -- **three** columns. The interior three sit at the 25th, 50th and 75th centile
+#: of the **default-weighted** `u`, which is Royston-Parmar's own convention: knots go where the
+#: uncensored event times are, because that is where the curve is pinned down. Measured on
+#: `docs/tables/km_vs_model.parquet` -- observed counts on the training half, the table the model
+#: is estimated on -- over the ages carrying at least `nonparametric.EXPOSURE_FLOOR` loan-months:
+#: **ages 24.5, 43.4 and 70.9**.
+#:
+#: The boundary knots are the 1st and 99th centile of the same distribution, **ages 3.4 and
+#: 169.9**, and not the extreme event times the convention literally names. At ages 0, 1 and 2
+#: this book records 272, 45 and 199 defaults at hazards of 7.2e-06, 1.1e-06 and 4.7e-06 against
+#: age 3's 2.5e-04 -- and it cannot record a real one, because at three missed payments the loan
+#: has defaulted *by definition*, so a loan 90 days delinquent at age zero is a loan whose
+#: `loan_age` restarted at a modification. 516 of 1,439,685 defaults, 0.036%. Anchoring a cubic
+#: on them would bend the basis hardest where the event is impossible. The spline is linear below
+#: the first knot, which is the right shape there anyway: a hazard ramping from zero.
+#:
+#: 98.21% of the defaults above the exposure floor fall between the boundary knots.
+AGE_BASIS_KNOTS: Final[tuple[float, ...]] = (1.3547, 3.2203, 3.7825, 4.2677, 5.1383)
+
+#: The ages the basis is orthonormalised over and the probe reads, as months of age.
+#:
+#: Every age at or above `nonparametric.EXPOSURE_FLOOR` on the estimation table: **0 to 221
+#: months**, 2,111,289,771 loan-months and 99.92% of the defaults. Wider than the knots on purpose
+#: -- the basis is linear outside them, so the extrapolation costs nothing to cover.
+AGE_BASIS_AGES: Final[tuple[int, int]] = (0, 221)
+
+#: The same range in `u = log(age + AGE_BASIS_OFFSET)`, computed and not typed.
+#:
+#: It was typed as `(-0.6931, 5.4004)`, four decimals truncated toward zero at both ends, which put
+#: `log(0.5) = -0.693147` and `log(221.5) = 5.400423` **outside** it: the two ages its own comment
+#: said it covered were the two it excluded, age 0's 272 defaults among them.
+AGE_BASIS_RANGE: Final[tuple[float, float]] = (
+    math.log(AGE_BASIS_AGES[0] + AGE_BASIS_OFFSET),
+    math.log(AGE_BASIS_AGES[1] + AGE_BASIS_OFFSET),
+)
+
+#: The basis columns, in the order `baseline` builds and reads them.
+#:
+#: **Declared, not yet licensed.** Rule 16 fixes the order the forms are tried in -- bands first,
+#: the restricted basis only if bands do not reach section 5's out-of-sample age criterion -- and
+#: that criterion has not been measured on the band fit. These constants are the fallback's form,
+#: settled from the estimation table before anyone knows whether it will be needed, which is the
+#: strongest version of declaring a form in advance: nothing about them can be a response to a
+#: result. Nothing in the configuration names them until the bands have been scored.
+AGE_BASIS_COLUMNS: Final[tuple[str, ...]] = ("age_basis_1", "age_basis_2", "age_basis_3")
+
 #: Recomputed every loan-month. Loan age is the time scale, not a covariate.
 #:
 #: ``ltv_change`` rather than ``indexed_cltv``: the indexed ratio equals ``original_ltv`` at
@@ -291,6 +347,9 @@ ORDINAL: Final[tuple[str, ...]] = ("term_years",)
 TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
     # Rule 1's regime indicator, protected rather than selected: see PROTECTED_MACRO.
     "moratorium_regime",
+    # Rule 16's restricted basis stood here from 1 to 5 November 2026, as `*AGE_BASIS_COLUMNS`,
+    # and left with `PROTECTED_MACRO`'s entry when it read 3 of 7 age bands out of sample. Both
+    # have to name it for it to be fitted: this tuple is what `default_covariates` loads.
     "ltv_change",
     "unemployment_change",
     "financial_conditions",
@@ -454,52 +513,6 @@ BOOK_WINDOW_MONTHS: Final = 12
 #: compare. `views.segments.age_bands` labels the same cut with strings for a table a person reads.
 AGE_BANDS: Final[tuple[int, ...]] = (0, 12, 24, 36, 60, 120, 240, 400)
 
-#: Rule 16's baseline along age: the offset that makes `log(age)` a number at age zero.
-#:
-#: The row is at risk over `(age, age + 1]` and this is that interval's midpoint -- the one point
-#: in it that is not an endpoint, so it is the interval's own centre and not a tuned parameter.
-AGE_BASIS_OFFSET: Final = 0.5
-
-#: Where the basis bends, in `u = log(age + AGE_BASIS_OFFSET)`. Declared before the fit.
-#:
-#: Five knots, so four degrees of freedom and -- with the linear term dropped for the collinearity
-#: with `rho * u` -- **three** columns. The interior three sit at the 25th, 50th and 75th centile
-#: of the **default-weighted** `u`, which is Royston-Parmar's own convention: knots go where the
-#: uncensored event times are, because that is where the curve is pinned down. Measured on
-#: `docs/tables/km_vs_model.parquet` -- observed counts on the training half, the table the model
-#: is estimated on -- over the ages carrying at least `nonparametric.EXPOSURE_FLOOR` loan-months:
-#: **ages 24.5, 43.4 and 70.9**.
-#:
-#: The boundary knots are the 1st and 99th centile of the same distribution, **ages 3.4 and
-#: 169.9**, and not the extreme event times the convention literally names. At ages 0, 1 and 2
-#: this book records 272, 45 and 199 defaults at hazards of 7.2e-06, 1.1e-06 and 4.7e-06 against
-#: age 3's 2.5e-04 -- and it cannot record a real one, because at three missed payments the loan
-#: has defaulted *by definition*, so a loan 90 days delinquent at age zero is a loan whose
-#: `loan_age` restarted at a modification. 516 of 1,439,685 defaults, 0.036%. Anchoring a cubic
-#: on them would bend the basis hardest where the event is impossible. The spline is linear below
-#: the first knot, which is the right shape there anyway: a hazard ramping from zero.
-#:
-#: 98.21% of the defaults above the exposure floor fall between the boundary knots.
-AGE_BASIS_KNOTS: Final[tuple[float, ...]] = (1.3547, 3.2203, 3.7825, 4.2677, 5.1383)
-
-#: The ages the monotonicity certificate is evaluated over, in the same `u`.
-#:
-#: Rule 16 says the check applies "over the ages carrying exposure", which is every age at or
-#: above `nonparametric.EXPOSURE_FLOOR`: **0 to 221 months**, 2,111,289,771 loan-months and
-#: 99.92% of the defaults. Wider than the knots on purpose -- the basis is linear outside them, so
-#: `g'` is constant there and the certificate covers the extrapolation as cheaply as the interior.
-AGE_BASIS_RANGE: Final[tuple[float, float]] = (-0.6931, 5.4004)
-
-#: The basis columns, in the order `models.baseline` builds and reads them.
-#:
-#: **Declared, not yet licensed.** Rule 16 fixes the order the forms are tried in -- bands first,
-#: the restricted basis only if bands do not reach section 5's out-of-sample age criterion -- and
-#: that criterion has not been measured on the band fit. These constants are the fallback's form,
-#: settled from the estimation table before anyone knows whether it will be needed, which is the
-#: strongest version of declaring a form in advance: nothing about them can be a response to a
-#: result. Nothing in the configuration names them until the bands have been scored.
-AGE_BASIS_COLUMNS: Final[tuple[str, ...]] = ("age_basis_1", "age_basis_2", "age_basis_3")
-
 
 #: Macro covariates the selection may not remove, because their purpose is to absorb rather than
 #: to be tested. `moratorium_regime` is here for the reason `harp` is in
@@ -509,10 +522,13 @@ AGE_BASIS_COLUMNS: Final[tuple[str, ...]] = ("age_basis_1", "age_basis_2", "age_
 #: not eliminated, and carries no prior.
 #:
 #: Rule 16's baseline along age belongs here on the same argument -- a selection free to drop it
-#: would read every other coefficient off a model whose time scale is a single parameter -- and
-#: `age_band` was here from 24 to 29 October 2026. It left with the band form: that fit violated
-#: rule 16's own monotonicity condition and was refused, so nothing in the specification names a
-#: baseline along age until the restricted basis replaces it. See `docs/rules.md` rule 16.
+#: would read every other coefficient off a model whose time scale is a single parameter. Two forms
+#: held the place and both left on section 5's out-of-sample age criterion, which asks for five of
+#: seven bands: `age_band` from 24 to 29 October 2026, at **3 of 7**, and the restricted cubic
+#: basis from 1 to 5 November, at **3 of 7** with the safest decile out at 1.460 (fit
+#: `d92ad91b0e39be22`; `docs/rules_register.md`, 5 November). The basis stays in the code and
+#: `creditsurv.baseline` carries its figures; naming `AGE_BASIS_COLUMNS` here is what would put it
+#: back into the specification, and the three columns would enter as one protected term.
 PROTECTED_MACRO: Final[tuple[str, ...]] = ("moratorium_regime",)
 
 #: The economic dimension each candidate measures, fixed before any selection result.
@@ -527,6 +543,9 @@ ECONOMIC_DIMENSION: Final[dict[str, str]] = {
     # its information with nothing. Protected anyway by `PROTECTED_MACRO`, so this is the belt
     # rather than the braces.
     "moratorium_regime": "policy regime",
+    # The age is the model's **time scale**, not a measurement of the economy, so nothing in this
+    # map shares information with it. One entry a column, because step 9 reads this by name.
+    **dict.fromkeys(AGE_BASIS_COLUMNS, "the time scale"),
     "credit_score": "credit quality",
     "original_ltv": "leverage at origination",
     "debt_to_income": "debt burden",
@@ -610,6 +629,10 @@ ELIMINATED: Final[dict[str, str]] = {
     # covariate that survived on a straight line might not on a bend"; this is that, and it
     # landed on a categorical rather than on the macro block, which came through unchanged.
     "buyer_type": "step 7: p = 0.177 beside the loan block, where every other p-value reads 0.0000",
+    # Both selections with a baseline along age kept it -- the band form's of 29 October and the
+    # restricted basis's of 1 November, at p = 3.5e-11 -- because a first-time-buyer indicator
+    # stands in for the age profile when the age has a single parameter. Neither form was adopted,
+    # so the published selection, and this record, are the one without it.
     # --- step 9: not identified beside a larger covariate of the same dimension ---
     #
     # **Rule 9's time cut, firing on its first run and catching what parity could not.** Both
@@ -703,11 +726,12 @@ CATEGORICAL_REFERENCE: Final[dict[str, str]] = {
     # step 7. It stays in `procedure.CANDIDATE_CATEGORICAL`, which is the **input** and is fixed
     # before any fit; this is the **output**, so it is a subset of that input and not a copy.
     #
-    # It came back on 29 October under rule 16's age baseline -- p = 0.177 moved inside the
-    # threshold once the age had its own coefficients, a first-time-buyer indicator standing in
-    # for the age profile -- and left again when that fit was refused. The movement is a result
-    # and is recorded in `docs/rules_register.md`; what belongs here is only what the published
-    # selection chose.
+    # It came back on 29 October under the band form and on 1 November under the restricted basis,
+    # and left with each when neither passed section 5's age criterion out of sample. **The
+    # configuration has to follow the record it is tested against**: with the record keeping it and
+    # this map leaving it out, `default_formula()` named a model the selection never chose, and
+    # `fits.selection_start` refused the selection's optimum as a warm start because the term sets
+    # differed -- which is how a `report` starts cold.
 }
 
 
