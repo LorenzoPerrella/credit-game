@@ -27,6 +27,7 @@ from creditsurv.models.specification import Specification
 from fixtures import DEFAULT_PARAMS, build_panel
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
     from pathlib import Path
 
     from creditsurv.models.aft import FitResult
@@ -1291,10 +1292,10 @@ def test_every_nested_fit_of_the_selection_is_bounded_by_its_parent(
 
     removals = {"left": 1}
 
-    def unstable(table: pd.DataFrame) -> Removal | None:
+    def unstable(table: pd.DataFrame, protected: Collection[str] = ()) -> Removal | None:
         if removals["left"] and len(table) > 1:
             removals["left"] -= 1
-            names = table["covariate"].astype(str).tolist()
+            names = [name for name in table["covariate"].astype(str) if name not in protected]
             return Removal(covariate=names[0], reason="forced", partner=names[1])
         return None
 
@@ -1559,3 +1560,68 @@ def test_a_row_mask_is_refused_where_the_rows_are_read_rather_than_held(
             sample="even origination years",
             where=np.ones(3, dtype=bool),
         )
+
+
+def test_a_protected_covariate_is_never_the_one_step_nine_removes() -> None:
+    """Rule 16's basis shares one dimension, so each column is the others' partner.
+
+    The case code review reproduced: the smallest of three orthogonal curvature coefficients
+    flips sign across a split and sits beside a larger column of "the time scale". Unprotected,
+    `not_identified` removed it and left a two-column basis -- a different function of the age
+    under the same name, recorded as an ordinary step-9 elimination. Protected, it stays, and the
+    table still publishes that it was unstable.
+    """
+    table = pd.DataFrame(
+        {
+            "covariate": ["age_basis_1", "age_basis_2", "age_basis_3"],
+            "dimension": ["the time scale"] * 3,
+            "effect_all": [+0.300, +0.120, +0.050],
+            "effect_even_vintages": [+0.290, +0.110, +0.050],
+            "effect_odd_vintages": [+0.310, +0.130, -0.040],
+            "stable": [True, True, False],
+        }
+    )
+
+    unprotected = not_identified(table)
+    assert unprotected is not None
+    assert unprotected.covariate == "age_basis_3", "the fixture must reproduce the defect"
+    assert not_identified(table, protected=("age_basis_1", "age_basis_2", "age_basis_3")) is None
+
+
+def test_step_six_stops_rather_than_deleting_a_protected_name() -> None:
+    """Protection is a floor, not a rank.
+
+    `priority` ranked offenders and still dropped one when every offender was protected, so the
+    basis -- three columns that are collinear with each other by construction in the raw
+    coordinates -- could lose a column. With `protected`, an unprotected collinear partner goes
+    and protected names stay, whatever their inflation.
+    """
+    from creditsurv.models.selection import stepwise_vif
+
+    rng = np.random.default_rng(3)
+    base = rng.normal(size=4_000)
+    frame = pd.DataFrame(
+        {
+            "age_basis_1": base,
+            "age_basis_2": base + rng.normal(scale=0.01, size=base.size),
+            "ltv_change": rng.normal(size=base.size),
+        }
+    )
+    columns = list(frame.columns)
+
+    _, ranked_only = stepwise_vif(frame, columns, threshold=10.0, priority=columns)
+    assert len(set(ranked_only) & {"age_basis_1", "age_basis_2"}) == 1, (
+        "the fixture must reproduce the defect: ranking alone deletes one protected column"
+    )
+
+    _, floored = stepwise_vif(
+        frame, columns, threshold=10.0, priority=columns, protected=("age_basis_1", "age_basis_2")
+    )
+    assert {"age_basis_1", "age_basis_2", "ltv_change"} <= set(floored)
+
+
+def test_step_eight_never_judges_a_protected_covariate() -> None:
+    """A basis coefficient has no interpretable sign, so no sign rule may read it."""
+    spec = Specification(continuous=("age_basis_1", "ltv_change"), categorical=())
+    fitted = {"age_basis_1": (+0.4, 0.9, 0.9), "ltv_change": (-0.2, 0.001, 0.0)}
+    assert worst(_coefficients(fitted), spec, protected=("age_basis_1",)) is None

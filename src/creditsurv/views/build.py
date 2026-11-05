@@ -26,6 +26,7 @@ import pandas as pd
 
 from creditsurv.backtest.runner import predicted_hazard
 from creditsurv.config import (
+    AGE_BASIS_COLUMNS,
     BOOK_WINDOW_MONTHS,
     DISTRIBUTION,
     ORDINAL,
@@ -143,6 +144,12 @@ def model_views(
 
     log.info("pass one: the decile boundaries")
     boundaries = decile_boundaries(source(), fitted, covariates)
+    # Rule 16's basis is a function of the age, not a macro series, and its coefficients are not
+    # separately interpretable -- the object is the function the three columns span. So it is
+    # left out of the two views that read this tuple as "the economy": the covariate means over
+    # time would draw three age functions as macro lines, and the coefficient chart would rank
+    # three basis columns by a one-sd effect nobody can read.
+    macro_series = [name for name in TIME_VARYING_CONTINUOUS if name not in AGE_BASIS_COLUMNS]
     log.info("pass two: survival, calibration and the covariate means by segment")
     accumulated = accumulate(
         source(),
@@ -153,10 +160,10 @@ def model_views(
                 families=[name for name in models if name != DISTRIBUTION],
                 boundaries=boundaries,
             ),
-            covariate_means_recipe(TIME_VARYING_CONTINUOUS),
+            covariate_means_recipe(macro_series),
         ],
     )
-    continuous = [*STATIC_CONTINUOUS, *TIME_VARYING_CONTINUOUS, *ORDINAL]
+    continuous = [*STATIC_CONTINUOUS, *macro_series, *ORDINAL]
     tables = [
         *in_sample_views(accumulated, as_of=as_of),
         View(

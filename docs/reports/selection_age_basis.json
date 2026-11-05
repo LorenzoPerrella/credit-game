@@ -1,0 +1,94 @@
+{
+  "what": "Rule 16's restricted cubic basis, selected on 1 November 2026 and measured out of sample on 5 November. It reads 3 of 7 age bands inside 0.80 to 1.25 where rule 5 asks for at least five, and the safest decile leaves the band at 1.460, so it is NOT adopted and the configuration stays on the published specification.",
+  "declared": "docs/rules_register.md, 5 November 2026, written at 07:30 CET before the test window was read for this specification.",
+  "fit": {
+    "hash": "d92ad91b0e39be22",
+    "sample": "training half",
+    "cells": "cells_exclude.parquet:448169670:1791619429593537860",
+    "formula": "C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + age_basis_1 + age_basis_2 + age_basis_3 + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
+    "distribution": "weibull",
+    "why_this_fit": "The selection's own fit of the specification it chose. No report fit exists; a report fit would start from this optimum."
+  },
+  "instrument": "creditsurv.backtest.scoring.window_criteria, which reproduced every published out-of-sample figure of bc016657b2b40bfc first.",
+  "anchoring": {
+    "window": "2022-01 to 2024-12",
+    "multiplier": 1.307455
+  },
+  "test_window": {
+    "months": "2025-01 to 2026-03",
+    "loan_months": 196969924,
+    "actual_over_expected": 0.9116,
+    "gini": 0.551448,
+    "deciles": [
+      1.4597,
+      1.0162,
+      0.9177,
+      0.9112,
+      0.8945,
+      0.8653,
+      0.8746,
+      0.8928,
+      0.9125,
+      0.9221
+    ],
+    "age_bands": {
+      "0 to 11": 0.92799,
+      "12 to 23": 1.348428,
+      "24 to 35": 1.231817,
+      "36 to 59": 0.932489,
+      "60 to 119": 0.700626,
+      "120 to 239": 0.608794,
+      "240 to 399": 0.488703
+    },
+    "age_bands_inside": "3 of 7"
+  },
+  "published_model_on_the_same_window": {
+    "hash": "bc016657b2b40bfc",
+    "multiplier": 1.011095,
+    "actual_over_expected": 0.9065,
+    "gini": 0.546087,
+    "deciles": "0.803 to 1.150",
+    "age_bands_inside": "2 of 7"
+  },
+  "selection": {
+    "ancillary": "term_years + C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
+    "as_of": "2021-12",
+    "categorical": {
+      "buyer_type": "repeat",
+      "harp": "standard",
+      "mortgage_insurance": "uninsured",
+      "occupancy": "owner_occupied",
+      "purpose": "purchase"
+    },
+    "cause": "default",
+    "distribution": "weibull",
+    "eliminated": {
+      "corporate_bond_spread": "step 8: wrong sign: +0.2333 where - is expected",
+      "equity_volatility": "step 8: wrong sign: +0.00194 where - is expected",
+      "house_price_growth": "step 8: wrong sign: -0.1073 where + is expected",
+      "housing_starts_growth": "step 9: 1 sd effect +0.016 on even vintages, +0.017 on odd vintages, +0.039 on to 2010 06, -0.009 on after 2010 06, beside ltv_change (-0.145), both housing",
+      "mortgage_rate_decline": "step 8: wrong sign: -0.1413 where + is expected",
+      "volatility_change": "step 8: wrong sign: +0.000576 where - is expected"
+    },
+    "formula": "C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + age_basis_1 + age_basis_2 + age_basis_3 + ltv_change + unemployment_change + financial_conditions + consumer_sentiment + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
+    "moratorium": "exclude",
+    "ordinal": [
+      "term_years"
+    ],
+    "static_continuous": [
+      "credit_score",
+      "original_ltv",
+      "debt_to_income"
+    ],
+    "time_varying_continuous": [
+      "moratorium_regime",
+      "age_basis_1",
+      "age_basis_2",
+      "age_basis_3",
+      "ltv_change",
+      "unemployment_change",
+      "financial_conditions",
+      "consumer_sentiment"
+    ]
+  }
+}

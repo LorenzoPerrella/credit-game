@@ -74,8 +74,11 @@ the same <!-- value: floor.regulatory --> as the floor.
 ## What it gets wrong, and how large
 
 - **The shape along age.** It under-predicts the second and third years and over-predicts the
-  seasoned book by about a third, which is why no lifetime PD is offered. The restricted cubic
-  basis of rule 16 is the declared remedy and has not yet been measured out of sample.
+  seasoned book by about a third, which is why no lifetime PD is offered. Rule 16 declared two
+  flexible forms along age, a band factor and a restricted cubic basis. Each was predicted,
+  fitted and measured on this window, and both read 3 of 7 bands; the basis also took the
+  safest decile out of the band. Neither was adopted, and the record is in
+  `docs/reports/selection_age_basis.json` and the register of 5 November 2026.
 - **The level across regimes.** Each cut is judged on the 24 months after it:
   <!-- recorded: 2026-10-23 -->
   0.4920 on 2019-20, where the CARES Act emptied the window of defaults; 1.3211 on 2021-22; and

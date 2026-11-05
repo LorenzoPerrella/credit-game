@@ -1,5 +1,5 @@
 {
-  "what": "Rule 16's banded age baseline, fitted. NOT a published specification: section 5's out-of-sample age-band criterion, which is what rule 16 says admits the form, has not been measured on it.",
+  "what": "Rule 16's banded age baseline, fitted and scored out of sample. It reads 3 of 7 age bands inside 0.80 to 1.25 where rule 5 asks for at least five, so it is NOT published and rule 16's restricted cubic basis is licensed by that rule's own sentence.",
   "the_refusal_that_was_withdrawn": "On 29 October 2026 this fit was refused as violating rule 16's monotonicity condition. The refusal was withdrawn on 30 October. episode_hazards (models/aft.py:492-493) takes its increment at FIXED covariates -- H(a+1 | x_a) - H(a | x_a) = exp(-rho*eta_a) * ((a+1)**rho - a**rho) -- and both factors are positive, so the monthly hazard is non-negative for every eta profile. The quantity that fell was H(a | eta_b) against H(a | eta_b+1): two covariate vectors at one age, which is two loans and not one loan's curve. Rule 16's condition is withdrawn, not reworded.",
   "fit": {
     "hash": "a011cd438634371d",
@@ -44,6 +44,86 @@
   },
   "what_is_true_about_the_form": "The hazard is discontinuous in age: 23.775 per 100,000 at age 35 against 17.398 at 36, and 33.264 at 59 against 20.629 at 60. Positive and the cumulative hazard rises; not continuous, so a term structure built from it has kinks at six ages a reporting grouper chose. That prefers a smooth basis on grounds of smoothness, which decides a tie rather than refusing a form.",
   "what_is_owed": "Section 5's out-of-sample age-band criterion, anchored, on the declared test window, by the backtest_by_age_band view. Until then publishing this form and refusing it are both unjustified, so config stays at the published specification.",
-  "prediction_registered_24_october_still_open": "5 of 7 age bands or better out of sample, with the remaining miss above 60 months. Neither falsified nor confirmed: not measured.",
-  "also_found": "buyer_type survives this selection where it was eliminated at step 7 on p = 0.177, with six eliminations instead of seven -- a first-time-buyer indicator standing in for the age profile until the age had its own coefficients."
+  "prediction_registered_24_october_still_open": "FALSIFIED. It said 5 of 7 or better with the remaining miss above 60 months; it is 3 of 7 and the residual is on both sides -- 12 to 23 stays out at 1.3014.",
+  "also_found": "buyer_type survives this selection where it was eliminated at step 7 on p = 0.177, with six eliminations instead of seven -- a first-time-buyer indicator standing in for the age profile until the age had its own coefficients.",
+  "out_of_sample_age_band_criterion": {
+    "measured": "1 November 2026",
+    "anchoring_window": [
+      "2022-01",
+      "2024-12"
+    ],
+    "anchoring_multiplier": 0.9427,
+    "anchoring_actual_defaults": 151423,
+    "anchoring_expected_defaults": 160626.0,
+    "test_window": "the months after 2024-12",
+    "overall_actual_over_expected": 0.8988,
+    "bands_inside_0_80_to_1_25": 3,
+    "bands_required": 5,
+    "verdict": "FAILED",
+    "by_band": [
+      {
+        "band": "0 to 11",
+        "loan_months": 14877318,
+        "actual": 3946,
+        "expected": 3458.9,
+        "actual_over_expected": 1.1408,
+        "inside": true
+      },
+      {
+        "band": "12 to 23",
+        "loan_months": 12662379,
+        "actual": 11153,
+        "expected": 8570.0,
+        "actual_over_expected": 1.3014,
+        "inside": false
+      },
+      {
+        "band": "24 to 35",
+        "loan_months": 13411829,
+        "actual": 13162,
+        "expected": 11909.2,
+        "actual_over_expected": 1.1052,
+        "inside": true
+      },
+      {
+        "band": "36 to 59",
+        "loan_months": 83368376,
+        "actual": 31249,
+        "expected": 36483.7,
+        "actual_over_expected": 0.8565,
+        "inside": true
+      },
+      {
+        "band": "60 to 119",
+        "loan_months": 45079510,
+        "actual": 11736,
+        "expected": 16151.6,
+        "actual_over_expected": 0.7266,
+        "inside": false
+      },
+      {
+        "band": "120 to 239",
+        "loan_months": 25836863,
+        "actual": 6670,
+        "expected": 9565.8,
+        "actual_over_expected": 0.6973,
+        "inside": false
+      },
+      {
+        "band": "240 to 399",
+        "loan_months": 1733649,
+        "actual": 1097,
+        "expected": 1772.3,
+        "actual_over_expected": 0.619,
+        "inside": false
+      }
+    ],
+    "against_the_published_weibull": {
+      "note": "The published model's own profile, register entry of 24 October 2026, anchored at 1.0111: 0.814, 1.480, 1.347, 0.911, 0.621, 0.647, 0.725 -- 2 of 7. The band form moves one band, and 24 to 35 is the one it brings in.",
+      "published_bands_inside": 2,
+      "band_form_bands_inside": 3
+    },
+    "the_residual_keeps_the_defects_shape": "1.14, 1.30, 1.11, 0.86, 0.73, 0.70, 0.62 -- still falling with age, still over-predicting the seasoned book progressively. Six free coefficients fitted on the criterion's own grouping, where the probe read 6 of 6 IN SAMPLE, did not transport. That is the 24 October declaration arriving: a saturated factor reproduces the means of its own groups and only the out-of-sample profile counts."
+  },
+  "how_it_was_scored": "No fit: a011cd438634371d is the band specification on the estimation window to 2021-12, the same 72,671,500 rows report would have fitted. The pass streams the cell file a batch at a time and sums, because expected defaults are additive; 453 batches a window, flat memory. Two earlier attempts held the panel and thrashed -- 31 hours through `creditsurv report` and four hours through cells_to_episodes -- which CLAUDE.md already forbids."
 }

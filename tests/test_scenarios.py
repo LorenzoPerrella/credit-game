@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import pytest
 
-from creditsurv.config import STRESSED_COVARIATES
+from creditsurv.config import AGE_BASIS_COLUMNS, STRESSED_COVARIATES
 from creditsurv.features import MACRO_DERIVED, MACRO_SOURCES, add_macro_family
 from creditsurv.models.lifetime_pd import ADVERSE
 
@@ -50,11 +50,12 @@ def test_every_macro_covariate_the_model_reads_is_moved_by_the_scenario() -> Non
     # **policy response** to the stress, which is a different claim from a stress, and one this
     # model has no standing to make.
     #
-    # Rule 16's baseline along age will want the same exemption for a stronger reason -- it is the
+    # Rule 16's baseline along age takes the same exemption for a stronger reason -- it is the
     # model's **time scale**, and `period = cohort + age` means the age is already pinned by the
-    # cohort and the calendar, so there is nothing free to move. No such covariate is configured
-    # today: the band form was refused.
-    unmoved = [name for name in unmoved if name not in {"moratorium_regime"}]
+    # cohort and the calendar, so there is nothing free to move. A scenario that shocked it would
+    # be shocking how old the loans are, which is not an economy but an arithmetic error.
+    exempt = {"moratorium_regime", *AGE_BASIS_COLUMNS}
+    unmoved = [name for name in unmoved if name not in exempt]
     assert not unmoved, f"{unmoved} have no shocked source, so the scenario cannot move them"
 
 

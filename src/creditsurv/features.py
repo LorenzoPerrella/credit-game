@@ -36,7 +36,8 @@ from typing import TYPE_CHECKING, Final, cast
 import numpy as np
 import pandas as pd
 
-from creditsurv.config import MACRO_LAG_MONTHS, MORATORIUM_REGIME
+from creditsurv.baseline import age_basis
+from creditsurv.config import AGE_BASIS_COLUMNS, MACRO_LAG_MONTHS, MORATORIUM_REGIME
 
 
 def month_ordinal(period: pd.Period) -> int:
@@ -133,6 +134,14 @@ MACRO_SOURCES: Final[dict[str, tuple[str, ...]]] = {
     # moratorium is a policy, not a macro path, and a stress scenario that turned one on would
     # be asserting a policy response rather than a stress.
     "moratorium_regime": (),
+    # Rule 16's baseline along age. Three columns of one function, each reading **no series**:
+    # the loan's own age is the whole of it. They travel with the macro family because that
+    # family is the path a covariate takes when it is built after aggregation and costs no cells,
+    # not because any of it is macroeconomic -- and a scenario cannot shock them, which is
+    # correct for a stronger reason than `moratorium_regime`'s: the age is the model's time
+    # scale, and `period = cohort + age` pins it to the cohort and the calendar, so there is
+    # nothing free to move.
+    **dict.fromkeys(AGE_BASIS_COLUMNS, ()),
 }
 
 
@@ -448,6 +457,8 @@ MACRO_DERIVED: Final[tuple[str, ...]] = (
     # which months. It belongs here because it travels the path every macro covariate travels --
     # built after aggregation, from the observation date, costing no cells.
     "moratorium_regime",
+    # Rule 16's basis along age: see `MACRO_SOURCES` for why it travels here.
+    *AGE_BASIS_COLUMNS,
 )
 
 
@@ -579,13 +590,43 @@ def add_macro_family(
         months = observation.to_numpy(dtype=np.int64)
         store("moratorium_regime", ((months >= opens) & (months <= closes)).astype(float))
 
-    # Rule 16's baseline along age was built here from 24 to 29 October 2026, as each band's
-    # lower edge. The band form was refused on rule 16's own monotonicity condition -- a
-    # piecewise-constant `eta` makes the cumulative hazard a step function of `log t`, and it
-    # stepped down 8.6% at 36 months and 23.8% at 60 -- so no column of the age is built today.
-    # The restricted basis that replaces it belongs here, beside `moratorium_regime` and for the
-    # same reason: it reads no series, it is a function of one of the key's own columns, and it
-    # costs no cells.
+    # Rule 16's baseline along age, as the restricted cubic basis in `log(age + 1/2)`.
+    #
+    # Here beside `moratorium_regime` and for the same reason: it reads no series, it is a
+    # function of one of the key's own columns, and it costs no cells -- `period = cohort + age`
+    # already puts the age in the calendar key, which is the identity rule 16 invokes to admit it
+    # and rule 14 invokes to keep time-varying covariates out of the shape.
+    #
+    # `age_band` held this place from 24 to 29 October 2026 and left when the band form read
+    # **3 of 7** age bands out of sample against the five rule 5 requires. The basis has three
+    # columns where that had six, and the band form's in-sample 6 of 6 against its out-of-sample
+    # 3 of 7 is what argues for the smaller number.
+    #
+    # `baseline` owns the arithmetic, including the data-free orthonormalisation without
+    # which `stepwise_vif` would delete two of the three columns of one function.
+    #
+    # **All three or none.** A request for any column builds and stores the whole basis, because
+    # a subset is a different function of the age under the same name -- the outcome
+    # `procedure._whole_basis_or_none` refuses in the selection, and which this builder used to
+    # hand any caller that narrowed its column list.
+    #
+    # **Built on the distinct ages and indexed**, because an age is an integer in a few hundred
+    # values and a row count is tens of millions. Built per row, `age_basis` allocated a float64
+    # design five columns wide plus its truncated-power temporaries: measured at 80 bytes a row,
+    # about 5.25 GB of transient peak on the 59.7-million-row training half that `report` still
+    # expands, where one gap covariate costs 32. The lookup is ~400 rows and the per-row cost is
+    # one gather per column.
+    if any(requested(name) for name in AGE_BASIS_COLUMNS):
+        ages = (observation - origination_month).to_numpy(dtype=np.int64)
+        if ages.size and ages.min() < 0:
+            message = (
+                f"A loan-month at age {int(ages.min())}: the observation precedes the origination, "
+                "so the basis along age has no value to give it."
+            )
+            raise ValueError(message)
+        lookup = age_basis(np.arange(int(ages.max()) + 1 if ages.size else 1))
+        for position, name in enumerate(AGE_BASIS_COLUMNS):
+            store(name, lookup[ages, position])
 
     # The refinancing benchmark is switched by term, repeating what the source data
     # says rather than what is convenient: a fifteen-year loan is refinanced against
