@@ -87,12 +87,19 @@ def _sources() -> Sources:
     return _state["sources"]
 
 
+#: The views a command other than `creditsurv views` writes, so a missing one names its writer.
+_WRITTEN_BY: Final = {"scored_book": "creditsurv score --publish"}
+
+
 def _require(kind: str, name: str, needed: tuple[str, ...], page: Page) -> None:
     missing = [view for view in needed if view not in _sources().manifest]
     if missing:
+        commands = sorted({_WRITTEN_BY.get(view, "creditsurv views") for view in missing})
         message = (
             f"{page.file.src_uri}: {kind} {name!r} needs the views {missing}, which "
-            f"{_sources().tables} does not hold. Run `uv run creditsurv views`."
+            f"{_sources().tables} does not hold. Run "
+            + " and ".join(f"`uv run {command}`" for command in commands)
+            + "."
         )
         raise PluginError(message)
 

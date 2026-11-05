@@ -1022,6 +1022,117 @@ def views(
 
 
 @app.command()
+def score(
+    month: Annotated[
+        str,
+        typer.Option(help="The month whose book is scored, YYYY-MM. The table's last by default."),
+    ] = "",
+    as_of: Annotated[
+        str, typer.Option(help="The reporting date the fit was made at.")
+    ] = DEFAULT_AS_OF,
+    moratorium: MoratoriumOption = "exclude",
+    output: Annotated[
+        str,
+        typer.Option(help="Where to write the scored cells, as parquet. Under data/ by default."),
+    ] = "",
+    anchor_window: Annotated[
+        str, typer.Option(help="First and last month the level is anchored on, comma-separated.")
+    ] = "",
+    publish: Annotated[
+        bool, typer.Option(help="Also write the book by grade, aggregates only, to docs/tables.")
+    ] = False,
+) -> None:
+    """Score the book at risk in one month with the published model.
+
+    Each cell gets the anchored monthly hazard, the **twelve-month PD** rule 5's criteria were
+    measured on, the regulatory floor of rule 17 beside it, and its grade on the master scale.
+    **Never fits**: it scores the fit ``creditsurv report`` saved, and stops when that fit is not
+    in the cache. No lifetime PD, because the shape along age has not passed its out-of-sample
+    criterion; see ``creditsurv.backtest.scoring``.
+
+    The scored cells are profiles of loans, written under ``data/`` and never committed.
+    """
+    import logging
+    from pathlib import Path
+
+    import pandas as pd
+
+    from creditsurv.backtest.scoring import anchor_streamed, score_month
+    from creditsurv.config import processed_dir
+    from creditsurv.data.fred import load_macro_panel
+    from creditsurv.data.panel import month_ordinal
+    from creditsurv.data.store import last_observed_month
+    from creditsurv.views.build import NoCachedFit, published_fit
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    try:
+        fingerprint, fitted = published_fit(
+            as_of=as_of,
+            moratorium=moratorium,
+            formula=default_formula(),
+            ancillary=default_shape(),
+        )
+    except NoCachedFit as missing:
+        typer.echo(str(missing))
+        raise typer.Exit(1) from missing
+
+    ordinal = last_observed_month(moratorium)
+    last = pd.Period(year=ordinal // 12, month=ordinal % 12 + 1, freq="M")
+    period = pd.Period(month, freq="M") if month else last
+    if month_ordinal(period) > ordinal:
+        typer.echo(f"The table observes nothing after {last}.")
+        raise typer.Exit(1)
+
+    macro = load_macro_panel()
+    covariates = default_covariates()
+    typer.echo(f"Anchoring fit {fingerprint} on its declared window...")
+    anchor = anchor_streamed(
+        fitted,
+        covariates,
+        moratorium=moratorium,
+        macro=macro,
+        window=_anchor_window(anchor_window),
+    )
+    typer.echo(f"  multiplier {anchor.multiplier:.4f} on {anchor.window[0]} to {anchor.window[1]}")
+
+    book = score_month(
+        fitted,
+        covariates,
+        fit=fingerprint,
+        month=period,
+        anchor=anchor,
+        moratorium=moratorium,
+        macro=macro,
+    )
+    destination = (
+        Path(output)
+        if output
+        else processed_dir() / "scores" / f"book_{period}_{fingerprint}.parquet"
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    book.cells.to_parquet(destination, index=False)
+
+    summary = book.summary()
+    typer.echo(
+        f"The book at risk in {period}: {summary['loans']:,} loans in {summary['cells']:,} cells."
+    )
+    typer.echo(
+        f"  twelve-month PD {summary['pd_12m']:.4%}, floored {summary['pd_12m_floored']:.4%}; "
+        f"{summary['share_below_floor']:.1%} of loans below the floor, "
+        f"{summary['share_in_arrears']:.2%} in arrears (pool-valid only, rule 10)."
+    )
+    _echo_table(book.by_grade())
+    typer.echo(f"Written: {destination}")
+    if publish:
+        from creditsurv.config import tables_dir
+        from creditsurv.views.model import scored_book_view
+        from creditsurv.views.tables import write_views
+
+        write_views([scored_book_view(book)], tables_dir(), fit=fingerprint)
+        typer.echo(f"Published the book by grade to {tables_dir()}")
+
+
+@app.command()
 def select(
     as_of: Annotated[
         str, typer.Option(help="Select on everything up to this month.")

@@ -72,10 +72,8 @@ estimated as actual over expected on the anchoring window of 2022-01 to 2024-12,
 loan-month by the same factor -- so the ranking, and therefore every segment view, means what it
 meant before.
 
-<!-- recorded: 2026-10-23 -->
-The multiplier is **1.0111**, estimated on the shaped model this page describes.
-<!-- /recorded -->
-It takes the test window to an actual over expected of **<!-- value: backtest.ae -->** with the
+The multiplier is **<!-- value: anchor.multiplier -->**, estimated on the shaped model this page
+describes. It takes the test window to an actual over expected of **<!-- value: backtest.ae -->** with the
 Gini unchanged at **<!-- value: backtest.gini -->**.
 
 !!! note "Earlier versions of this page quoted other models"

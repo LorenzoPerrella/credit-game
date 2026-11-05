@@ -89,7 +89,9 @@ nav:
       - The selection record, log-logistic: reports/selection_loglogistic.md
       - The selection record, prepayment: reports/selection_weibull_prepayment.md
       - The distribution family: reports/family.md
-  - Model: model.md
+  - Model:
+      - In short: model.md
+      - Model card: model_card.md
   - Calibration & backtest:
       - In short: calibration.md
       - The calibration report: reports/calibration.md

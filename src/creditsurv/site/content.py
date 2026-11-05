@@ -21,6 +21,7 @@ import pandas as pd
 
 from creditsurv import names
 from creditsurv.backtest.runner import ACCEPTANCE
+from creditsurv.backtest.scoring import REGULATORY_PD_FLOOR
 from creditsurv.site import figures
 from creditsurv.site.figures import (
     SHAPE_PARAMETERS,
@@ -230,6 +231,20 @@ def _glossary(kind: names.Kind) -> Callable[[Mapping[str, pd.DataFrame]], pd.Dat
     return build
 
 
+def scored_book(views: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+    """The book on the shelf by grade, as `creditsurv score --publish` wrote it."""
+    table = views["scored_book"]
+    return pd.DataFrame(
+        {
+            "Group": table["group"],
+            "Loans": table["loans"].map(_count),
+            "Share": table["share"].map("{:.1%}".format),
+            "Twelve-month PD": table["pd_12m"].map("{:.3%}".format),
+            "Floored": table["pd_12m_floored"].map("{:.3%}".format),
+        }
+    )
+
+
 TABLES: Final[dict[str, Table]] = registry(
     Table("acceptance", ("acceptance_by_segment",), acceptance),
     Table("scenario_summary", ("scenarios_by_segment",), scenario_summary),
@@ -238,6 +253,7 @@ TABLES: Final[dict[str, Table]] = registry(
     Table("selection_inflation", ("selection_inflation",), inflation),
     Table("selection_materiality", ("selection_materiality",), materiality),
     Table("adverse_legs", (), adverse_legs),
+    Table("scored_book", ("scored_book",), scored_book),
     Table("variables_loan", (), _glossary(names.Kind.LOAN)),
     Table("variables_macro", (), _glossary(names.Kind.MACRO)),
     Table("variables_series", (), _glossary(names.Kind.SERIES)),
@@ -315,6 +331,21 @@ def _criterion(column: str) -> Callable[[Sources], str]:
         return "passes" if bool(_whole(sources, "acceptance_by_segment")[column]) else "fails"
 
     return read
+
+
+def _shelf(sources: Sources) -> pd.Series:
+    """The whole-book row of the scored book `creditsurv score --publish` writes."""
+    table = sources["scored_book"]
+    row: pd.Series = table[table["group"] == "all loans"].iloc[0]
+    return row
+
+
+def _age_bands_in_band(sources: Sources) -> str:
+    """Section 5's out-of-sample age criterion, as the count it is judged on."""
+    table = sources["backtest_by_age_band"]
+    ratios = table[table["segment"] == "all"]["actual_over_expected"]
+    inside = int(ratios.between(ACCEPTANCE.ae_low, ACCEPTANCE.ae_high).sum())
+    return f"{inside} of {len(ratios)}"
 
 
 VALUES: Final[dict[str, Value]] = registry(
@@ -426,4 +457,13 @@ VALUES: Final[dict[str, Value]] = registry(
     ),
     Value("model.loan_months", (), _summary("loan_months_modelled", _count)),
     Value("model.defaults", (), _summary("defaults_modelled", _count)),
+    Value("backtest.age_bands", ("backtest_by_age_band",), _age_bands_in_band),
+    Value("floor.regulatory", (), lambda _: f"{REGULATORY_PD_FLOOR:.2%}"),
+    Value("shelf.month", ("scored_book",), lambda s: str(_shelf(s)["month"])),
+    Value("shelf.loans", ("scored_book",), lambda s: _count(_shelf(s)["loans"])),
+    Value("shelf.pd_12m", ("scored_book",), lambda s: f"{_shelf(s)['pd_12m']:.3%}"),
+    Value("shelf.pd_12m_floored", ("scored_book",), lambda s: f"{_shelf(s)['pd_12m_floored']:.3%}"),
+    Value("shelf.below_floor", ("scored_book",), lambda s: f"{_shelf(s)['share_below_floor']:.1%}"),
+    Value("shelf.in_arrears", ("scored_book",), lambda s: f"{_shelf(s)['share_in_arrears']:.2%}"),
+    Value("anchor.multiplier", ("scored_book",), lambda s: f"{_shelf(s)['multiplier']:.4f}"),
 )
