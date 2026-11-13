@@ -1543,3 +1543,33 @@ regime's.
 - `mortgage_rate_decline` keeps rule 6's sign, **negative**: a market rate below the note rate
   shortens the time to repayment. A reversal here would mean the model reads refinancing
   backwards, and would be a finding against the specification, not a covariate to drop quietly.
+
+## 13 November 2026
+
+### Rule 5 — The cumulative PD by vintage gets a threshold, before anything reads it
+
+**What changed.** Section 5 has declared "cumulative PD by vintage" since 17 October with no
+threshold and no code to compute it. `backtest.lifetime` now computes it. For each origination
+year it projects every origination profile from its own month along the realised macro path,
+with default and prepayment competing, and compares the result with that year's Aalen-Johansen
+incidence. The threshold is written into section 5 now, before any real vintage is read. It
+holds when, over 2000 to 2016:
+
+- at least 70% of vintages lie within 0.80 to 1.25 at 36 months, and at least 70% at 60;
+- the pooled ratio lies within the band at both horizons.
+
+**Why it is admissible.** It adds a criterion and moves none. The band and the share are the
+cycle criterion's, so nothing was chosen for this object. The age-band criterion stays binding:
+a lifetime PD is fit only when both hold. So this can make the lifetime verdict harder to reach
+and never easier.
+
+**What it reads.** The published default fit, anchored at its multiplier, and the prepayment
+model selected on the current cells under rule 6. That selection began at 22:22 today, so the
+criterion is fixed before either model's vintage curve exists. The out-of-time reading, the
+2018-12 cut with prepayment refitted on that cut over vintages 2016-2018 at 36 months, is
+published beside it.
+
+**Not a prediction yet.** The prediction is written once the prepayment model's own
+out-of-sample criteria are read, because a vintage curve is only as good as the competing
+hazard in it. If that model fails its criteria, the vintage reading is still made and published,
+labelled as resting on a prepayment model that does not pass.
