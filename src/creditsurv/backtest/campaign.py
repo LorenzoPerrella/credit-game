@@ -33,7 +33,7 @@ import pandas as pd
 
 from creditsurv.backtest.metrics import cycle_in_band, grade_backtest
 from creditsurv.backtest.runner import ACCEPTANCE, predicted_hazard, score
-from creditsurv.config import DISTRIBUTION, calendar_covariates
+from creditsurv.config import DEFAULT_CAUSE, DISTRIBUTION, calendar_covariates
 from creditsurv.data.panel import WEIGHT, cells_to_episodes, ended_in, month_ordinal
 from creditsurv.data.store import cells_identity, fit_fingerprint, load_cells_window, save_fit
 from creditsurv.models.aft import fit_encoding
@@ -106,7 +106,7 @@ def run_campaign(
 
     for cut, until in declared:
         log.info("window %s to %s: fitting on everything up to the cut", cut, until)
-        model = _fitted_to(
+        model = fitted_to(
             cut,
             previous,
             moratorium=moratorium,
@@ -144,7 +144,7 @@ def run_campaign(
         del window
 
     log.info("the development model, on everything up to %s", development_cut)
-    development = _fitted_to(
+    development = fitted_to(
         development_cut,
         previous,
         moratorium=moratorium,
@@ -226,7 +226,7 @@ def run_campaign(
     )
 
 
-def _fitted_to(
+def fitted_to(
     cut: pd.Period,
     start: FitResult | None,
     *,
@@ -236,6 +236,7 @@ def _fitted_to(
     ancillary: str | None,
     macro: pd.DataFrame,
     block_rows: int,
+    cause: str = DEFAULT_CAUSE,
 ) -> FitResult:
     """The model estimated on everything up to ``cut``, read from the cell file and saved.
 
@@ -251,8 +252,11 @@ def _fitted_to(
     one is warm-started from the cut before, so it is a few Newton steps. A saving measured on
     the wrong fit, bought with a cache rule this project deliberately does not have.
     """
+    # ``cause`` is threaded to the reading and to the description, so a prepayment model at a cut
+    # is read with a default as censoring and cached under a name of its own: fit_description
+    # names the cause whenever it is not the default.
     source = cell_source(
-        moratorium, macro, covariates, block_rows=block_rows, until=month_ordinal(cut)
+        moratorium, macro, covariates, block_rows=block_rows, until=month_ordinal(cut), cause=cause
     )
     # The calendar side is every covariate that is a function of the month, which is the macro
     # candidates **and** the protected block: this path declared it without the protected names,
@@ -295,6 +299,7 @@ def _fitted_to(
         moratorium=moratorium,
         distribution=DISTRIBUTION,
         ancillary=ancillary,
+        cause=cause,
     )
     save_fit(
         result, fit_fingerprint(**described), {**described, "minutes": result.elapsed_seconds / 60}
