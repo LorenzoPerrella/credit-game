@@ -1573,3 +1573,38 @@ published beside it.
 out-of-sample criteria are read, because a vintage curve is only as good as the competing
 hazard in it. If that model fails its criteria, the vintage reading is still made and published,
 labelled as resting on a prepayment model that does not pass.
+
+### Rule 6 — The re-selected prepayment model fails every criterion, in every regime it can be fitted in
+
+Measured as declared on 5 November with the selection's fit `69416c2849455eba`, unanchored,
+prepayments against the prepayment hazard:
+
+| window | fit | A/E | Gini | deciles in band |
+|---|---|---|---|---|
+| declared test window, 2025-01 to 2026-03 | `69416c2849455eba` | **1.3053** | **0.2103** | 3 of 10 |
+| 2019-20 | refitted at the 2018-12 cut | 0.9654 | **0.2686** | 5 of 10 |
+| 2021-22 | refitted at the 2020-12 cut | — | — | — |
+
+The 2020-12 cut could not be fitted. SLSQP ended outside the likelihood after 286 evaluations
+on 67.5 million rows, which is the engine's declared refusal for a specification whose objective
+is unbounded below. The 2022-12 cut was not reached.
+
+**The prediction is falsified.** It said the ordering would no longer be inverted, with the Gini
+above 0.45. The Gini is 0.21 on the test window and 0.27 on 2019-20. It is the same weakness the
+second validation found (0.18), so the re-selection under the bands has not repaired it. The
+largest miss on the test window is the lowest-risk decile, at 1.735: the loans the model is most
+sure will not prepay are the ones it misses most.
+
+**What this says, and what it does not.** The model is ordered by credit score, leverage, debt
+burden and the market rate's fall since origination. What a prepayment turns on is the loan's own
+incentive: its note rate against today's market. A 2021 loan at 2.9% and a 2023 loan at 7% sit in
+cells that differ in their vintage and nothing else the model can see, and one of them is locked
+in while the other would refinance at the first cut. `mortgage_rate_decline` is that incentive
+**less the origination spread**, and the spread is exactly what the key does not carry. That is an
+argument, and the next entry declares the test of it. The level miss on the test window is not
+corrected, as declared, because 2025's lock-in is outside anything the training data saw.
+
+**Consequence.** No cumulative incidence built on this hazard is a professional lifetime PD.
+Section 5's vintage criterion is therefore not read on it. Reading it would publish a lifetime
+PD resting on a competing hazard that fails all three of its own criteria. It waits for the
+model the next entry declares.
