@@ -297,6 +297,19 @@ already in the model before the third arrives. Declared now:
 - the **prepayment** model carries the **refinancing incentive**, which is the quantity the
   decision to refinance actually turns on, and not the other two.
 
+**Amended 13 November 2026, before the key carries the note rate and before any fit on it, for
+a reason in the engine and not in a result.** The refinancing incentive is the note rate
+against *today's* market rate, so as a design column it moves with the loan **and** with the
+calendar. The factorised kernel every fit goes through (`eta = A[i] + B[j]`) represents a column
+of one side or the other, and refuses one that couples them, by name. The incentive's identity
+with the other two is what makes it representable anyway: the prepayment model carries the
+**origination spread** (loan side) and the **fall in the market rate** (calendar side), each
+with a coefficient of its own. The incentive is the special case where the two coefficients
+are equal, so it is nested rather than lost. Never all three still holds, and the default model
+is unchanged: spread and fall. **What would show that the incentive is what matters**: the two
+prepayment coefficients come out close, in standard deviations of their own covariates' units.
+That is a prediction, recorded in the register, and not a constraint imposed on the fit.
+
 **This rule is currently moot, and that is a cost rather than a resolution.** The note rate is
 not in the cell key -- rule 7's give-up order reached it -- so none of the three is available, and
 both models carry the fall in the market rate instead. The prepayment model therefore has no

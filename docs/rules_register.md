@@ -1608,3 +1608,51 @@ corrected, as declared, because 2025's lock-in is outside anything the training 
 Section 5's vintage criterion is therefore not read on it. Reading it would publish a lifetime
 PD resting on a competing hazard that fails all three of its own criteria. It waits for the
 model the next entry declares.
+
+### Rule 7 and rule 9 — The origination spread enters the key: what is predicted, before the rebuild
+
+**What is done.** Rule 7 named the origination spread as the next extension to price against
+the 250-million ceiling, and said it fits: 184.4 million cells projected, 210.2 with the declared
+1.14 margin (`docs/reports/key_extensions.csv`, 9 October). It has never been tried. The cells
+are rebuilt with the note rate in the key, banded on `features.BIN_EDGES["note_rate"]`, beside
+the HARP level and the payment state. The published table is kept as
+`cells_exclude.published.parquet`, copied with its size and time of writing, so restoring it
+restores every cached fit's identity. Then:
+
+- the default and the prepayment selections run on the new table. The spread is a covariate
+  fixed at origination, a function of the note rate band and the origination month, both in the
+  key, so it enters the loan block and rule 14's shape with the other origination covariates;
+- the prepayment model carries spread and fall as rule 9, amended today, says;
+- both are measured as the published model was: the selection's own fit, `window_criteria`,
+  the default anchored on 2022-01 to 2024-12, and the test window read once.
+
+**Invariants, which are not predictions.** The same 2,773,640,182 loan-months and 1,671,207
+defaults, partitioned over more cells. Any difference is a defect in the rebuild and stops
+everything after it.
+
+**Predictions.**
+
+1. **Cells: 184 to 215 million.** The nine-quarter ratio ran 14% light the last time it was
+   checked, so a figure up to the margin is expected and one above 250 million stops the
+   extension under rule 7.
+2. **Prepayment, the one this is for**: the Gini rises **above 0.45** on the test window and on
+   2019-20, from 0.21 and 0.27. The lowest-risk decile's miss, 1.735, comes inside 1.25.
+3. **Rule 9's incentive**: the prepayment coefficients on the spread and on the fall in the
+   market rate come out within a factor of two of each other, both negative.
+4. **Default**: the spread's coefficient is **negative**, so a loan priced above its month's
+   market is riskier: risk-based pricing carries information beyond the score, the leverage and
+   the debt burden. The three cross-sectional criteria still pass. **No improvement in the
+   out-of-sample age bands is predicted.** The spread is a price relative to the month, not the
+   rate level a vintage was written at, and the age-or-vintage reading of 5 November did not
+   decide.
+
+**Adoption, declared now.**
+
+- The **default** model with the spread replaces the published one only if it passes every
+  section 5 criterion the published model passes on the test window: the overall ratio, the
+  Gini, every decile and the master scale. The age bands are reported, and adoption does not
+  hinge on them.
+- The **prepayment** model is fit for a cumulative incidence only if it passes its own three
+  criteria on the test window.
+- If neither is adopted, the published table is restored and the result is recorded against
+  these predictions.
