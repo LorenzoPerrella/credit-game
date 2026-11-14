@@ -295,6 +295,64 @@ def _logaddexp_zero(jet: _Jet) -> _Jet:
     return jet.chain(value, first, first * (1.0 - first))
 
 
+def _expm1(jet: _Jet) -> _Jet:
+    """``exp(x) - 1`` without the cancellation at small ``x``; both derivatives are ``exp(x)``."""
+    with np.errstate(over="ignore"):
+        grown = np.exp(jet.v)
+    return jet.chain(np.expm1(jet.v), grown, grown)
+
+
+def _log1p(jet: _Jet) -> _Jet:
+    """``log(1 + x)`` without the cancellation at small ``x``."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        first = 1.0 / (1.0 + jet.v)
+    return jet.chain(np.log1p(jet.v), first, -first * first)
+
+
+def _logistic(jet: _Jet) -> _Jet:
+    """``1 / (1 + exp(-x))``, which saturates at both ends instead of overflowing."""
+    with np.errstate(over="ignore"):
+        value = 1.0 / (1.0 + np.exp(-jet.v))
+    first = value * (1.0 - value)
+    return jet.chain(value, first, first * (1.0 - 2.0 * value))
+
+
+def _log_of_increment_probability(jet: _Jet) -> _Jet:
+    """``log(1 - exp(-x))``, the log-probability of failing in a month with increment ``x``.
+
+    Written as ``log(-expm1(-x))`` so a small increment keeps its digits -- at ``x = 1e-9`` the
+    naive form has lost seven of them -- and with derivatives that cannot overflow: with
+    ``e = exp(-x)`` and ``q = 1 - e``, the first is ``e / q`` and the second ``-e / q**2``, where
+    the textbook ``1 / expm1(x)`` and ``-exp(x) / expm1(x)**2`` give ``inf / inf`` for a large
+    increment.
+    """
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        spared = np.exp(-jet.v)
+        failed = -np.expm1(-jet.v)
+        first = spared / failed
+        value = np.log(failed)
+    return jet.chain(value, first, -first / failed)
+
+
+def _select(where: np.ndarray, chosen: _Jet, otherwise: _Jet) -> _Jet:
+    """Row by row, one jet or the other, every component alike."""
+
+    def pick(left: np.ndarray | float, right: np.ndarray | float) -> np.ndarray | float:
+        if _is_zero(left) and _is_zero(right):
+            return _ZERO
+        return np.where(where, left, right)
+
+    return _Jet(
+        pick(chosen.v, otherwise.v),
+        pick(chosen.de, otherwise.de),
+        pick(chosen.dr, otherwise.dr),
+        pick(chosen.dee, otherwise.dee),
+        pick(chosen.der, otherwise.der),
+        pick(chosen.drr, otherwise.drr),
+        chosen.curved and otherwise.curved,
+    )
+
+
 def log_times(distribution: str, ages: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
     """The logarithms every row needs, as tables over the loan ages in the data.
 
@@ -422,3 +480,116 @@ def row_likelihood(
 
     interval = _clipped(opened - closed, INTERVAL_FLOOR, INTERVAL_CEILING)
     return _log(interval) + entry.scaled(truncated)
+
+
+#: The two ways the engine can write a row's likelihood. ``lifelines`` is lifelines' own
+#: objective with its clips, which every fit before 14 November 2026 used and the equivalence
+#: tests hold the engine to; ``conditional`` is the same quantity written as what a monthly
+#: episode is, and is rule 18 of `docs/rules.md`.
+FORMULATIONS: Final = ("lifelines", "conditional")
+
+
+def step_constants(ages: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """What the conditional likelihood needs of each age: three tables, nothing per row.
+
+    ``log(max(a, 1))``, ``log1p(1/a)`` (zero at age zero) and whether the age is zero. The
+    increment of a month at age ``a`` is ``H(a+1) - H(a)``, and with ``H(a+1) = H(a) * exp(rho *
+    log1p(1/a))`` for the Weibull it is ``H(a) * expm1(rho * log1p(1/a))`` -- one exponential of
+    the row's own predictor, one of a constant, and no difference of two large numbers. At age
+    zero the cumulative hazard is zero and the increment is ``H(1)``, which the same expression
+    gives once ``log(max(a, 1))`` is zero and the factor is one.
+    """
+    at = np.asarray(ages, dtype=np.float64)
+    zero = at == 0
+    with np.errstate(divide="ignore"):
+        step = np.where(zero, 0.0, np.log1p(1.0 / np.where(zero, 1.0, at)))
+    return np.log(np.maximum(at, 1.0)), step, zero
+
+
+def increment(
+    distribution: str,
+    *,
+    log_age: np.ndarray,
+    step: np.ndarray,
+    zero: np.ndarray,
+    eta: np.ndarray,
+    shape: np.ndarray | float,
+    curvature: bool = True,
+) -> _Jet:
+    """``H(a+1) - H(a)`` at each row's own predictor, with its derivatives, computed stably.
+
+    The **Weibull**, ``H = exp(rho * (log t - eta))``:
+
+        H(a) * expm1(rho * log1p(1/a)),  and H(1) at a = 0.
+
+    The **log-logistic**, ``H = log(1 + u)`` with ``u = exp(beta * (log t - scale))``:
+
+        log1p(logistic(s) * expm1(beta * log1p(1/a))),  s = beta * (log a - scale),
+        log(1 + u(1)) at a = 0,
+
+    because ``(1 + u(a+1)) / (1 + u(a)) = 1 + u(a) * expm1(...) / (1 + u(a))`` and
+    ``u / (1 + u)`` is the logistic of ``s``, which saturates where ``u`` would overflow. Each
+    family takes its scale and shape exactly as lifelines' does -- ``safe_exp`` on the
+    Weibull's shape, the log-logistic's ``log(safe_exp(eta))`` -- so the two formulations
+    differ only where lifelines clips.
+    """
+    if distribution not in _FAMILIES:
+        message = (
+            f"The written-out kernel fits {' and '.join(FAMILIES)}, not {distribution!r}. "
+            "Pass the autograd evaluator for anything else."
+        )
+        raise ValueError(message)
+    family = _FAMILIES[distribution]
+    scale, rate = family.prepared(
+        _Jet(eta, de=1.0, curved=curvature), _Jet(shape, dr=1.0, curved=curvature)
+    )
+    at_zero = np.asarray(zero, dtype=np.float64)
+    grown = _expm1(rate * _Jet(step))
+    if distribution == "weibull":
+        level = _safe_exp(rate * (_Jet(log_age) - scale))
+        factor = grown + _Jet(at_zero)
+        return level * factor
+    exponent = rate * (_Jet(log_age) - scale)
+    later = _log1p(_logistic(exponent) * grown)
+    first = _logaddexp_zero(exponent)
+    return _select(np.asarray(zero, dtype=bool), first, later)
+
+
+def row_likelihood_conditional(
+    distribution: str,
+    *,
+    log_age: np.ndarray,
+    step: np.ndarray,
+    zero: np.ndarray,
+    event: np.ndarray,
+    eta: np.ndarray,
+    shape: np.ndarray | float,
+    curvature: bool = True,
+) -> _Jet:
+    """One monthly episode's log-likelihood as what it is: survive the month, or fail in it.
+
+    A row is at risk from age ``a`` -- it entered there, which is the left truncation -- and
+    either reaches ``a + 1`` or fails before it. Conditional on having entered::
+
+        survived:  log S(a+1) / S(a)       = -dH
+        failed:    log (1 - S(a+1) / S(a)) = log(1 - exp(-dH))
+
+    with ``dH = H(a+1) - H(a)``. That is **algebraically the same number** lifelines computes as
+    ``log(S(start) - S(stop)) + H(entry)`` -- for a survivor its interval runs from ``a + 1`` to
+    a stand-in for infinity, for a failure from ``a`` to ``a + 1``, and the entry is ``a`` -- so
+    where no clip of lifelines' binds the two agree to the last digits. Where one does, they
+    part, and only this one is a likelihood: every term is at most zero, so the mean negative
+    log-likelihood cannot fall below zero and there is no region beyond a ridge that looks better
+    than the optimum. That region is what refused 401 evaluations of the prepayment model on 13
+    November 2026; it does not exist here. Rule 18 of `docs/rules.md`.
+    """
+    change = increment(
+        distribution,
+        log_age=log_age,
+        step=step,
+        zero=zero,
+        eta=eta,
+        shape=shape,
+        curvature=curvature,
+    )
+    return _select(np.asarray(event, dtype=bool), _log_of_increment_probability(change), -change)

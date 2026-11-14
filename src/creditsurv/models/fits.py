@@ -148,6 +148,10 @@ class Fits:
     #: scale; the shape does not move. `None` is the scalar shape every run before October 2026
     #: made, and that path is untouched down to its summation order.
     ancillary: str | None = None
+    #: How every fit of the run writes a row's likelihood: lifelines' own objective, or rule 18's
+    #: conditional episode likelihood. In every fingerprint when it is not lifelines', so the two
+    #: are never handed to each other out of the cache.
+    formulation: str = "lifelines"
 
     def fit(
         self,
@@ -180,6 +184,7 @@ class Fits:
             distribution=self.distribution,
             cause=self.cause,
             ancillary=self.ancillary,
+            formulation=self.formulation,
         )
         fingerprint = fit_fingerprint(**described)
         cached = load_fit(fingerprint)
@@ -389,10 +394,17 @@ class Fits:
                 initial_point=initial_point,
                 prefer=self.preferred,
                 floor=floor,
+                formulation=self.formulation,
             )
             if fitted.blocks is not None and fitted.blocks.method not in {"newton", "warm"}:
                 self.preferred = fitted.blocks.method
             return fitted
+        if self.formulation != "lifelines":
+            message = (
+                f"The {self.formulation} formulation needs the rows factorised: give the fits a "
+                "cell source and a calendar list, so they go through the written-out kernel."
+            )
+            raise ValueError(message)
         if self.blocks is None:
             if self.train is None:
                 message = "Fits needs either an episode frame or a CellBlocks to read."
@@ -546,6 +558,7 @@ def selection_description(
     distribution: str = DISTRIBUTION,
     cause: str = DEFAULT_CAUSE,
     ancillary: str | None = None,
+    formulation: str = "lifelines",
 ) -> dict[str, object]:
     """What a selection fit is saved under, and so how it is found again.
 
@@ -571,6 +584,9 @@ def selection_description(
         described["cause"] = cause
     if ancillary is not None:
         described["ancillary"] = ancillary
+    # Rule 18: only when it is not lifelines' own objective, so every earlier fit keeps its name.
+    if formulation != "lifelines":
+        described["formulation"] = formulation
     return described
 
 
@@ -843,6 +859,7 @@ def fit_description(
     ancillary: str | None = None,
     likelihood: Likelihood | None = None,
     cause: str = DEFAULT_CAUSE,
+    formulation: str = "lifelines",
 ) -> dict[str, object]:
     """What a report's fit is cached under, and so how any command finds it again.
 
@@ -878,6 +895,9 @@ def fit_description(
         described["ancillary"] = ancillary
     if likelihood is not None and likelihood is not Likelihoods.INTERVAL_CENSORED:
         described["likelihood"] = likelihood.value
+    # Rule 18: named only when it is not lifelines' objective, so every earlier fit keeps its name.
+    if formulation != "lifelines":
+        described["formulation"] = formulation
     return described
 
 

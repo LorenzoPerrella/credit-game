@@ -840,6 +840,52 @@ nothing here estimates or tunes it.
   baseline. So the share of the book the floor binds on is published with every scored book, as
   the size of what it hides.
 
+## 18. A monthly episode's likelihood may be written as what it is
+
+Declared 14 November 2026, before any fit that reads the test window uses it.
+
+**What it is.** A row of the table is one loan-month: at risk from age `a`, entered there (the
+left truncation), and either surviving to `a + 1` or failing before it. Conditional on having
+entered, its log-likelihood is
+
+- `-dH` for a survivor, and
+- `log(1 - exp(-dH))` for a failure,
+
+with `dH = H(a+1) - H(a)` computed without subtracting two large numbers: `H(a) * expm1(rho *
+log1p(1/a))` for the Weibull, `log1p(logistic(s) * expm1(beta * log1p(1/a)))` for the
+log-logistic. The engine calls this the **conditional formulation**, and lifelines' own
+`log(clip(S(start) - S(stop))) + H(entry)` the **lifelines formulation**.
+
+**Why it is the same estimator.** For these rows the two are one number by algebra. A survivor's
+interval runs from `a + 1` to a stand-in for infinity, a failure's from `a` to `a + 1`, and the
+entry is `a`. They part only where lifelines' arithmetic does:
+
+- in 60-digit arithmetic the conditional form is within **1.5e-15** of the exact value
+  everywhere;
+- lifelines' is up to **8e-8** out on the log-logistic and **2.3e-11** on the Weibull, from
+  subtracting two survivals close to one;
+- on the fixture book the two optima agree within two thousandths of a standard error, for both
+  families (`tests/test_conditional.py`).
+
+**Why it is needed.** lifelines clips the interval probability at 1e-25 and adds the truncation
+term outside the clip, so beyond a ridge its objective falls below zero, which no likelihood
+can do. The engine walls that region off and refuses fits that end in it. That is what refused
+401 evaluations of the prepayment model on 13 November. Under the conditional formulation every
+term is at most zero, the objective cannot go below zero, and the region does not exist.
+
+**Where it is used.** The prepayment model, from its next selection. **The default model stays
+on the lifelines formulation** until a separate decision says otherwise: the published fit was
+certified under it, and every cached fit was made in it.
+
+**What holds it.**
+- The NumPy kernel is normative (rule 13) and the crate carries the same arithmetic behind a
+  flag; the two are compared at 1e-12.
+- Both are held to the exact value, to lifelines where lifelines does not clip, and to being a
+  likelihood where it does.
+- The formulation is in every fingerprint where it is not lifelines', so no fit of one is ever
+  handed out as a fit of the other.
+- The autograd path refuses it by name, because it can only trace lifelines' own function.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.

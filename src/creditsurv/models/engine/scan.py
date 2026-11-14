@@ -490,6 +490,7 @@ def _kernel(
     scale: np.ndarray,
     total_weight: float,
     threads: int = 1,
+    formulation: str = "lifelines",
 ) -> Kernel:
     """The written-out objective over the rows this scan encoded.
 
@@ -566,4 +567,6 @@ def _kernel(
         # runs at the same count agree bit for bit where two counts agree only to the last
         # digits of a sum over 72.7 million terms.
         threads=threads,
+        # Rule 18: lifelines' objective, or the conditional episode likelihood.
+        formulation=formulation,
     )

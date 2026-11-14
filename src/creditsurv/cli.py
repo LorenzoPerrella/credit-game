@@ -1155,6 +1155,13 @@ def select(
             help="Trace lifelines' likelihood with autograd, re-reading the rows for every fit.",
         ),
     ] = False,
+    formulation: Annotated[
+        str,
+        typer.Option(
+            help="lifelines or conditional: how a row's likelihood is written (rule 18). "
+            "The conditional form needs the written-out kernel.",
+        ),
+    ] = "lifelines",
 ) -> None:
     """Run the variable selection on the training half, and write what it chose.
 
@@ -1269,6 +1276,7 @@ def select(
         # calibration and says nothing about the other exit, so the prepayment model keeps its
         # scalar shape until a rule says otherwise.
         ancillary=default_shape() if cause == DEFAULT_CAUSE else None,
+        formulation=formulation,
     )
     record = run_selection(
         None,

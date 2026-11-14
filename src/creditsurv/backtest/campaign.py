@@ -237,6 +237,7 @@ def fitted_to(
     macro: pd.DataFrame,
     block_rows: int,
     cause: str = DEFAULT_CAUSE,
+    formulation: str = "lifelines",
 ) -> FitResult:
     """The model estimated on everything up to ``cut``, read from the cell file and saved.
 
@@ -289,6 +290,7 @@ def fitted_to(
         ancillary=ancillary,
         # Each cut is warm-started from the one before, so this is a few Newton steps.
         initial_point=None if start is None else start.fitter.params_,
+        formulation=formulation,
     )
     record = result.blocks
     assert record is not None
@@ -300,6 +302,7 @@ def fitted_to(
         distribution=DISTRIBUTION,
         ancillary=ancillary,
         cause=cause,
+        formulation=formulation,
     )
     save_fit(
         result, fit_fingerprint(**described), {**described, "minutes": result.elapsed_seconds / 60}

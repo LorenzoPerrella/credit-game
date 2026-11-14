@@ -348,6 +348,87 @@ fn row_likelihood(
     log_jet(interval).plus(entry.scaled(truncated))
 }
 
+/// `exp(x) - 1` without the cancellation at small `x`; both derivatives are `exp(x)`.
+#[inline(always)]
+fn expm1_jet(jet: Jet) -> Jet {
+    let grown = jet.v.exp();
+    jet.chain(jet.v.exp_m1(), grown, grown)
+}
+
+/// `log(1 + x)` without the cancellation at small `x`.
+#[inline(always)]
+fn log1p_jet(jet: Jet) -> Jet {
+    let first = 1.0 / (1.0 + jet.v);
+    jet.chain(jet.v.ln_1p(), first, -first * first)
+}
+
+/// `1 / (1 + exp(-x))`, which saturates at both ends instead of overflowing.
+#[inline(always)]
+fn logistic_jet(jet: Jet) -> Jet {
+    let value = 1.0 / (1.0 + (-jet.v).exp());
+    let first = value * (1.0 - value);
+    jet.chain(value, first, first * (1.0 - 2.0 * value))
+}
+
+/// `log(1 - exp(-x))`, written as `log(-expm1(-x))` with derivatives that cannot overflow.
+#[inline(always)]
+fn log_of_increment_probability(jet: Jet) -> Jet {
+    let spared = (-jet.v).exp();
+    let failed = -(-jet.v).exp_m1();
+    let first = spared / failed;
+    jet.chain(failed.ln(), first, -first / failed)
+}
+
+/// `H(a+1) - H(a)` at the row's own predictor, computed without subtracting two large numbers.
+///
+/// The Weibull's is `H(a) * expm1(rho * log1p(1/a))` and `H(1)` at age zero; the log-logistic's
+/// is `log1p(logistic(s) * expm1(beta * log1p(1/a)))` with `s = beta * (log a - scale)`, and
+/// `log(1 + u(1))` at age zero. `log_age` is `log(max(a, 1))` and `step` is `log1p(1/a)`, zero at
+/// age zero, both from the NumPy kernel's own tables so the two backends read the same bits.
+#[inline(always)]
+fn increment(family: u8, log_age: f64, step: f64, zero: bool, eta: f64, rate: Jet) -> Jet {
+    let scale = scale_of(family, eta);
+    let grown = expm1_jet(rate.mul(Jet::constant(step)));
+    let exponent = rate.mul(Jet::constant(log_age).minus(scale));
+    if family == WEIBULL {
+        let level = safe_exp(exponent);
+        let factor = if zero {
+            grown.plus(Jet::constant(1.0))
+        } else {
+            grown
+        };
+        level.mul(factor)
+    } else if zero {
+        logaddexp_zero(exponent)
+    } else {
+        log1p_jet(logistic_jet(exponent).mul(grown))
+    }
+}
+
+/// One monthly episode as what it is, rule 18 of `docs/rules.md`: survive it or fail in it.
+///
+/// `-dH` for a survivor and `log(1 - exp(-dH))` for a failure, with `dH = H(a+1) - H(a)`. The
+/// same number lifelines computes as `log(S(start) - S(stop)) + H(entry)` wherever none of its
+/// clips binds, and a likelihood everywhere: no term is above zero, so the objective cannot fall
+/// below zero and there is no region past a ridge for an optimiser to be drawn into.
+#[inline(always)]
+fn row_likelihood_conditional(
+    family: u8,
+    log_age: f64,
+    step: f64,
+    zero: bool,
+    exits: bool,
+    eta: f64,
+    rate: Jet,
+) -> Jet {
+    let change = increment(family, log_age, step, zero, eta, rate);
+    if exits {
+        log_of_increment_probability(change)
+    } else {
+        change.scaled(-1.0)
+    }
+}
+
 /// A design table times a coefficient vector, row by row.
 ///
 /// ``rows`` is passed rather than divided out of the slice's length, and that is not a style:
@@ -494,6 +575,7 @@ fn accumulate(
     event: &[bool],
     weight: &[u32],
     curvature: bool,
+    conditional: bool,
     from: usize,
     to: usize,
 ) -> Totals {
@@ -523,15 +605,21 @@ fn accumulate(
         let opens = log_entry[months];
         let closes = log_following[months];
         let eta = eta_loan[loan] + eta_calendar[key];
-        let jet = row_likelihood(
-            family,
-            opens,
-            if *exits { opens } else { closes },
-            if *exits { closes } else { log_far },
-            if months > 0 { 1.0 } else { 0.0 },
-            eta,
-            rate,
-        );
+        // Under the conditional formulation the two tables are `log(max(a, 1))` and
+        // `log1p(1/a)` rather than the log-times of the interval's ends; see `evaluate`.
+        let jet = if conditional {
+            row_likelihood_conditional(family, opens, closes, months == 0, *exits, eta, rate)
+        } else {
+            row_likelihood(
+                family,
+                opens,
+                if *exits { opens } else { closes },
+                if *exits { closes } else { log_far },
+                if months > 0 { 1.0 } else { 0.0 },
+                eta,
+                rate,
+            )
+        };
         totals.value.add(count * jet.v);
         let first = count * jet.de;
         totals.by_loan[loan] += first;
@@ -574,7 +662,7 @@ type Evaluated<'py> = (
 #[pyfunction]
 #[pyo3(signature = (
     family, loan, calendar, x_loan, x_calendar, shape, log_entry, log_following, log_far,
-    i, j, age, event, weight, total_weight, curvature, threads = 1,
+    i, j, age, event, weight, total_weight, curvature, threads = 1, conditional = false,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn evaluate<'py>(
@@ -596,6 +684,7 @@ fn evaluate<'py>(
     total_weight: f64,
     curvature: bool,
     threads: usize,
+    conditional: bool,
 ) -> PyResult<Evaluated<'py>> {
     if family != WEIBULL && family != LOGLOGISTIC {
         return Err(PyValueError::new_err(
@@ -697,6 +786,7 @@ fn evaluate<'py>(
                 events,
                 counts,
                 curvature,
+                conditional,
                 0,
                 rows.len(),
             );
@@ -723,6 +813,7 @@ fn evaluate<'py>(
                         events,
                         counts,
                         curvature,
+                        conditional,
                         from,
                         to,
                     )
