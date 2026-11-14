@@ -433,6 +433,7 @@ def build_cells(
     spec: CellSpec = DEFAULT_SPEC,
     policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
     connection: duckdb.DuckDBPyConnection | None = None,
+    definition: DefaultDefinition = DefaultDefinition.DELINQUENCY,
 ) -> pd.DataFrame:
     """Aggregate the parquet panel into weighted cells, one quarter at a time.
 
@@ -451,7 +452,7 @@ def build_cells(
         raise FileNotFoundError(message)
 
     spec.validate()
-    return _concatenate(list(_quarters_of_cells(perf, orig, spec, policy, connection)))
+    return _concatenate(list(_quarters_of_cells(perf, orig, spec, policy, connection, definition)))
 
 
 def _quarters_of_cells(

@@ -1814,3 +1814,28 @@ definitions.
   window, every section 5 criterion the published model passes;
 - the prepayment model's episodes are identical under both definitions, so its criteria,
   declared on 5 November, are unaffected.
+
+### Rule 19 — The CRR table: every invariant holds, and the defaults it adds are the independent count to the loan
+
+Rebuilt with `creditsurv aggregate --definition crr` in 51 minutes, a quarter at a time:
+
+| | published table | CRR table |
+|---|---|---|
+| cells | 91,575,827 | **181,370,908** |
+| loan-months | 2,773,640,182 | 2,773,640,182 |
+| defaults | 1,671,207 | **1,711,862** |
+| prepayments | 33,797,300 | 33,797,300 |
+| censored loan-months | 2,738,171,675 | 2,738,131,020 |
+
+- **The invariants hold exactly.** The defaults rise by 40,655, which is the count made
+  independently of the code, and the censored loan-months fall by the same 40,655. There are
+  53,786 pairs of origination month and age, and not one breaks an invariant: each keeps the same
+  loan-months and payoffs, and every default added is a censored loan-month removed.
+- **Prediction 1, the cells, holds.** The table has 181.37 million, inside 181.35 to 181.40. That is
+  19,070 more than the table with the note rate under the first definition, against at most 40,655.
+- **Prediction 2, the cost, is missed.** It took 51 minutes, against about 35:
+  - the CRR branch costs a fifth more a quarter: 141 s against 117 s on 2003Q3;
+  - the rebuild shared the machine with tests run beside it, which paged it twice;
+  - the peak was not measured.
+
+The published table is untouched, at `cells_exclude.parquet:448169670:1791619429593537860`.
