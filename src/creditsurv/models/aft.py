@@ -131,6 +131,10 @@ class FitResult:
     #: pass what was asked for. ``reporting.builder.specification`` therefore takes the shape as
     #: an argument and never discovers it.
     ancillary: str | bool | None = None
+    #: How the likelihood was written: lifelines' own objective, or rule 18's conditional episode
+    #: likelihood. A default, so a pickle written before the option existed reads back as what
+    #: it was -- every fit before 14 November 2026 is a `lifelines` fit.
+    formulation: str = "lifelines"
 
     @property
     def aic(self) -> float:
@@ -187,6 +191,7 @@ def fit_aft(
     where: np.ndarray | None = None,
     polish: bool = True,
     calendar: Sequence[str] | None = None,
+    formulation: str = "lifelines",
 ) -> FitResult:
     """Fit a parametric AFT model to an encoded episode panel.
 
@@ -251,6 +256,7 @@ def fit_aft(
             show_progress=show_progress,
             polish=polish,
             calendar=calendar,
+            formulation=formulation,
         )
     else:
         frame = right_censored_frame(encoded if where is None else encoded[selected], covariates)
@@ -295,6 +301,7 @@ def fit_aft(
         elapsed_seconds=elapsed,
         blocks=record,
         ancillary=ancillary,
+        formulation=formulation,
     )
 
 
@@ -311,6 +318,7 @@ def fit_encoding(
     polish: bool = True,
     prefer: str | None = None,
     floor: float | None = None,
+    formulation: str = "lifelines",
 ) -> FitResult:
     """Fit one model from rows that have already been read, without reading them again.
 
@@ -341,6 +349,7 @@ def fit_encoding(
         # Declared in `config`, not read off the machine: the count is part of what determines
         # the answer, so a fit's last digits must not be a property of the hardware.
         threads=KERNEL_THREADS,
+        formulation=formulation,
     )
     return FitResult(
         fitter=fitter,
@@ -352,6 +361,7 @@ def fit_encoding(
         elapsed_seconds=time.perf_counter() - started,
         blocks=record,
         ancillary=ancillary,
+        formulation=formulation,
     )
 
 
@@ -371,6 +381,7 @@ def fit_streamed(
     prefer: str | None = None,
     floor: float | None = None,
     calendar: Sequence[str] | None = None,
+    formulation: str = "lifelines",
 ) -> FitResult:
     """Fit the interval-censored likelihood from blocks, without an episode frame in memory.
 
@@ -405,6 +416,7 @@ def fit_streamed(
         prefer=prefer,
         floor=floor,
         calendar=calendar,
+        formulation=formulation,
     )
     return FitResult(
         fitter=fitter,
@@ -416,6 +428,7 @@ def fit_streamed(
         elapsed_seconds=time.perf_counter() - started,
         blocks=record,
         ancillary=ancillary,
+        formulation=formulation,
     )
 
 

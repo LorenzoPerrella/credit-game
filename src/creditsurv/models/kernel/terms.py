@@ -39,8 +39,11 @@ if TYPE_CHECKING:
 from creditsurv.models.kernel.factorisation import joined
 from creditsurv.models.kernel.likelihood import (
     _MAX_AGE,
+    FORMULATIONS,
     log_times,
     row_likelihood,
+    row_likelihood_conditional,
+    step_constants,
 )
 
 #: The compiled backend, where the optional extra is installed. `None` is the ordinary case:
@@ -130,6 +133,15 @@ class Kernel:
     #: with the table, and boundaries fixed by the block's length -- which is what keeps the
     #: summation order, and so the answer, identical on every run.
     chunk: int = 1 << 17
+    #: How a row's likelihood is written: lifelines' own objective with its clips, or the
+    #: conditional episode likelihood of rule 18, which is the same number where no clip binds
+    #: and a likelihood everywhere. The default is the one every cached fit was made with.
+    formulation: str = "lifelines"
+
+    def __post_init__(self) -> None:
+        if self.formulation not in FORMULATIONS:
+            message = f"formulation is one of {FORMULATIONS}, not {self.formulation!r}."
+            raise ValueError(message)
 
     def __call__(self, x: np.ndarray, *, curvature: bool = False) -> _Totals:
         """The value, the gradient, and the curvature when it is asked for.
@@ -171,6 +183,15 @@ class Kernel:
     def _compiled(self, x: np.ndarray, *, curvature: bool) -> _Totals:
         """The same objective, evaluated by the crate: arrays in, three results out."""
         rows = self._rows
+        conditional = self.formulation == "conditional"
+        # The conditional formulation reads two other tables through the same two arguments --
+        # `log(max(a, 1))` and `log1p(1/a)` -- taken from this module so both backends read the
+        # same bits rather than two libms' versions of a logarithm.
+        tables = (
+            (*step_constants(np.arange(_MAX_AGE + 1))[:2], 0.0)
+            if conditional
+            else log_times(self.distribution, np.arange(_MAX_AGE + 1))
+        )
         value, gradient, hessian = _compiled.evaluate(
             _FAMILY_CODE[self.distribution],
             np.ascontiguousarray(self.loan, dtype=np.float64),
@@ -178,7 +199,7 @@ class Kernel:
             np.ascontiguousarray(x[self.loan_index], dtype=np.float64),
             np.ascontiguousarray(x[self.calendar_index], dtype=np.float64),
             float(x[self.shape_index]),
-            *log_times(self.distribution, np.arange(_MAX_AGE + 1)),
+            *tables,
             rows.i,
             rows.j,
             rows.age,
@@ -187,6 +208,7 @@ class Kernel:
             self.total_weight,
             curvature,
             self.threads,
+            conditional=conditional,
         )
         whole = np.zeros(len(x))
         whole[self._order] = gradient
@@ -207,6 +229,8 @@ class Kernel:
         the Hessian, which crosses the two indices exactly as `crossed` already does.
         """
         entry, following, far = log_times(self.distribution, np.arange(_MAX_AGE + 1))
+        log_age, step, zero = step_constants(np.arange(_MAX_AGE + 1))
+        conditional = self.formulation == "conditional"
         loans, calendars = len(self.loan), len(self.calendar)
         table = self.shape
         widths = 0 if table is None else table.shape[1]
@@ -241,17 +265,29 @@ class Kernel:
                 # Each table read once. `entry[age]` was gathered twice -- once as the
                 # truncation time and once inside the interval's own `where` -- which is a
                 # megabyte of gather per chunk for a number already in hand.
-                opens, closes = entry[age], following[age]
-                jet = row_likelihood(
-                    self.distribution,
-                    log_entry=opens,
-                    log_start=np.where(event, opens, closes),
-                    log_stop=np.where(event, closes, far),
-                    truncated=(age > 0).astype(np.float64),
-                    eta=eta_loan[i] + eta_calendar[j],
-                    shape=shape if eta_shape is None else eta_shape[i],
-                    curvature=curvature,
-                )
+                if conditional:
+                    jet = row_likelihood_conditional(
+                        self.distribution,
+                        log_age=log_age[age],
+                        step=step[age],
+                        zero=zero[age],
+                        event=event,
+                        eta=eta_loan[i] + eta_calendar[j],
+                        shape=shape if eta_shape is None else eta_shape[i],
+                        curvature=curvature,
+                    )
+                else:
+                    opens, closes = entry[age], following[age]
+                    jet = row_likelihood(
+                        self.distribution,
+                        log_entry=opens,
+                        log_start=np.where(event, opens, closes),
+                        log_stop=np.where(event, closes, far),
+                        truncated=(age > 0).astype(np.float64),
+                        eta=eta_loan[i] + eta_calendar[j],
+                        shape=shape if eta_shape is None else eta_shape[i],
+                        curvature=curvature,
+                    )
                 total += float(np.dot(weight, np.asarray(jet.v)))
                 scaled = weight * np.asarray(jet.de)
                 by_loan += np.bincount(i, weights=scaled, minlength=loans)

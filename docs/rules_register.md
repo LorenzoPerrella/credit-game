@@ -1716,3 +1716,35 @@ kept copy back, with its size and time of writing, so its identity is the one ev
 was made on (`cells_exclude.parquet:448169670:1791619429593537860`). The table with the note rate
 is kept as `cells_exclude.spread.parquet`. The spread's priors stay declared in
 `models.selection` for the next attempt. No lifetime PD is offered.
+
+## 14 November 2026
+
+### Rule 18 — The conditional episode likelihood, declared before any fit that matters uses it
+
+**What changed.** A new section 18, and the engine option it governs (`formulation="conditional"`
+in `models.kernel` and `crates/creditsurv-kernel`, threaded through every fit entry point and
+into every fingerprint where it is not lifelines'). It writes a monthly episode's likelihood as
+what it is: `-dH` or `log(1 - exp(-dH))`, computed stably.
+
+**Why now.** The user asked for the prepayment model to be rebuilt, towards a lifetime PD usable
+for IFRS 9 and RWA. Of its two failures, the one with the loan's rate in the key was not a model
+failure but an arithmetic one. lifelines' interval probability is clipped and its truncation
+term is not, so the objective went below zero, which no likelihood can do, on 401 evaluations.
+
+**What was measured before declaring it**, all on fixtures and none on the test window:
+
+- **against 60-digit arithmetic**, at ages 0 to 350, predictors from 4 to 8, shapes from -0.3
+  to 0.6 and both exits: the conditional form within 1.5e-15 everywhere. lifelines' own form is
+  up to 8e-8 out on the log-logistic and 2.3e-11 on the Weibull, a subtraction of two survivals
+  near one;
+- **against lifelines** on 20,000 rows inside the data: one number, to those tolerances;
+- **its derivatives** against central differences, first and second order, both scalars;
+- **the two backends** at three points: equal at 1e-12 on value, gradient and Hessian;
+- **far from the data** (`eta = -500`, shape on its bound): lifelines' mean negative
+  log-likelihood is below zero and the conditional one is not;
+- **one estimator**: the fixture book fitted both ways, both families, gives optima within two
+  thousandths of a standard error and log-likelihoods within 1e-8.
+
+**Admissible because** it moves no criterion and no published number. The default model and
+every cached fit stay on lifelines' formulation, and their fingerprints are unchanged. It will
+be used first by the prepayment model, whose criteria were declared on 5 November.

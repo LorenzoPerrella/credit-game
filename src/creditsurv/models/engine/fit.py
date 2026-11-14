@@ -103,6 +103,10 @@ class BlockFit:
     #: same count agree bit for bit, and two counts agree only to the last digits of a sum
     #: over 72.7 million terms. A fit that cannot say what summed it cannot be reproduced.
     threads: int = 1
+    #: How each row's likelihood was written: lifelines' own objective, or rule 18's
+    #: conditional episode likelihood. A default, so a record pickled before the option existed
+    #: reads back as what it was.
+    formulation: str = "lifelines"
 
 
 def fit_interval_censoring_in_blocks(
@@ -124,6 +128,7 @@ def fit_interval_censoring_in_blocks(
     prefer: str | None = None,
     floor: float | None = None,
     calendar: Sequence[str] | None = None,
+    formulation: str = "lifelines",
 ) -> BlockFit:
     """``fitter.fit_interval_censoring``, reading the rows a block at a time.
 
@@ -208,6 +213,7 @@ def fit_interval_censoring_in_blocks(
             prefer=prefer,
             floor=floor,
             started=started,
+            formulation=formulation,
         )
     finally:
         if pool is not None:
@@ -227,6 +233,7 @@ def _fit_from_scan(
     floor: float | None = None,
     started: float | None = None,
     threads: int = 1,
+    formulation: str = "lifelines",
 ) -> BlockFit:
     """Everything a fit does once the rows have been read: seed, optimise, polish, store.
 
@@ -276,10 +283,19 @@ def _fit_from_scan(
         fitter._create_neg_likelihood_with_penalty_function, likelihood=likelihood
     )
     total_weight = float(scan.weight)
+    if formulation != "lifelines" and scan.factorisation is None:
+        # Rule 18's conditional likelihood is written in the kernel and nowhere else: the
+        # autograd path traces lifelines' own function, so asking it for another formulation
+        # would fit lifelines' objective under the other's name.
+        message = (
+            f"The {formulation} formulation is evaluated by the written-out kernel only; pass "
+            "`calendar=` so the rows are factorised, or fit lifelines' own objective."
+        )
+        raise ValueError(message)
     kernel = (
         None
         if scan.factorisation is None
-        else _kernel(fitter, scan, norm_std.to_numpy(), total_weight, threads)
+        else _kernel(fitter, scan, norm_std.to_numpy(), total_weight, threads, formulation)
     )
     local = _Objective(
         fitter,
@@ -432,6 +448,7 @@ def _fit_from_scan(
         polish_steps=steps,
         residual_error_se=remaining,
         threads=threads if kernel is not None else 1,
+        formulation=formulation,
     )
 
 
@@ -448,6 +465,7 @@ def fit_encoded(
     prefer: str | None = None,
     floor: float | None = None,
     threads: int = 1,
+    formulation: str = "lifelines",
 ) -> BlockFit:
     """Fit one model from rows that were read once, without reading them again.
 
@@ -506,4 +524,5 @@ def fit_encoded(
         floor=floor,
         started=started,
         threads=threads,
+        formulation=formulation,
     )
