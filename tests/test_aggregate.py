@@ -427,6 +427,160 @@ def test_a_modified_loan_is_cut_at_the_modification(tmp_path: Path) -> None:
     assert (book["outcome"] != DEFAULT_CAUSE).all(), "a modification is censoring, not a default"
 
 
+#: A modification that cuts the rate from the fixture's note rate, 4.25%, to 3% over forty years.
+_CUT = {"rate": "3.0", "remaining": "480"}
+
+
+def _read_both_ways(tmp_path: Path, performance: list[str]) -> dict[str, pd.DataFrame]:
+    """One loan, ingested once and read under each default definition."""
+    import duckdb
+
+    from creditsurv.data.book import DefaultDefinition, state_of_the_book_sql
+
+    _ingested(tmp_path, [origination_row("F15Q1000001")], performance)
+    perf, orig = _sources(tmp_path)
+    connection = duckdb.connect()
+    return {
+        definition.value: connection.execute(
+            state_of_the_book_sql(definition=definition), [perf, orig]
+        )
+        .df()
+        .sort_values("period_key")
+        for definition in DefaultDefinition
+    }
+
+
+def test_under_the_crr_definition_a_restructuring_is_a_default_in_its_last_observed_month(
+    tmp_path: Path,
+) -> None:
+    """Rule 19: unlikeliness to pay, in the last month whose age is still the loan's own.
+
+    The same loan as above, read both ways, with the modification cutting the rate from the
+    note's 4.25% to 3% over forty years: about a sixth of the contract's value given up. Under
+    the first definition the modification is censoring; under the CRR one the month before it
+    carries the default, and nothing after it is kept, because the modified contract restarts
+    its age.
+    """
+    performance = [
+        performance_row("F15Q1000001", "201503", "0"),
+        performance_row("F15Q1000001", "201504", "1"),
+        performance_row("F15Q1000001", "201505", "2", delinquency="1"),
+        performance_row("F15Q1000001", "201506", "0", modification="Y", **_CUT),
+        performance_row("F15Q1000001", "201507", "1", modification="P", **_CUT),
+    ]
+    books = _read_both_ways(tmp_path, performance)
+    first, crr = books["delinquency"], books["crr"]
+
+    assert first["age"].tolist() == crr["age"].tolist() == [0, 1, 2]
+    assert first["outcome"].tolist() == [CENSORED, CENSORED, CENSORED]
+    assert crr["outcome"].tolist() == [CENSORED, CENSORED, DEFAULT_CAUSE]
+
+
+def test_a_default_that_came_first_is_not_moved_by_a_later_restructuring(tmp_path: Path) -> None:
+    """Three missed payments before the modification: the default is where it was."""
+    performance = [
+        performance_row("F15Q1000001", "201503", "0"),
+        performance_row("F15Q1000001", "201504", "1"),
+        performance_row("F15Q1000001", "201505", "2", delinquency="3"),
+        performance_row("F15Q1000001", "201506", "3", delinquency="4"),
+        performance_row("F15Q1000001", "201507", "0", modification="Y", **_CUT),
+    ]
+    crr = _read_both_ways(tmp_path, performance)["crr"]
+    assert crr["age"].tolist() == [0, 1, 2]
+    assert crr["outcome"].tolist() == [CENSORED, CENSORED, DEFAULT_CAUSE]
+
+
+@pytest.mark.parametrize("terms", [_CUT, {"rate": "4.25", "remaining": "480"}])
+def test_a_default_in_the_month_of_the_modification_is_kept_under_the_crr_definition(
+    tmp_path: Path, terms: dict[str, str]
+) -> None:
+    """The edge the first definition loses: the month that defaults is also the one modified.
+
+    Observation ends the month *before* a modification, so under the first definition the
+    defaulting row is cut with it and the loan reads as censored. Under the CRR one the default
+    is kept, a month early, whether or not the modification gave anything up: three missed
+    payments are a default on their own.
+    """
+    performance = [
+        performance_row("F15Q1000001", "201503", "0"),
+        performance_row("F15Q1000001", "201504", "1"),
+        performance_row("F15Q1000001", "201505", "2", delinquency="2"),
+        performance_row("F15Q1000001", "201506", "0", delinquency="3", modification="Y", **terms),
+    ]
+    books = _read_both_ways(tmp_path, performance)
+    first, crr = books["delinquency"], books["crr"]
+    assert first["outcome"].tolist() == [CENSORED, CENSORED, CENSORED]
+    assert crr["outcome"].tolist() == [CENSORED, CENSORED, DEFAULT_CAUSE]
+
+
+@pytest.mark.parametrize(
+    ("rate", "remaining", "defaults"),
+    [
+        # The term extended at the note rate: nothing given up, so a forborne loan, not a default.
+        ("4.25", "480", False),
+        # An eighth of a point over forty years: 1.85% of the value, above the 1%.
+        ("4.125", "480", True),
+        # The same eighth over ten years: 0.59%, below it.
+        ("4.125", "120", False),
+        # The file did not say what the modification set: the test cannot be made.
+        ("", "", False),
+    ],
+)
+def test_a_restructuring_is_a_default_only_above_the_eba_threshold(
+    tmp_path: Path, rate: str, remaining: str, *, defaults: bool
+) -> None:
+    """Rule 19 reads the EBA's 1% of net present value, at the note rate, and nothing else."""
+    performance = [
+        performance_row("F15Q1000001", "201503", "0"),
+        performance_row("F15Q1000001", "201504", "1"),
+        performance_row(
+            "F15Q1000001", "201505", "0", modification="Y", rate=rate, remaining=remaining
+        ),
+    ]
+    crr = _read_both_ways(tmp_path, performance)["crr"]
+    assert crr["age"].tolist() == [0, 1]
+    assert crr["outcome"].iloc[-1] == (DEFAULT_CAUSE if defaults else CENSORED)
+
+
+def test_the_diminished_obligation_is_the_annuity_ratio() -> None:
+    """The SQL against the closed form, at the cases the rule quotes."""
+    import duckdb
+
+    from creditsurv.data.book import diminished_obligation_sql
+
+    def annuity(rate: float, months: int) -> float:
+        monthly = rate / 1200
+        return float((1 - (1 + monthly) ** -months) / monthly)
+
+    for note, new, term in ((4.0, 3.875, 480), (4.0, 3.875, 120), (6.0, 2.0, 360), (4.0, 4.0, 480)):
+        sql = diminished_obligation_sql(str(note), str(new), str(term))
+        (found,) = duckdb.connect().execute(f"SELECT {sql}").fetchone()  # type: ignore[misc]
+        assert found == pytest.approx(1 - annuity(note, term) / annuity(new, term), abs=1e-12)
+
+
+def test_a_payoff_is_a_prepayment_under_either_definition(tmp_path: Path) -> None:
+    """The prepayment model reads the same events under both, which is why it is fitted once."""
+    performance = [
+        performance_row("F15Q1000001", "201503", "0"),
+        performance_row("F15Q1000001", "201504", "1"),
+        performance_row("F15Q1000001", "201505", "2", zero_balance="01"),
+    ]
+    books = _read_both_ways(tmp_path, performance)
+    first, crr = books["delinquency"], books["crr"]
+    assert first["outcome"].tolist() == crr["outcome"].tolist()
+    assert crr["outcome"].iloc[-1] == "prepayment"
+
+
+def test_the_crr_table_has_a_name_of_its_own() -> None:
+    from creditsurv.data.aggregate import CRR_SPEC, DEFAULT_SPEC, table_name
+    from creditsurv.data.book import DefaultDefinition, MoratoriumPolicy
+
+    assert table_name(MoratoriumPolicy.EXCLUDE) == "exclude"
+    assert table_name(MoratoriumPolicy.EXCLUDE, DefaultDefinition.CRR) == "exclude.crr"
+    assert "note_rate" in CRR_SPEC.continuous
+    assert "note_rate" not in DEFAULT_SPEC.continuous
+
+
 def test_truncation_follows_calendar_time_not_age(tmp_path: Path) -> None:
     """Cutting on ``MIN(age)`` picks the wrong row once age is not monotone.
 

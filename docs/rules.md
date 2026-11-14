@@ -886,6 +886,99 @@ certified under it, and every cached fit was made in it.
   handed out as a fit of the other.
 - The autograd path refuses it by name, because it can only trace lifelines' own function.
 
+## 19. What a default is, for a PD a regulator would read
+
+Declared 14 November 2026, on the user's decision, before the table it governs is built.
+
+**Two definitions, two tables.**
+
+- **The first definition**, which every model to date is of: three missed payments, or a
+  zero-balance code that ends the loan in credit loss, with a moratorium's delinquency excluded
+  (`MoratoriumPolicy.EXCLUDE`). A **modification** ends observation the month before its first
+  flag, as censoring. Its table is `cells_exclude.parquet`.
+- **The CRR definition** (`DefaultDefinition.CRR`) adds the indication of unlikeliness to pay
+  that Article 178(3)(d) of the CRR names: **a distressed restructuring is a default**. Its table
+  is `cells_exclude.crr.parquet`, which also carries the note rate (rule 7), and the table's
+  name is in every fingerprint read from it.
+
+**What the CRR definition does here.**
+
+- **A modification is a default when it gives up more than 1% of the contract's net present
+  value.** That is the EBA's test for a distressed restructuring (EBA/GL/2016/07). Their 2026
+  amendment (EBA/GL/2026/05) weighed raising it to 5% and kept 1%.
+    - The value is measured at the original effective rate, which for a fixed-rate loan written
+      at par is its note rate. The balance, arrears capitalised, is re-amortised at the rate and
+      over the term the modification set, and those payments are discounted at the note rate
+      (`data.book.diminished_obligation_sql`).
+    - A term extension at the note rate gives up nothing, as the amendment itself says. An
+      eighth of a point off the rate gives up 1.85% over forty years and 0.59% over ten.
+    - Principal moved into a balance that bears no interest is a further loss, which the
+      ingested fields do not carry. So the measured fall is a lower bound.
+    - A modification under the threshold is a forborne loan, not a defaulted one, and it is
+      censored as under the first definition.
+- **Three missed payments reported in the modification's own month are a default**, whatever the
+  modification gave up. The first definition loses them, because that month is cut.
+- **The default is dated to the last month observed before the first flag.** The dataset restarts
+  the loan's age at a modification, so the flagged month already carries the new contract's age.
+  Dating the default one month early keeps every row of the first table. The two tables then have
+  the same loan-months, and differ only in what ended a loan's last one.
+- **What came first stands.** A default by the first definition, a payoff or an exit before the
+  modification is unchanged.
+- **Not defaults:**
+    - trial-period, repayment and forbearance plans, which the file does not report as
+      modifications;
+    - payment moratoria, which stay under the moratorium policy, as the EBA's guidelines on
+      moratoria (EBA/GL/2020/02) asked. A modification after a moratorium is judged like any
+      other: those guidelines exempted the moratorium, not what the lender did next.
+- **No probation and no second default.** The guidelines keep a restructured exposure in default
+  for at least a year from the latest of the restructuring, the default and the end of any grace
+  period. Here observation ends at the default, so no loan returns from it.
+- **What it cannot see:** a loan modified under the threshold that later misses three payments.
+  The age restarts at the modification, so that loan is censored there under both definitions,
+  and its later default is not observed.
+
+**Measured before it was declared**, read-only on the ingested book:
+
+- **What the modifications set.** 84,744 loans are modified before any default, payoff or exit,
+  counting all loans, complete or not. 40,099 of the modifications cut the rate (47%), 44,474
+  keep it (52%), and 171 raise it. The share that cuts follows the programmes of the time:
+    - 78 to 93% of the modifications made in 2010-2013;
+    - 6.5% of the 8,532 made in 2018;
+    - 75% of the 18,642 made in 2022;
+    - under 7% from 2023, when the market rate stood above most note rates.
+
+  **So "every modification is a default" would have counted twice the defaults the EBA's test
+  does**, and the excess would have fallen on the recent vintages.
+- **The defaults the CRR table adds**, counted independently of the code that builds it, on
+  complete cases:
+    - 83,980 loans are modified first;
+    - 40,395 of the modifications give up more than 1%;
+    - 822 come with three missed payments;
+    - **40,655 are defaults by one or the other**, 2.4% on the 1,671,207 of the first definition.
+- **By vintage**, against the first definition's defaults: 0.3 to 1.5% for 1999-2004, 2.2 to
+  3.4% for 2005-2014, then 4.3% (2015), 5.6% (2016), 8.8% (2017), 12.4% (2018) and **14.0%
+  (2019)**, 2.8% (2020), and 0.1 to 0.9% for 2021-2024.
+- **Through the code that builds the table**, on 2003Q3: 617 defaults added, the independent count
+  to the loan, with the same 107,115,026 loan-months and 1,191,812 payoffs under both
+  definitions.
+
+**Where each is used.**
+
+- **The default model moves to the CRR definition only on evidence.** It is refitted on the CRR
+  table, and it replaces the published one only if it passes every section 5 criterion the
+  published model passes on the test window. Until then the published PD stays on the first
+  definition and says so.
+- **The prepayment model reads both definitions the same way.** A restructured loan leaves the
+  prepayment risk set in the same month under both, and a payoff is a payoff, so the episodes are
+  identical. It is fitted on the CRR table because that table also carries the note rate.
+- **A PD offered for IFRS 9 or for capital is of the CRR definition.** IFRS 9 asks for the
+  definition used to manage credit risk, with a rebuttable presumption at 90 days past due
+  (B5.5.37), and the CRR asks for this one. One definition serves both.
+
+**Scope.** These are US mortgages. Article 178 is applied to them as a method. That does not make
+the PD an own estimate for an EU portfolio, which Articles 179 and 180 tie to the institution's own
+experience or to pooled data representative of it.
+
 ## What these rules forbid
 
 - Tuning any threshold on a test window, or choosing a cut after seeing a result.
@@ -898,6 +991,7 @@ certified under it, and every cached fit was made in it.
 - Letting the payment state into the **origination** model, or presenting this model as an
   expected-loss model for past-due credit.
 - Removing a covariate without fitting the model that remains.
+- Offering a PD of the first definition of default for IFRS 9 or for capital (rule 19).
 - Reading a banded covariate as a line through its midpoints.
 - Letting a compiled kernel read a declared constant, touch a file, or be the only
   implementation of the likelihood.

@@ -154,6 +154,8 @@ def performance_row(
     disaster: str = "",
     assistance: str = "",
     deferral: str = "",
+    rate: str = "",
+    remaining: str = "",
 ) -> str:
     """One line of ``perf_YYYYQn.txt``.
 
@@ -174,6 +176,8 @@ def performance_row(
         delinquency_due_to_disaster=disaster,
         borrower_assistance_plan=assistance,
         payment_deferral_flag=deferral,
+        current_interest_rate=rate,
+        remaining_months_to_legal_maturity=remaining,
     )
     return "|".join(values[name] for name in PERFORMANCE_COLUMNS)
 

@@ -1748,3 +1748,69 @@ term is not, so the objective went below zero, which no likelihood can do, on 40
 **Admissible because** it moves no criterion and no published number. The default model and
 every cached fit stay on lifelines' formulation, and their fingerprints are unchanged. It will
 be used first by the prepayment model, whose criteria were declared on 5 November.
+
+### Rule 19 — The CRR definition of default, declared before its table is built
+
+**What changed.** A new section 19, and the option it governs:
+
+- `DefaultDefinition.CRR` in `data.book`;
+- `creditsurv aggregate --definition crr`;
+- the table it writes, `cells_exclude.crr.parquet`.
+
+A modification is a default when it gives up more than 1% of the contract's net present value at
+its note rate, or when three missed payments are reported in its own month. The default is
+dated to the loan's last month observed before the first flag. The table also carries the note
+rate, rule 7's extension, measured at 181,351,838 cells on 13 November. So one rebuild serves
+both the CRR definition and the prepayment model's incentive.
+
+**Why now.** On 14 November the user asked for a lifetime PD usable for IFRS 9 and for capital,
+and decided to align the definition with the CRR now, in the same rebuild. Under the first
+definition every modification is censoring, so a model fitted on it misses defaults a regulator
+counts.
+
+**The plan said "every modification is a default", and a measurement changed that before
+anything was built.** The approved plan took the modification flag as the restructuring.
+
+- The EBA's amending guidelines (EBA/GL/2026/05) recall that a restructuring can be made "in a
+  way that does not lead to a loss (e.g. extension of maturity)".
+- The file reports the rate every month. Of the 84,744 loans modified before any default, payoff
+  or exit, **44,474 kept the note rate**, mostly extending the term.
+- Taking every modification would have doubled the defaults added, and the excess falls on the
+  recent vintages. The 2016-2019 vintages would have gained 20 to 29% on their defaults, against
+  5.6 to 14.0% under the threshold.
+
+The threshold is the EBA's, and it was fixed before the count. Nothing was chosen after it.
+Section 19 carries every measurement.
+
+**Invariants, which are not predictions.** Against the published table
+(`cells_exclude.parquet:448169670:1791619429593537860`):
+
+- the same 2,773,640,182 loan-months and 33,797,300 prepayments;
+- the defaults go from 1,671,207 to **1,711,862**. That is 40,655 more, the count made
+  independently of the code that builds the table, and the censored fall by the same 40,655;
+- by origination month and age, the same loan-months and payoffs, with every default added
+  being a censored loan-month removed.
+
+Any difference stops everything after it. On 2003Q3 the code and the independent count agree to
+the loan: 617 each.
+
+**Predictions.**
+
+1. **Cells: 181.35 to 181.40 million.** That is the table with the note rate, plus at most one new
+   cell for each default that splits from a censored one. On 2003Q3 it was 360 on 4.70 million.
+2. **Cost: about 35 minutes at a 7 GB peak**, as for the table with the note rate. On 2003Q3 the
+   CRR definition took 141 s at 6.24 GB, against 117 s at 6.23 GB under the first definition.
+
+**What it leaves open.** The fall in value is a lower bound. Principal moved into a balance that
+bears no interest is a further loss, and `current_non_interest_bearing_upb` is not ingested.
+Reading it means re-ingesting the performance files. That is worth doing before a capital
+figure is quoted, and not before the prepayment model, which reads the same events under both
+definitions.
+
+**Admissible because** it moves no published number and no criterion:
+
+- the published table, every cached fit and every score stay on the first definition;
+- a default model on the CRR table replaces the published one only if it passes, on the test
+  window, every section 5 criterion the published model passes;
+- the prepayment model's episodes are identical under both definitions, so its criteria,
+  declared on 5 November, are unaffected.

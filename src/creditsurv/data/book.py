@@ -98,6 +98,41 @@ class MoratoriumPolicy(StrEnum):
     IGNORE = "ignore"
 
 
+class DefaultDefinition(StrEnum):
+    """What counts as a default, and so which table a model is fitted to.
+
+    ``DELINQUENCY``
+        Three missed payments, or a zero-balance code that ends a loan through credit loss.
+        A **modification** ends observation the month before it, as censoring: the contract
+        changes and the dataset restarts the loan's age. Every model before 14 November 2026
+        is of this definition.
+
+    ``CRR``
+        The above, and **a distressed restructuring is a default**, as Article 178(3)(d) of
+        the CRR and the EBA's guidelines on the definition of default (EBA/GL/2016/07, kept on
+        this point by EBA/GL/2026/05) treat it: an indication of unlikeliness to pay. A
+        modification is distressed when it gives up more than 1% of the contract's net present
+        value at its note rate (`DIMINISHED_OBLIGATION_THRESHOLD`, `diminished_obligation_sql`),
+        or when it comes with three missed payments in its own month. Its last observed month
+        -- the month before its first flag, the last one whose age is the loan's own -- carries
+        the default, unless a default or an exit came first. Below the threshold it is
+        censoring, as under the first definition. Trial-period and repayment plans are not
+        modifications, and payment moratoria stay under the moratorium policy.
+
+        Measured before it was declared, on complete cases: 83,980 loans are modified before
+        any default, payoff or exit; 40,395 of the modifications give up more than 1%, 822
+        come with three missed payments, and **40,655** are defaults by one or the other. The
+        rest keep the note rate and extend the term, which gives up nothing. Rule 19 of
+        `docs/rules.md`.
+
+    The value is part of the cell table's name: `exclude` is the first definition and
+    `exclude.crr` the second, so the two tables are never one file.
+    """
+
+    DELINQUENCY = "delinquency"
+    CRR = "crr"
+
+
 #: The markers that say a delinquency was not a failure to pay.
 #:
 #: Read from the data rather than the layout: on 2019Q3 the fields take
@@ -137,6 +172,35 @@ MORATORIUM_MARKERS: Final[str] = (
 #:   5.2% of 2006's and 1.9% of 2021's, and every one of them is a loan that got
 #:   into trouble -- which is where nearly all the events are.
 MODIFICATION_FLAGS: Final = ("Y", "P")
+
+#: The fall in net present value above which a restructuring is a default (rule 19): 1%, set by
+#: the EBA's guidelines on the definition of default (EBA/GL/2016/07) and kept by their amendment
+#: of 2026 (EBA/GL/2026/05), which weighed 5% and refused it. The fall is measured at the original
+#: effective rate, which for a fixed-rate loan written at par is its note rate.
+DIMINISHED_OBLIGATION_THRESHOLD: Final = 0.01
+
+
+def _annuity(rate: str, months: str) -> str:
+    """SQL for the present value of one a month for ``months`` months at ``rate`` percent a year."""
+    monthly = f"(({rate}) / 1200.0)"
+    return (
+        f"(CASE WHEN ({rate}) > 0 THEN (1 - POW(1 + {monthly}, -({months}))) / {monthly} "
+        f"ELSE ({months}) END)"
+    )
+
+
+def diminished_obligation_sql(note_rate: str, new_rate: str, new_term: str) -> str:
+    """SQL for the share of net present value a restructuring gives up, at the original rate.
+
+    The contract before is worth its balance at its own rate. After, the balance (arrears
+    capitalised) is re-amortised at ``new_rate`` over ``new_term`` months, and the payments are
+    discounted at the note rate. So the fall is ``1 - a(note, n) / a(new, n)`` for the annuity
+    factor ``a``. A term extension at the same rate gives up nothing; a cut of an eighth of a
+    point over forty years gives up 1.85%. Principal moved to a balance that bears no interest
+    is a further loss the ingested fields do not carry, so this is a lower bound.
+    """
+    return f"(1 - {_annuity(note_rate, new_term)} / {_annuity(new_rate, new_term)})"
+
 
 #: Months per episode. Loan age is collapsed to multiples of this, so an episode
 #: spans ``(k*step, (k+1)*step]``.
@@ -230,6 +294,7 @@ def state_of_the_book_sql(
     *,
     complete_only: bool = True,
     harp_level: bool = True,
+    definition: DefaultDefinition = DefaultDefinition.DELINQUENCY,
 ) -> str:
     """The loan-month panel, cleaned and truncated, before any aggregation.
 
@@ -267,6 +332,18 @@ def state_of_the_book_sql(
     accommodated = "FALSE" if policy is MoratoriumPolicy.IGNORE else f"({MORATORIUM_MARKERS})"
     excluded = accommodated if policy is MoratoriumPolicy.EXCLUDE else "FALSE"
     censoring = accommodated if policy is MoratoriumPolicy.CENSOR else "FALSE"
+    # Rule 19: under the CRR definition a restructuring that gives up more than 1% of the
+    # contract's net present value at its note rate is a default, in the last month the loan is
+    # observed before it. So is three missed payments reported in the modification's own month,
+    # which the cut would otherwise lose whatever the modification gave up. Under the first
+    # definition, and below the threshold, the modification is censoring.
+    diminished = diminished_obligation_sql("o.note_rate", "t.modified_rate", "t.modified_term")
+    restructuring = (
+        f"COALESCE(t.restructured_here AND ({diminished} > {DIMINISHED_OBLIGATION_THRESHOLD} "
+        "OR t.default_period = t.modified_period), FALSE)"
+        if definition is DefaultDefinition.CRR
+        else "FALSE"
+    )
     return f"""
     WITH perf AS (
         SELECT
@@ -307,7 +384,10 @@ def state_of_the_book_sql(
             COALESCE(zero_balance_code IN ({prepayment_codes}), FALSE)   AS prepaid,
             COALESCE(zero_balance_code IN ({exit_codes}), FALSE)         AS left_the_book,
             COALESCE(modification_flag IN ({modification_flags}), FALSE)
-                OR ({censoring})                                    AS ends_observation
+                OR ({censoring})                                    AS ends_observation,
+            COALESCE(modification_flag IN ({modification_flags}), FALSE) AS modified,
+            TRY_CAST(current_interest_rate AS DOUBLE)                   AS rate,
+            TRY_CAST(remaining_months_to_legal_maturity AS INTEGER)     AS remaining
         FROM read_parquet(?)
         WHERE TRY_CAST(loan_age AS INTEGER) >= 0
     ),
@@ -324,7 +404,12 @@ def state_of_the_book_sql(
             loan_identifier,
             MIN(CASE WHEN defaulted OR prepaid OR left_the_book THEN period_key END)
                 AS terminal_period,
-            MIN(CASE WHEN ends_observation THEN period_key END)     AS ended_period
+            MIN(CASE WHEN ends_observation THEN period_key END)     AS ended_period,
+            MIN(CASE WHEN modified THEN period_key END)             AS modified_period,
+            MIN(CASE WHEN defaulted THEN period_key END)            AS default_period,
+            -- What the modification set, read in its first flagged month: rule 19's test.
+            arg_min(rate, period_key) FILTER (WHERE modified)       AS modified_rate,
+            arg_min(remaining, period_key) FILTER (WHERE modified)  AS modified_term
         FROM perf GROUP BY loan_identifier
     ),
     -- Default and prepayment happen *during* their month, so that month is kept and
@@ -334,7 +419,22 @@ def state_of_the_book_sql(
     -- accommodation's flagged month is the one the delinquency counter is already
     -- misreporting.
     truncated AS (
-        SELECT p.*, t.terminal_period
+        SELECT
+            p.*,
+            t.terminal_period,
+            t.modified_period,
+            t.default_period,
+            t.modified_rate,
+            t.modified_term,
+            -- The last month kept, and whether a restructuring is what ended the loan there:
+            -- the modification cut it (the cut is the modification's own month, not a
+            -- moratorium's), and no default, payoff or exit came before it. Under the CRR
+            -- definition that month carries the default; under the first one it is censoring.
+            p.period_key = MAX(p.period_key) OVER (PARTITION BY p.loan_identifier)
+                AND t.modified_period IS NOT NULL
+                AND t.modified_period = t.ended_period
+                AND (t.terminal_period IS NULL OR t.terminal_period >= t.modified_period)
+                                                                        AS restructured_here
         FROM perf p LEFT JOIN terminal t USING (loan_identifier)
         WHERE (t.terminal_period IS NULL OR p.period_key <= t.terminal_period)
           AND (t.ended_period IS NULL OR p.period_key < t.ended_period)
@@ -392,6 +492,8 @@ def state_of_the_book_sql(
         -- the definition; a caller that wants a boolean writes `outcome = 'default'`.
         CASE
             WHEN COALESCE(t.defaulted AND t.period_key = t.terminal_period, FALSE)
+                THEN '{DEFAULT_CAUSE}'
+            WHEN {restructuring}
                 THEN '{DEFAULT_CAUSE}'
             WHEN COALESCE(t.prepaid AND t.period_key = t.terminal_period, FALSE)
                 THEN '{PREPAYMENT_CAUSE}'

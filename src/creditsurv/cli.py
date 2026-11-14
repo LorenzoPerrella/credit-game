@@ -406,6 +406,13 @@ def aggregate(
     moratorium: Annotated[
         str, typer.Option(help="exclude, censor or ignore: what a moratorium delinquency is.")
     ] = "exclude",
+    definition: Annotated[
+        str,
+        typer.Option(
+            help="delinquency or crr: what a default is (rule 19). crr also puts the note rate "
+            "in the key and writes its own table, cells_<moratorium>.crr.parquet.",
+        ),
+    ] = "delinquency",
 ) -> None:
     """Collapse the ingested panel into weighted cells.
 
@@ -421,12 +428,15 @@ def aggregate(
     import logging
 
     from creditsurv.data.aggregate import (
+        CRR_SPEC,
+        DEFAULT_SPEC,
         cardinality_report,
         credit_adjacent_exits,
         incomplete_cases,
+        table_name,
         write_cells,
     )
-    from creditsurv.data.book import MoratoriumPolicy
+    from creditsurv.data.book import DefaultDefinition, MoratoriumPolicy
     from creditsurv.data.store import cells_path
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -457,11 +467,14 @@ def aggregate(
         return
 
     policy = MoratoriumPolicy(moratorium)
+    meaning = DefaultDefinition(definition)
+    spec = CRR_SPEC if meaning is DefaultDefinition.CRR else DEFAULT_SPEC
     # Written a quarter at a time rather than concatenated: the held table peaked at 11.3 GB on
     # 91.6 million cells and wants about 21 at the 200 million finer bands would need.
-    written = write_cells(policy=policy)
-    typer.echo(f"{written:,} cells. Moratorium policy: {policy.value}.")
-    typer.echo(f"Saved to {cells_path(policy.value)}")
+    written = write_cells(policy=policy, spec=spec, definition=meaning)
+    name = table_name(policy, meaning)
+    typer.echo(f"{written:,} cells. Moratorium policy: {policy.value}; default: {meaning.value}.")
+    typer.echo(f"Saved to {cells_path(name)}")
 
 
 #: The moratorium option, shared by every command that reads cells. One definition, so the
