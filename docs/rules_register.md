@@ -1656,3 +1656,63 @@ everything after it.
   criteria on the test window.
 - If neither is adopted, the published table is restored and the result is recorded against
   these predictions.
+
+### Rule 7 — The table with the note rate: the invariants hold, and the count lands just under the prediction
+
+Rebuilt with `creditsurv aggregate` in 34.6 minutes at a 7.1 GB peak, a quarter at a time:
+
+| | published table | with the note rate |
+|---|---|---|
+| cells | 91,575,827 | **181,351,838** |
+| loan-months | 2,773,640,182 | 2,773,640,182 |
+| defaults | 1,671,207 | 1,671,207 |
+| prepayments | 33,797,300 | 33,797,300 |
+
+**The invariants hold exactly**: the same loan-months, defaults and prepayments, partitioned over
+1.98x the cells. The note rate sits in eleven bands, from 2.5% to 10%.
+
+**Prediction 1 is missed, on the low side**: 184 to 215 million was predicted, and the table is
+181.4 million, 1.7% under the nine-quarter projection of 184.4. The last time that projection was
+checked it ran 14% light; this time it ran slightly heavy. Two checks are not enough to call
+its error either way, so the margin of 1.14 stays as declared. The table is under the
+250-million ceiling, so the extension stands.
+
+### Rules 7 and 9 — The prepayment model with the loan's rate cannot be estimated, and nothing is adopted
+
+**What happened.** On the table with the note rate, the prepayment selection's base fit converged
+in two minutes. The screening fit that adds the fall in the market rate beside the spread, which
+is rule 9's representation of the refinancing incentive, could not be estimated:
+
+- the warm start ran 30 minutes and did not converge;
+- a cold refit followed, past 300 evaluations, with the fallback methods after it;
+- across the two, **401 evaluations were refused as not a likelihood**: lifelines' interval
+  probability is clipped and the left-truncation term is not, so the objective fell below
+  anything a likelihood can take, down to −9,117 in the mean.
+
+The run was stopped after an hour on that one candidate, with the machine paging at 20,823
+swap-ins a minute. The default selection had been started first and stopped after its base fit:
+with the shape on the NumPy path, a Hessian costs 160 seconds on the doubled table, so a full
+selection was hours away.
+
+**The predictions.**
+
+1. Cells: missed on the low side, as recorded above.
+2. and 3. The prepayment Gini and the two rate coefficients **cannot be measured**: there is no
+   estimate to measure them on.
+4. The default spread: **not measured**.
+
+**What the failure says, as an argument and not a measurement.** A refinancing is a threshold
+decision. Prepayment rises steeply once the incentive clears the cost of refinancing, the
+S-curve every prepayment model in the industry carries, and is flat below it. A Weibull AFT puts
+the incentive into the log of the time scale linearly. The likelihood can then buy fit at the
+steep end by driving the hazard of the high-incentive cells towards the clip, which is exactly
+where lifelines' objective stops being a likelihood. The engine refused that region every time,
+as it was built to. **So the family, and not the data, is what fails here.** Two signs point that
+way: without the loan's rate the prepayment model fits and does not order (Gini 0.21), and with
+it the model does not fit at all.
+
+**Not adopted, by the rule declared at 23:33.** The published table is restored by moving the
+kept copy back, with its size and time of writing, so its identity is the one every cached fit
+was made on (`cells_exclude.parquet:448169670:1791619429593537860`). The table with the note rate
+is kept as `cells_exclude.spread.parquet`. The spread's priors stay declared in
+`models.selection` for the next attempt. No lifetime PD is offered.

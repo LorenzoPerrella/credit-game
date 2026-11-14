@@ -477,6 +477,8 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
     "original_ltv": -1,  # more leverage fails sooner
     "original_cltv": -1,
     "debt_to_income": -1,  # more debt burden fails sooner
+    # Priced above its month's market: risk-based pricing saw something (rules 7 and 9, 13 Nov).
+    "origination_spread": -1,
     "ltv_change": -1,  # leverage rising after origination fails sooner
     "unemployment_change": -1,  # unemployment above origination fails sooner
     "financial_conditions": -1,  # tighter financial conditions fail sooner
@@ -535,6 +537,8 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
 #: the sign the incentive would have.
 PREPAYMENT_SIGNS: Final[dict[str, int]] = {
     "mortgage_rate_decline": -1,  # rates below the note rate: refinance, and sooner
+    # A note rate above its month's market: more to gain from refinancing (rule 9, amended).
+    "origination_spread": -1,
     "credit_score": -1,  # better credit can refinance, and does
     "ltv_change": +1,  # leverage that has risen blocks a refinance
     "house_price_growth": -1,  # rising prices free equity and enable cash-out
