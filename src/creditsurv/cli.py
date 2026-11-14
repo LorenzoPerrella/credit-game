@@ -482,7 +482,11 @@ def aggregate(
 #: are named for -- and a comparison of the two treatments cannot quietly read one table
 #: twice.
 MoratoriumOption = Annotated[
-    str, typer.Option(help="exclude, censor or ignore: which cell table to read.")
+    str,
+    typer.Option(
+        help="exclude, censor or ignore: which cell table to read; exclude.crr is the table of "
+        "rule 19's CRR definition of default."
+    ),
 ]
 
 
@@ -760,6 +764,9 @@ def family(
         str, typer.Option(help="End of the development window both families were selected on.")
     ] = DEFAULT_AS_OF,
     block_rows: Annotated[int, typer.Option(help="Cells read at a time.")] = 250_000,
+    cause: Annotated[
+        str, typer.Option(help="default or prepayment: whose family the rule chooses.")
+    ] = DEFAULT_CAUSE,
 ) -> None:
     """Apply rule 2 of ``docs/rules.md``: which distribution family the model keeps.
 
@@ -786,6 +793,7 @@ def family(
             moratorium=moratorium,
             macro=load_macro_panel(),
             block_rows=block_rows,
+            cause=cause,
         )
     except NotSelected as missing:
         # Which command to run is something only this layer can say.
@@ -797,9 +805,10 @@ def family(
         formulas=comparison.formulas,
         shapes=comparison.shapes,
         reports_dir=reports_dir(),
+        cause=cause,
     )
     typer.echo(f"\nThe rule chooses: {chosen}")
-    if chosen != DISTRIBUTION:
+    if cause == DEFAULT_CAUSE and chosen != DISTRIBUTION:
         typer.echo(
             f"config.DISTRIBUTION is {DISTRIBUTION}. Set it to {chosen} and re-run "
             "`creditsurv select` -- every fit of it is cached, so it costs minutes -- so that "
@@ -1212,7 +1221,11 @@ def select(
 
     from creditsurv.config import (
         AGE_BASIS_COLUMNS,
+        BANDED_REFERENCE,
         MACRO_CANDIDATES,
+        PREPAYMENT_BANDED_REFERENCE,
+        PREPAYMENT_MACRO_CANDIDATES,
+        PREPAYMENT_PROTECTED,
         PROTECTED_MACRO,
         calendar_covariates,
     )
@@ -1232,13 +1245,24 @@ def select(
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     reporting_date = pd.Period(as_of, freq="M")
+    # Each exit's own candidates. The prepayment model's are rule 6's, every one signed (rule 15),
+    # with rule 9's incentive protected and read in bands; see `config.PREPAYMENT_MACRO_CANDIDATES`.
+    # Rule 16's baseline along age was declared for the **default** hazard, and nothing here
+    # carries it into the other.
+    if cause == DEFAULT_CAUSE:
+        macro_candidates, protected = MACRO_CANDIDATES, PROTECTED_MACRO
+        banded = dict(BANDED_REFERENCE)
+    else:
+        macro_candidates = PREPAYMENT_MACRO_CANDIDATES
+        protected = tuple(name for name in PREPAYMENT_PROTECTED if name not in AGE_BASIS_COLUMNS)
+        banded = {**BANDED_REFERENCE, **PREPAYMENT_BANDED_REFERENCE}
     candidates = [
         *LOAN_CONTINUOUS,
         *LOAN_ORDINAL,
-        *MACRO_CANDIDATES,
-        # Not a candidate -- rule 1 protects it from removal -- but the reading has to carry it,
-        # because every fit of the run reads it.
-        *PROTECTED_MACRO,
+        *macro_candidates,
+        # Not candidates -- the rules protect them from removal -- but the reading has to carry
+        # them, because every fit of the run reads them.
+        *protected,
         *BASE_CATEGORICAL,
         *CANDIDATE_CATEGORICAL,
     ]
@@ -1296,14 +1320,9 @@ def select(
         fits,
         stability=True,
         signs=EXPECTED_SIGNS if cause == DEFAULT_CAUSE else PREPAYMENT_SIGNS,
-        # Rule 16's baseline along age was declared for the **default** hazard. Whether the
-        # prepayment hazard gets the same basis is a decision the competing-risk work owes before
-        # its own run, and riding `PROTECTED_MACRO` into that selection would make it silently.
-        protected_macro=(
-            PROTECTED_MACRO
-            if cause == DEFAULT_CAUSE
-            else tuple(name for name in PROTECTED_MACRO if name not in AGE_BASIS_COLUMNS)
-        ),
+        macro=macro_candidates,
+        protected_macro=protected,
+        banded=banded,
     )
     written = selection.generate(record, reports_dir=reports_dir())
 

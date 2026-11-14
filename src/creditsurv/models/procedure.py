@@ -49,6 +49,7 @@ from creditsurv.config import (
     MACRO_ELIMINATION_PRIORITY,
     PROTECTED_MACRO,
     STABILITY_CUT,
+    calendar_covariates,
 )
 from creditsurv.data.panel import (
     WEIGHT,
@@ -139,6 +140,9 @@ class SelectionRecord:
     #: cannot disagree with what was actually fitted. ``None`` is a scalar shape, and that
     #: is what the prepayment selection runs with by rule 14.
     ancillary: str | None = None
+    #: How every fit's likelihood was written (rule 18), read off ``Fits`` for the same reason:
+    #: a fit is cached under it, so a record that did not say it names a fit nobody can find.
+    formulation: str = "lifelines"
 
     def summary(self) -> dict[str, object]:
         """What the configuration should say, as data a test can compare it with."""
@@ -150,13 +154,15 @@ class SelectionRecord:
             "cause": self.cause,
             "static_continuous": [name for name in continuous if name in LOAN_CONTINUOUS],
             "ordinal": [name for name in continuous if name in LOAN_ORDINAL],
-            "time_varying_continuous": [
-                name for name in continuous if name in MACRO_CANDIDATES or name in PROTECTED_MACRO
-            ],
+            # Everything on the calendar side, by the one declaration the kernel reads: a model of
+            # the other exit has calendar covariates of its own, and a record that named only the
+            # default model's would be a record the prepayment fit could not be read back from.
+            "time_varying_continuous": calendar_covariates(continuous),
             "categorical": dict(self.selected.categorical),
             "eliminated": self.eliminated,
             "formula": self.selected.formula,
             "ancillary": self.ancillary,
+            "formulation": self.formulation,
         }
 
 
@@ -197,6 +203,25 @@ def _whole_basis_or_none(surviving: Iterable[str], offered: Iterable[str]) -> No
             "whole basis survives or none of it does."
         )
         raise ValueError(message)
+
+
+def covering(
+    *,
+    static: Sequence[str],
+    ordinal: Sequence[str],
+    protected_macro: Sequence[str],
+    macro: Sequence[str],
+    base_categorical: Mapping[str, str],
+    candidate_categorical: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Every covariate a selection's reading has to carry, in the order its fingerprint takes.
+
+    One function, because the reading is cached under the lists it covers: a measurement made
+    before the selection on a reading built from lists written out a second time would be a
+    measurement of a reading the selection never uses.
+    """
+    continuous = [*static, *ordinal, *protected_macro, *macro]
+    return tuple(dict.fromkeys([*continuous, *base_categorical, *candidate_categorical]))
 
 
 def run_selection(
@@ -254,7 +279,14 @@ def run_selection(
     # every fit this procedure makes.
     fits = replace(
         fits,
-        covering=tuple(dict.fromkeys([*continuous, *base_categorical, *candidate_categorical])),
+        covering=covering(
+            static=static,
+            ordinal=ordinal,
+            protected_macro=protected_macro,
+            macro=macro,
+            base_categorical=base_categorical,
+            candidate_categorical=candidate_categorical,
+        ),
     )
 
     # 5. Pairs that say the same thing -- reported, not resolved.
@@ -553,6 +585,7 @@ def run_selection(
         eliminated=eliminated,
         fits=fits.record,
         ancillary=fits.ancillary,
+        formulation=fits.formulation,
     )
 
 

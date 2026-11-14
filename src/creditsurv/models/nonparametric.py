@@ -28,7 +28,15 @@ from lifelines import KaplanMeierFitter
 from scipy.stats import norm
 
 from creditsurv.config import CAUSES, DEFAULT_CAUSE
-from creditsurv.data.panel import AGE, EVENT, WEIGHT, duration_view, ended_in, to_loan_level
+from creditsurv.data.panel import (
+    AGE,
+    EVENT,
+    OUTCOME,
+    WEIGHT,
+    duration_view,
+    ended_in,
+    to_loan_level,
+)
 from creditsurv.models.aft import episode_hazards
 
 if TYPE_CHECKING:
@@ -341,6 +349,33 @@ def hazard_by_age(
             "age": present,
             "at_risk": at_risk[present],
             "hazard": weighted[present] / at_risk[present],
+        }
+    )
+
+
+def observed_hazard_by_age(outcomes: pd.DataFrame, cause: str) -> pd.DataFrame:
+    """The book's own hazard of one cause at each age: its exits over the loan-months at risk.
+
+    In the form :func:`hazard_by_age` gives a model's, so that rule 2 can hold one cause at what
+    the book did while it compares two models of the other: applied to the prepayment model, the
+    default hazard is the observed one, and the comparison is of the prepayment models alone.
+    ``outcomes`` is :func:`creditsurv.data.store.outcomes_by_age`'s table.
+    """
+    by_age = outcomes.groupby(AGE, observed=True)
+    at_risk = by_age[WEIGHT].sum().astype(float)
+    exits = (
+        outcomes.loc[outcomes[OUTCOME].astype(str) == cause]
+        .groupby(AGE, observed=True)[WEIGHT]
+        .sum()
+        .reindex(at_risk.index, fill_value=0.0)
+        .astype(float)
+    )
+    present = at_risk > 0
+    return pd.DataFrame(
+        {
+            "age": at_risk.index[present].to_numpy(dtype=int),
+            "at_risk": at_risk[present].to_numpy(),
+            "hazard": (exits[present] / at_risk[present]).to_numpy(),
         }
     )
 

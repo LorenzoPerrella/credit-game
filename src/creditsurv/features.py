@@ -127,6 +127,10 @@ MACRO_SOURCES: Final[dict[str, tuple[str, ...]]] = {
     "housing_starts_growth": ("housing_starts",),
     "origination_spread": ("mortgage_rate_30y", "mortgage_rate_15y"),
     "refinance_incentive": ("mortgage_rate_30y", "mortgage_rate_15y"),
+    "burnout": ("mortgage_rate_30y", "mortgage_rate_15y"),
+    # Reads no series, for `moratorium_regime`'s reason below: the observation month is all of it,
+    # and a scenario has nothing to shock.
+    "home_sale_season": (),
     # The one member that reads **no series**: the observation month is the whole of it. An
     # empty tuple rather than an absent key, because the test that holds this map to the builder
     # compares key sets -- and because "reads nothing" is a fact about this covariate worth
@@ -279,7 +283,15 @@ BIN_EDGES: dict[str, tuple[float, ...]] = {
     # Percentage points of loan-to-value gained or lost since origination.
     "ltv_change": (-60.0, -20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0, 80.0),
     "unemployment_change": (-10.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 12.0),
+    # Rule 9: the prepayment model reads the incentive **in these bands**, as a factor on the
+    # calendar side, so the steep part of the S-curve is a step of its own rather than the slope
+    # of a line. The edges are the market's own rules of thumb: under water, at the money, half
+    # a point, a point, two points.
     "refinance_incentive": (-6.0, -1.0, 0.0, 0.5, 1.0, 2.0, 6.0),
+    # Months spent with the incentive above `BURNOUT_INCENTIVE` without refinancing: none, up to
+    # a year, more than a year. The top band is closed at three years so that its midpoint, 24.5,
+    # is a duration a loan has rather than half of whatever the oldest loan reached.
+    "burnout": (-0.5, 0.5, 12.5, 36.5),
     "financial_conditions": (-2.0, -0.6, -0.4, -0.2, 0.0, 0.5, 1.0, 5.0),
     # Macro candidates. Edges are on the units the series is quoted in -- percentage
     # points for rates and spreads, fractions for year-on-year changes -- so a band
@@ -367,6 +379,28 @@ BINNED_SUFFIX: str = "_binned"
 BAND_SUFFIX: str = "_band"
 
 
+#: The incentive, in points, above which a month counts towards a loan's burnout: half a point
+#: is where the refinancing S-curve starts to climb, and it is one of rule 9's band edges.
+BURNOUT_INCENTIVE: Final = 0.5
+
+#: The months, of the observation, in which home sales and so payoffs run high: May to August.
+HOME_SALE_MONTHS: Final[tuple[int, ...]] = (5, 6, 7, 8)
+
+
+def band_midpoints(values: np.ndarray, edges: Sequence[float]) -> np.ndarray:
+    """Each value replaced by the midpoint of its band, the outer bands taking what lies beyond.
+
+    The convention the cell key follows for every banded loan covariate (`data.book`'s
+    `case_expression`), here for the covariates built after the collapse: closed on the right,
+    the lowest band closed on both sides. A missing value stays missing.
+    """
+    bounds = np.asarray(edges, dtype=float)
+    midpoints = (bounds[:-1] + bounds[1:]) / 2.0
+    clipped = np.clip(np.asarray(values, dtype=float), bounds[0], bounds[-1])
+    band = np.clip(np.searchsorted(bounds, clipped, side="left") - 1, 0, len(midpoints) - 1)
+    return np.where(np.isnan(clipped), np.nan, midpoints[band])
+
+
 def bin_covariates(
     panel: pd.DataFrame,
     edges: dict[str, tuple[float, ...]] | None = None,
@@ -451,6 +485,13 @@ MACRO_DERIVED: Final[tuple[str, ...]] = (
     # and cost no cells of their own.
     "origination_spread",
     "refinance_incentive",
+    # The incentive's history: months the loan has spent above half a point without refinancing,
+    # which a prepayment model reads as burnout. A function of the note rate, the origination
+    # month and the age, so of the key, like the incentive itself.
+    "burnout",
+    # Whether the observation month is one of the four in which home sales run high. A function
+    # of the observation month alone, like `moratorium_regime`.
+    "home_sale_season",
     # The one member that reads no macro series at all: an indicator on the months a payment
     # moratorium suppressed the event, which is a function of the observation month and nothing
     # else. Rule 1 of `docs/rules.md` says why it is needed and `config.MORATORIUM_REGIME` says
@@ -576,6 +617,13 @@ def add_macro_family(
         if source in available and requested(name):
             store(name, build(source))
 
+    # Whether the observation falls in the months home sales run high: payoffs follow house
+    # moves, and house moves follow the school year. Read off the observation month itself and
+    # not lagged: the calendar is known in advance, so there is nothing to look ahead at.
+    if requested("home_sale_season"):
+        months_of_year = observation.to_numpy(dtype=np.int64) % 12 + 1
+        store("home_sale_season", np.isin(months_of_year, HOME_SALE_MONTHS).astype(float))
+
     # The months a moratorium suppressed the event, as an indicator. No series is read: the
     # observation month is the whole of it, which is what makes this the cheapest member of the
     # family and the only one that cannot be missing because a cache is partial.
@@ -658,6 +706,43 @@ def add_macro_family(
     if "note_rate" in episodes.columns and "mortgage_rate_30y" in available:
         note = episodes["note_rate"].to_numpy(dtype=float)
 
+        def months_above(rates: np.ndarray) -> np.ndarray:
+            """Months from origination to the one before the observation, incentive above
+            `BURNOUT_INCENTIVE`.
+
+            Counted on the distinct pairs of note rate and benchmark -- eleven bands and two
+            terms -- as a cumulative sum over the calendar, so each row is two lookups however
+            old the loan is. A month the panel does not reach counts as not above.
+            """
+            full = np.arange(int(month.min()), int(month.max()) + 1)
+
+            def benchmark(column: str) -> np.ndarray:
+                series = pd.Series(lagged[column].to_numpy(dtype=float), index=np.asarray(month))
+                return np.asarray(series.reindex(full).to_numpy(), dtype=float)
+
+            thirty = benchmark("mortgage_rate_30y")
+            fifteen = benchmark("mortgage_rate_15y") if "mortgage_rate_15y" in available else thirty
+            short = (
+                episodes["term_years"].to_numpy(dtype=float) <= 20.0
+                if "term_years" in episodes.columns and "mortgage_rate_15y" in available
+                else np.zeros(len(episodes), dtype=bool)
+            )
+            known = np.isfinite(rates)
+            pairs = np.stack([np.where(known, rates, 0.0), short.astype(float)], axis=1)
+            distinct, which = np.unique(pairs, axis=0, return_inverse=True)
+            which = np.asarray(which).reshape(-1)
+            counts = np.zeros((len(distinct), len(full) + 1))
+            for row, (rate, is_short) in enumerate(distinct):
+                gained = rate - (fifteen if is_short else thirty)
+                counts[row, 1:] = np.cumsum(np.nan_to_num(gained, nan=-np.inf) > BURNOUT_INCENTIVE)
+
+            def before(when: pd.Series) -> np.ndarray:
+                position = np.clip(when.to_numpy(dtype=np.int64) - full[0], 0, len(full))
+                return np.asarray(counts[which, position])
+
+            spent = before(observation) - before(origination_month)
+            return np.where(known, spent, np.nan)
+
         def market(when: pd.Series) -> np.ndarray:
             """The market mortgage rate the loan would be refinanced at."""
             thirty = at("mortgage_rate_30y", when)
@@ -669,8 +754,16 @@ def add_macro_family(
 
         if requested("origination_spread"):
             store("origination_spread", note - market(origination_month))
+        # In rule 9's bands, at their midpoints: the prepayment model reads it as a factor on the
+        # calendar side, and a band is also what keeps the calendar key at six values a month
+        # for each benchmark where the band of the note rate would give eleven.
         if requested("refinance_incentive"):
-            store("refinance_incentive", note - market(observation))
+            store(
+                "refinance_incentive",
+                band_midpoints(note - market(observation), BIN_EDGES["refinance_incentive"]),
+            )
+        if requested("burnout"):
+            store("burnout", band_midpoints(months_above(note), BIN_EDGES["burnout"]))
 
     # Mark-to-market leverage, from the national house price index. Derived here
     # rather than carried in the grouping key because it is a function of original_ltv

@@ -1839,3 +1839,91 @@ Rebuilt with `creditsurv aggregate --definition crr` in 51 minutes, a quarter at
   - the peak was not measured.
 
 The published table is untouched, at `cells_exclude.parquet:448169670:1791619429593537860`.
+
+## 15 November 2026
+
+### Rules 2, 6 and 9 — The prepayment model rebuilt, declared before its first fit
+
+Written on 14 November with the rules' text, and completed on 15 November with the measurements of the reading the selection uses. Nothing has been fitted on this form yet.
+
+**What is declared.** The prepayment model is selected again, on `cells_exclude.crr.parquet`, in a
+form decided before any fit of it:
+
+- **the refinancing incentive, in rule 9's bands, on the calendar side, protected.** The
+  amendment of 13 November, spread and fall in its place, is superseded for this model. It rested
+  on the kernel refusing a column that couples the loan and the calendar, and the incentive's
+  band couples nothing once the prepayment model reads no note rate on the loan side;
+- **rule 15 applied to this model**: the candidates are rule 6's, every one signed. They are
+  `ltv_change` (+), `unemployment_change` (+) and `house_price_growth` (−), with two new ones,
+  `home_sale_season` (−) and `burnout` (+). The macro covariates with only a default prior are
+  no longer offered;
+- **rule 18's conditional formulation** for every fit;
+- **rule 2 applied to the family**, with the competing default hazard at the book's own;
+- the training half up to 2021-12, as every selection.
+
+**The calendar key's budget, declared before it was counted** (written while the reading that
+counts it was running):
+
+- **at most 3,000,000 calendar keys** for the prepayment selection's reading. That is about ten
+  times the default selection's 286,387, and still under 3% of the rows;
+- above it, `burnout` leaves the candidates before any fit, and the reading is made again;
+- a calendar key costs its key frame and one row of each model's calendar table, a few hundred
+  bytes, so 3 million keys is about a gigabyte across the selection's models. That is what the
+  machine can hold beside the rows.
+
+**Measured before declaring it**, on the new table's training half, from the reading the selection
+will use:
+
+- **the reading**: 3,001 loan combinations and **651,049 calendar keys**, inside the budget by a
+  factor of 4.6, so `burnout` stays. Read in 466 s at a 7.97 GB peak;
+- **the incentive's exposure by band**, over 2.11 billion loan-months:
+
+  | band, points | midpoint | share |
+  |---|---|---|
+  | -6 to -1 | -3.5 | 4.5% |
+  | **-1 to 0** | **-0.5** | **30.9%** |
+  | 0 to 0.5 | 0.25 | 22.0% |
+  | 0.5 to 1 | 0.75 | 17.3% |
+  | 1 to 2 | 1.5 | 18.3% |
+  | above 2 | 4.0 | 7.1% |
+
+  The reference is -1 to 0, the band carrying the most, by rule 12's rule;
+- **burnout**: none on 39.7% of loan-months, one to twelve months on 27.8%, more on 32.5%;
+- **the home-sale season** on 33.3%, four months in twelve, as it must be.
+
+**The criteria, unchanged from 5 November.** Section 5's three, on the prepayment hazard,
+unanchored:
+
+- actual over expected within 0.80 to 1.25;
+- the Gini above 0.45;
+- every decile within 0.80 to 1.25.
+
+They are read on the test window (2025-01 to 2026-03) once, and beside it on the three campaign
+windows, with the model refitted at each cut (2018-12, 2020-12, 2022-12).
+
+**The test window has been read once already for prepayment**, on 13 November, for the model this
+one replaces. Its failure there (Gini 0.21, the safest decile at 1.735) is part of why the
+incentive is back. So the test window has informed this model's form, though not its
+parameters. The campaign windows are therefore the cleaner evidence, and they are read and
+published beside it.
+
+**Predictions.**
+
+1. **The ordering**: the Gini is above 0.45 on the test window and on every campaign window, from
+   0.21 and 0.27.
+2. **The incentive's bands fall as the incentive rises.** On log time each band's coefficient is
+   below the one before it, so the bands under the reference are positive and the bands over it
+   negative.
+3. **The safest decile comes inside 1.25** on the test window, from 1.735.
+4. **The 2025 level is inside the band.** A deeply negative incentive is what 2025's lock-in is,
+   and the model now sees it.
+5. **Signs**: `burnout` positive and `home_sale_season` negative, if the selection keeps them.
+6. **The family: the log-logistic.** Prepayment rises with seasoning and then runs out, which is
+   the log-logistic's shape and not the Weibull's.
+7. **No evaluation is refused as not a likelihood**: under the conditional formulation there is
+   no such region.
+
+**Adoption, declared now.** The model is fit for a cumulative incidence only if it passes its three
+criteria on the test window. A pass on the campaign windows with a failure on the test window is
+recorded as a regime, and is not adopted. Whatever comes out is published, and nothing is tuned on
+any window.

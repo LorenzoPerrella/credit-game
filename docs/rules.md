@@ -86,6 +86,19 @@ followed it.
 is republished. And the note rate's cost is re-priced on nine quarters against the *current*
 published key before rule 9's own identity can be applied as written.
 
+**Applied to the prepayment model, declared 14 November 2026 before either family is selected.**
+The same rule, read on the cumulative incidence of **prepayment**:
+
+- both families go through the whole prepayment selection;
+- the measure is the mean absolute gap to the Aalen-Johansen prepayment incidence, over the
+  ages carrying at least 100,000 loan-months;
+- a family that turns a declared sign is excluded, and inside 0.1 percentage points the Weibull
+  is kept.
+
+The competing default hazard is the book's own at each age (`nonparametric.observed_hazard_by_age`).
+No default model is fitted on the table the prepayment model is fitted to, and holding the
+competing hazard at what happened makes the comparison one of the prepayment models alone.
+
 ## 3. Materiality of a macro covariate
 
 A macro covariate whose effect of one standard deviation on log survival time is **below 0.02
@@ -228,9 +241,21 @@ failure time scale, where a **positive** coefficient lengthens the time to prepa
 | Loan-to-value change since origination | **+** | Leverage that has risen blocks a refinance |
 | House price growth | **−** | Rising prices free equity and enable cash-out |
 | Unemployment change since origination | **+** | A weaker labour market prepays less |
+| Home-sale season (May to August) | **−** | House moves, and so payoffs, run high in those months |
+| Burnout (months above half a point without refinancing) | **+** | A loan that sat in the money and stayed is one that cannot or will not refinance |
 
-No prior is declared for the others; the reversal rule of the selection's step 8 applies to
-them, as it does for default.
+**Amended 14 November 2026, before the rebuilt model's first fit.**
+
+- **Rule 15 applies to this model too.** A candidate needs a declared sign, so the macro
+  covariates offered to the default model with no prepayment prior are not offered here. Until
+  now the reversal rule of step 8 applied to them, and two of them were in the model of 13
+  November on that alone.
+- **The incentive is read in bands and protected** (rule 9), so it has one coefficient a band
+  and no single sign. Its expected shape is a prediction rather than a constraint: the bands'
+  coefficients fall as the incentive rises.
+- **Burnout and the home-sale season are new candidates**, both functions of the calendar key
+  and costing no cells. Burnout is the incentive's history, in three bands with midpoints 0, 6.5
+  and 24.5 months, and enters as a line through them so that step 8 can judge its sign.
 
 ## 7. How far the key may grow
 
@@ -297,25 +322,24 @@ already in the model before the third arrives. Declared now:
 - the **prepayment** model carries the **refinancing incentive**, which is the quantity the
   decision to refinance actually turns on, and not the other two.
 
-**Amended 13 November 2026, before the key carries the note rate and before any fit on it, for
-a reason in the engine and not in a result.** The refinancing incentive is the note rate
-against *today's* market rate, so as a design column it moves with the loan **and** with the
-calendar. The factorised kernel every fit goes through (`eta = A[i] + B[j]`) represents a column
-of one side or the other, and refuses one that couples them, by name. The incentive's identity
-with the other two is what makes it representable anyway: the prepayment model carries the
-**origination spread** (loan side) and the **fall in the market rate** (calendar side), each
-with a coefficient of its own. The incentive is the special case where the two coefficients
-are equal, so it is nested rather than lost. Never all three still holds, and the default model
-is unchanged: spread and fall. **What would show that the incentive is what matters**: the two
-prepayment coefficients come out close, in standard deviations of their own covariates' units.
-That is a prediction, recorded in the register, and not a constraint imposed on the fit.
+**How the prepayment model carries the incentive: in bands, on the calendar side.** Declared 14
+November 2026, before the first fit of the rebuilt model, and superseding the amendment of 13
+November for this model. The register carries both.
 
-**This rule is currently moot, and that is a cost rather than a resolution.** The note rate is
-not in the cell key -- rule 7's give-up order reached it -- so none of the three is available, and
-both models carry the fall in the market rate instead. The prepayment model therefore has no
-measure of the quantity a refinancing decision actually turns on, which is one reason it does not
-hold out of sample. Rule 2's amendment calls for the spread to be re-priced against the current
-key before this rule can be applied as written.
+- **Why the amendment is no longer needed.** It held that the incentive moves with the loan and
+  with the calendar at once, and the factorised kernel (`eta = A[i] + B[j]`) refuses a column
+  that couples its two sides. That holds only while the note rate is on the loan side.
+- **The prepayment model reads no note rate on the loan side.** The incentive's band is a
+  function of the note rate's band, the term and the observation month. Declared on the calendar
+  side, it is part of the calendar key, which the kernel represents like any macro covariate.
+  The cost is calendar keys, which are measured before the fit; it costs no cells.
+- **In bands at -1, 0, 0.5, 1 and 2 points** (`features.BIN_EDGES`). A refinancing is a threshold
+  decision, and a line in log time drove the steep cells to where lifelines' objective stops
+  being a likelihood. A factor makes the S-curve a step function, with each step's effect
+  bounded. The reference band is the one carrying the most loan-months (rule 12).
+- **Where it applies.** The note rate is in the key of `cells_exclude.crr.parquet` (rule 19), so
+  the rule applies as written, on that table. The default model's half, spread and fall, waits
+  for its own refit on the same table.
 
 ## 10. What the payment state may be used for
 

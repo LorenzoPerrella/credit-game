@@ -378,6 +378,43 @@ PREPAYMENT_TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
     "equity_volatility",
 )
 
+#: Rule 6's candidates for the **prepayment** model on the calendar side, each with a sign declared
+#: in `models.selection.PREPAYMENT_SIGNS` before the fit, as rule 15 asks of every candidate.
+#:
+#: Declared 14 November 2026, for the rebuilt prepayment model. Two departures from the run of 13
+#: November, both rules applied rather than results read:
+#:
+#: * **rule 9 as first written**: this model reads the refinancing incentive, which is protected
+#:   below, and neither of the other two rate comparisons, so `mortgage_rate_decline` is not here;
+#: * **rule 15 applied to this model too**: the macro covariates the default model is offered with a
+#:   default prior and no prepayment one -- corporate spreads, volatility, sentiment, financial
+#:   conditions, housing starts -- are not candidates here. Two of them were in the model of 13
+#:   November, kept by the reversal rule alone.
+#:
+#: And two new candidates, both functions of the calendar key: `home_sale_season`, the four months
+#: in which house moves and so payoffs run high, and `burnout`, the months a loan has spent above
+#: half a point of incentive without refinancing.
+PREPAYMENT_MACRO_CANDIDATES: Final[tuple[str, ...]] = (
+    "ltv_change",
+    "unemployment_change",
+    "house_price_growth",
+    "home_sale_season",
+    "burnout",
+)
+
+#: What the prepayment selection keeps whatever it reads. Rule 1's regime indicator, for the reason
+#: the default model keeps it; and rule 9's incentive, read in bands, which is the quantity a
+#: refinancing turns on and the reason this model was rebuilt. A band has no single sign, so it
+#: could not be judged by step 8 in any case: the bands are expected to fall as the incentive rises,
+#: and that is a prediction in the register, not a constraint on the fit.
+PREPAYMENT_PROTECTED: Final[tuple[str, ...]] = ("moratorium_regime", "refinance_incentive")
+
+#: The incentive's reference band, by rule 12's rule: the band carrying the most loan-months of the
+#: prepayment model's training half, measured on `cells_exclude.crr.parquet` before its first fit,
+#: off the reading the selection uses. -1 to 0 points, at its midpoint: 30.9% of 2.11 billion
+#: loan-months, against 22.0% for 0 to 0.5 and 4.5% below -1.
+PREPAYMENT_BANDED_REFERENCE: Final[dict[str, float]] = {"refinance_incentive": -0.5}
+
 #: Every macro covariate a published hazard reads, in one tuple: what a stress scenario has to
 #: move, and nothing it moves may fall outside.
 #:
@@ -564,6 +601,13 @@ ECONOMIC_DIMENSION: Final[dict[str, str]] = {
     "inflation_change": "prices",
     "equity_return": "asset prices",
     "consumer_sentiment": "confidence",
+    # The prepayment model's two new candidates, declared with them on 14 November 2026 before
+    # their first fit. Burnout is the incentive's history, and the incentive itself is a protected
+    # band that step 9 never reads, so it has no partner to stand beside; the season is the
+    # calendar's own and shares its information with nothing.
+    "refinance_incentive": "refinancing incentive",
+    "burnout": "refinancing incentive",
+    "home_sale_season": "seasonality",
 }
 
 #: Macro candidates removed by the selection, each with the rule that removed it.
@@ -656,6 +700,11 @@ ELIMINATED: Final[dict[str, str]] = {
 #: what is a general business-cycle proxy, and among equivalents keep the series with the longest
 #: clean history.
 MACRO_ELIMINATION_PRIORITY: Final[tuple[str, ...]] = (
+    # The prepayment model's two new candidates go first, declared 14 November 2026 before their
+    # first fit: each refines what the protected incentive already carries or adds a calendar
+    # pattern, so if variance inflation binds they give way before anything established.
+    "burnout",
+    "home_sale_season",
     "equity_return",
     "equity_volatility",
     # A level gives way before its own gap form, for the reason at MACRO_CANDIDATES.
@@ -873,7 +922,19 @@ def calendar_covariates(names: Iterable[str] | None = None) -> list[str]:
     encoding's own unclassified check compares against; without it the whole declared set comes
     back.
     """
-    declared = (*MACRO_CANDIDATES, *PROTECTED_MACRO)
+    # The prepayment model's own: its candidates and its protected incentive are functions of the
+    # calendar key too, the incentive and its burnout through the note rate's band, which the
+    # prepayment model does not read on the loan side.
+    declared = tuple(
+        dict.fromkeys(
+            (
+                *MACRO_CANDIDATES,
+                *PROTECTED_MACRO,
+                *PREPAYMENT_MACRO_CANDIDATES,
+                *PREPAYMENT_PROTECTED,
+            )
+        )
+    )
     if names is None:
         return list(declared)
     wanted = set(declared)

@@ -471,6 +471,25 @@ _VARIABLES: Final[tuple[Variable, ...]] = (
         former="sentiment",
     ),
     _macro(
+        "home_sale_season",
+        "Home-sale season",
+        "One when the observation month is May to August, the months in which house moves, and "
+        "so payoffs, run high; zero otherwise. It reads no series: the calendar is the whole of "
+        "it. Offered to the prepayment model only, with a declared negative sign.",
+        unit="indicator",
+        source="the observation month",
+    ),
+    _macro(
+        "burnout",
+        "Burnout",
+        "The months the loan has spent with its refinancing incentive above half a point without "
+        "refinancing, in three bands: none, one to twelve, more than twelve, at the midpoints "
+        "0, 6.5 and 24.5. A loan that sat in the money and did not refinance is one that cannot "
+        "or will not. Offered to the prepayment model only, with a declared positive sign.",
+        unit="months",
+        source="original_interest_rate, MORTGAGE30US and MORTGAGE15US",
+    ),
+    _macro(
         "moratorium_regime",
         "Moratorium regime",
         "One in the months a payment moratorium suppressed the event, zero otherwise: "
