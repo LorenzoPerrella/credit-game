@@ -1,4 +1,5 @@
 {
+  "ancillary": null,
   "as_of": "2021-12",
   "categorical": {
     "buyer_type": "repeat",
@@ -10,15 +11,13 @@
   "cause": "prepayment",
   "distribution": "weibull",
   "eliminated": {
-    "consumer_sentiment": "step 8: reversed sign: -0.005439 in the full model, +0.005425 beside the loan block alone",
-    "corporate_bond_spread": "step 6: variance inflation 10.8, above 10",
-    "inflation_change": "step 8: reversed sign: -2.308 in the full model, +3.325 beside the loan block alone",
-    "inflation_rate": "step 8: reversed sign: -1.495 in the full model, +3.041 beside the loan block alone",
-    "ltv_change": "step 9: 1 sd effect -0.007 on even and +0.025 on odd origination years, beside house_price_growth (-0.178), both housing",
-    "volatility_change": "step 8: reversed sign: +0.001832 in the full model, -0.006683 beside the loan block alone",
-    "yield_curve_slope": "step 9: 1 sd effect -0.031 on even and +0.008 on odd origination years, beside mortgage_rate_decline (-0.198), both interest rates"
+    "consumer_sentiment": "step 8: reversed sign: -0.007099 in the full model, +0.005135 beside the loan block alone",
+    "financial_conditions": "step 9: 1 sd effect +0.114 on even vintages, +0.235 on odd vintages, +0.322 on to 2010 06, -0.097 on after 2010 06, beside equity_volatility (-0.194), both financial stress",
+    "housing_starts_growth": "step 8: p = 0.183",
+    "ltv_change": "step 8: wrong sign: -0.001012 where + is expected",
+    "volatility_change": "step 8: reversed sign: +0.002837 in the full model, -0.004055 beside the loan block alone"
   },
-  "formula": "credit_score + original_ltv + debt_to_income + term_years + unemployment_change + financial_conditions + mortgage_rate_decline + house_price_growth + policy_rate_change + equity_return + equity_volatility + housing_starts_growth + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
+  "formula": "C(credit_score, Treatment(790.0)) + C(original_ltv, Treatment(50.0)) + C(debt_to_income, Treatment(19.0)) + term_years + moratorium_regime + unemployment_change + mortgage_rate_decline + house_price_growth + corporate_bond_spread + equity_volatility + C(purpose, Treatment('purchase')) + C(occupancy, Treatment('owner_occupied')) + C(harp, Treatment('standard')) + C(mortgage_insurance, Treatment('uninsured')) + C(buyer_type, Treatment('repeat'))",
   "moratorium": "exclude",
   "ordinal": [
     "term_years"
@@ -29,13 +28,11 @@
     "debt_to_income"
   ],
   "time_varying_continuous": [
+    "moratorium_regime",
     "unemployment_change",
-    "financial_conditions",
     "mortgage_rate_decline",
     "house_price_growth",
-    "policy_rate_change",
-    "equity_return",
-    "equity_volatility",
-    "housing_starts_growth"
+    "corporate_bond_spread",
+    "equity_volatility"
   ]
 }

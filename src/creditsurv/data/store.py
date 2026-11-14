@@ -245,6 +245,32 @@ def load_originations(policy: str = DEFAULT_POLICY, *, first: int, last: int) ->
     return _categorised(cells)
 
 
+def load_vintage(
+    policy: str = DEFAULT_POLICY,
+    *,
+    first: int,
+    last: int,
+    columns: Sequence[str] | None = None,
+) -> pd.DataFrame:
+    """Every cell of the loans originated between two month ordinals, at every age.
+
+    The observed side of a vintage's cumulative incidence: the risk set of one cohort along its
+    whole life. The filter is on the origination month, a real column, so it pushes down, and
+    ``columns`` reads only those -- three columns of a vintage year are a few million rows.
+    """
+    path = _cells_or_say_how(policy)
+    selected = "*" if columns is None else ", ".join(f'"{name}"' for name in columns)
+    with _reader() as con:
+        cells: pd.DataFrame = con.execute(
+            f"""
+            SELECT {selected} FROM read_parquet('{path}')
+            WHERE origination_month >= {int(first)}
+              AND origination_month <= {int(last)}
+            """
+        ).df()
+    return _categorised(cells)
+
+
 def load_largest_cells(
     policy: str = DEFAULT_POLICY, *, age: int = 0, limit: int = 500
 ) -> pd.DataFrame:

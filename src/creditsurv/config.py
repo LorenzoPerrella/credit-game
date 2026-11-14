@@ -364,19 +364,18 @@ TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
 #: prepayment model is read from the fit's own formula, so copying it here would be duplication
 #: with nothing to keep it honest; this much is tied to the record by a test.
 #:
-#: What it says about a refinancing is what one would hope: `mortgage_rate_decline` at -0.198 per
-#: standard deviation and `equity_volatility` at -0.215 are its largest effects, while the
-#: general-cycle covariates -- inflation, its change, volatility change, sentiment -- were
-#: eliminated for turning their signs.
+#: Re-selected on the current cells on 13 November 2026 (fit `69416c2849455eba`, training half), in
+#: 36.5 minutes. `mortgage_rate_decline` reads -0.198 per standard deviation, keeping rule 6's sign:
+#: a market rate below the note rate shortens the time to repayment. `ltv_change` went for its sign,
+#: and `financial_conditions` was dropped by the time cut. The record before it was selected on
+#: cells since rebuilt, under the linear form.
 PREPAYMENT_TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
+    "moratorium_regime",
     "unemployment_change",
-    "financial_conditions",
     "mortgage_rate_decline",
     "house_price_growth",
-    "policy_rate_change",
-    "equity_return",
+    "corporate_bond_spread",
     "equity_volatility",
-    "housing_starts_growth",
 )
 
 #: Every macro covariate a published hazard reads, in one tuple: what a stress scenario has to

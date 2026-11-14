@@ -193,6 +193,24 @@ Amended 17 October 2026, before the runs that follow, because the second validat
   one is, and the first reading of it is published whatever it says.
 - **Cumulative PD by vintage.** The dispersion across origination years is published, because an
   aggregate that passes can hide vintages pulling in opposite directions.
+
+  **Given a threshold on 13 November 2026, before its first reading.** Until then nothing in the
+  package computed it. A vintage is now projected from origination, along the realised macro
+  path, with the prepayment hazard competing (`backtest.lifetime`), and compared with its own
+  Aalen-Johansen incidence. Month *m* of the projection is compared with age *m − 1* of the
+  observed curve. The criterion holds when, over the origination years 2000 to 2016, the
+  observed default incidence over the predicted lies within 0.80 to 1.25 for **at least 70% of
+  vintages at 36 months and at least 70% at 60 months**, and the ratio pooled over those
+  vintages lies within the same band at both horizons. 70% is the cycle criterion's share and
+  0.80 to 1.25 its band, so nothing here is new except the object. It is read with the
+  published default fit, anchored by rule 4, and with the prepayment model rule 6 selects on
+  the current cells.
+
+  An out-of-time reading is published beside it, and is the stronger evidence: the 2018-12 cut
+  with a prepayment model refitted on the same cut, vintages 2016 to 2018 at 36 months.
+  **A lifetime PD is fit only when this criterion and the age-band criterion above both
+  hold**: one judges the curve along a cohort's life, the other the age profile across the
+  book in one window, and neither stands in for the other.
 - **A backtest on forecast macro, not realised.** The published backtest hands the model the macro
   path that actually happened. A user does not have it. One window is therefore scored on a macro
   path forecast from the information available at the cut, and the difference between the two is
@@ -278,6 +296,19 @@ already in the model before the third arrives. Declared now:
   rate**: how the loan was priced at underwriting, and what the market has done since;
 - the **prepayment** model carries the **refinancing incentive**, which is the quantity the
   decision to refinance actually turns on, and not the other two.
+
+**Amended 13 November 2026, before the key carries the note rate and before any fit on it, for
+a reason in the engine and not in a result.** The refinancing incentive is the note rate
+against *today's* market rate, so as a design column it moves with the loan **and** with the
+calendar. The factorised kernel every fit goes through (`eta = A[i] + B[j]`) represents a column
+of one side or the other, and refuses one that couples them, by name. The incentive's identity
+with the other two is what makes it representable anyway: the prepayment model carries the
+**origination spread** (loan side) and the **fall in the market rate** (calendar side), each
+with a coefficient of its own. The incentive is the special case where the two coefficients
+are equal, so it is nested rather than lost. Never all three still holds, and the default model
+is unchanged: spread and fall. **What would show that the incentive is what matters**: the two
+prepayment coefficients come out close, in standard deviations of their own covariates' units.
+That is a prediction, recorded in the register, and not a constraint imposed on the fit.
 
 **This rule is currently moot, and that is a cost rather than a resolution.** The note rate is
 not in the cell key -- rule 7's give-up order reached it -- so none of the three is available, and

@@ -45,7 +45,7 @@ from creditsurv.backtest.metrics import (
     weighted_gini,
 )
 from creditsurv.backtest.runner import ACCEPTANCE
-from creditsurv.config import AGE_BANDS
+from creditsurv.config import AGE_BANDS, DEFAULT_CAUSE
 from creditsurv.data.panel import AGE, WEIGHT, cells_to_episodes, ended_in, month_ordinal
 from creditsurv.data.store import load_cells_window
 from creditsurv.models.aft import episode_hazards
@@ -199,6 +199,7 @@ def _at_risk(
     *,
     moratorium: str,
     macro: pd.DataFrame,
+    cause: str = DEFAULT_CAUSE,
 ) -> tuple[pd.DataFrame, np.ndarray]:
     """The episodes at risk in one month and their anchored hazards: one read of the month."""
     ordinal = month_ordinal(month)
@@ -206,7 +207,7 @@ def _at_risk(
     if cells.empty:
         message = f"No cells are observed in {month}; the table ends earlier."
         raise ValueError(message)
-    frame = cells_to_episodes(cells, macro, covariates=list(covariates))
+    frame = cells_to_episodes(cells, macro, covariates=list(covariates), cause=cause)
     hazard = anchor.apply(
         episode_hazards(fitted, frame, frame[AGE].to_numpy(dtype=int), columns=list(covariates))
     )
@@ -256,10 +257,26 @@ class WindowCriteria:
     deciles: pd.DataFrame
     #: Actual over expected by the declared seasoning bands, `config.AGE_BANDS`.
     age_bands: pd.DataFrame
+    #: The three sums by origination year and seasoning band. In one window the two are nearly
+    #: the same thing -- `period = cohort + age` -- so this is the table that shows which one an
+    #: error follows where they part: a covariate of the vintage that is not monotone in it.
+    by_vintage_and_age: pd.DataFrame
 
     @property
     def actual_over_expected(self) -> float:
         return self.actual_defaults / self.expected_defaults
+
+    def by_vintage(self) -> pd.DataFrame:
+        """Actual over expected by origination year, every age of it in the window."""
+        table = (
+            self.by_vintage_and_age.groupby("vintage", observed=True)[
+                ["exposure", "events", "expected"]
+            ]
+            .sum()
+            .reset_index()
+        )
+        table["actual_over_expected"] = table["events"] / table["expected"]
+        return table
 
     def bands_inside(self) -> int:
         """How many age bands hold inside the acceptance band; rule 5 asks for five of seven."""
@@ -276,6 +293,7 @@ def window_criteria(
     macro: pd.DataFrame,
     first: pd.Period,
     last: pd.Period,
+    cause: str = DEFAULT_CAUSE,
 ) -> WindowCriteria:
     """The overall ratio, the Gini, the deciles and the age bands, read a month at a time.
 
@@ -284,19 +302,25 @@ def window_criteria(
     arrays a cell -- hazard, defaults, weight, age -- which is all the criteria need. On fit
     bc016657b2b40bfc this reproduced every published figure: A/E 0.9065, Gini 0.5461, the
     deciles 0.803 to 1.150 and the age bands 0.8137 to 0.7253, at a 1.40 GB peak.
+
+    ``cause`` measures the prepayment model the same way: its hazard against the loan-months
+    that ended in a prepayment, with a default as censoring. Pass an unanchored ``Anchor``, since
+    rule 4 anchors the default hazard only.
     """
-    hazards, events, weights, ages = [], [], [], []
+    hazards, events, weights, ages, vintages = [], [], [], [], []
     for month in pd.period_range(first, last, freq="M"):
         frame, hazard = _at_risk(
-            fitted, covariates, month, anchor, moratorium=moratorium, macro=macro
+            fitted, covariates, month, anchor, moratorium=moratorium, macro=macro, cause=cause
         )
         hazards.append(hazard)
         weights.append(frame[WEIGHT].to_numpy(dtype=float))
-        events.append(ended_in(frame).astype(float))
+        events.append(ended_in(frame, cause).astype(float))
         ages.append(frame[AGE].to_numpy(dtype=int))
+        vintages.append(pd.PeriodIndex(frame["origination_period"]).year.to_numpy())
     hazard, weight = np.concatenate(hazards), np.concatenate(weights)
     defaulted = np.concatenate(events) * weight
     age = np.concatenate(ages)
+    vintage = np.concatenate(vintages)
 
     labels = [f"{low} to {high - 1}" for low, high in pairwise(AGE_BANDS)]
     band = pd.cut(age, bins=list(AGE_BANDS), labels=labels, right=False)
@@ -309,6 +333,20 @@ def window_criteria(
         .reset_index()
     )
     by_band["actual_over_expected"] = by_band["events"] / by_band["expected"]
+    crossed = (
+        pd.DataFrame(
+            {
+                "vintage": vintage,
+                "age_band": band,
+                "exposure": weight,
+                "events": defaulted,
+                "expected": hazard * weight,
+            }
+        )
+        .groupby(["vintage", "age_band"], observed=True)
+        .sum()
+        .reset_index()
+    )
     series = {
         name: pd.Series(values)
         for name, values in (("hazard", hazard), ("events", defaulted), ("weight", weight))
@@ -323,4 +361,5 @@ def window_criteria(
         gini=weighted_gini(series["hazard"], series["events"], series["weight"]),
         deciles=weighted_calibration(series["hazard"], series["events"], series["weight"]),
         age_bands=by_band,
+        by_vintage_and_age=crossed,
     )

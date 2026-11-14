@@ -271,6 +271,13 @@ BASE_SPEC: Final = CellSpec(
 #: selection 56 minutes against 20, the views 86 against 40 -- for nothing on the criterion it
 #: was admitted to fix. The finer-banded table is kept at `cells_exclude.fine.parquet` so the
 #: measurement need not be paid twice, and switching back is this one line.
+#:
+#: **The origination spread was built on 13 November 2026 and not adopted.** The table with the
+#: note rate in the key held every invariant at 181,351,838 cells, and is kept as
+#: `cells_exclude.spread.parquet`. The prepayment model it was built for could not be estimated
+#: on it, warm or cold: with the spread and the market rate's fall together -- the incentive --
+#: the Weibull's interval likelihood ran into the region lifelines' clipping leaves unbounded on
+#: every evaluation for an hour. Adding `Extension.ORIGINATION_SPREAD` here is the switch back.
 DEFAULT_SPEC: Final = extended(BASE_SPEC, Extension.HARP, Extension.DELINQUENCY_STATE)
 
 

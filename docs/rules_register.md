@@ -1421,3 +1421,298 @@ eliminated again, and the selection record is the published one. The basis stays
 measurement are kept in `docs/reports/selection_age_basis.json`. Both declared forms along age
 have now read 3 of 7. **No fourth form is declared on the strength of either.** The model card
 keeps the lifetime PD as not fit, and the twelve-month PD as fit.
+
+### Age or vintage: what the two forms' common failure is measured against, declared first
+
+Both declared forms along age read 3 of 7 on the test window, with the same residual: young bands
+under-predicted, seasoned bands over-predicted. The published fit holds **6 of 7 in sample**
+(0.727, 1.184, 1.248, 1.074, 0.862, 0.937, 1.145) and 2 of 7 out of it. In one window of fifteen
+months `period = cohort + age`, so "12 to 35 months" is the 2022-2024 originations and "60 and
+over" is the 2010-2020 ones. The failure may be of the age or of the vintage.
+
+**What cannot be decided, stated before anything is measured.** The linear part of an age
+effect and the linear part of a vintage effect cannot be separated. That is the identity itself,
+and no crossing of windows undoes it. A first draft of this plan, written on 5 November, said
+that a vintage effect would leave the age profile flat *within* each vintage. That is withdrawn
+before any run. Inside a 24-month window a vintage spans about 24 months of age, so removing
+vintage levels removes the age profile mechanically, and the reading would be vacuous.
+
+**What can be decided: a vintage covariate that is not monotone in the vintage.** The 30-year
+mortgage rate at origination fell from about 4.5% (2018) to about 3% (2020-21) and rose to about
+7% (2023). Over the vintages 2018 to 2021 the two readings predict opposite directions inside one
+window:
+
+- **age:** younger is under-predicted, so actual over expected **rises** from vintage 2018 to
+  vintages 2020-21;
+- **vintage, through the conditions of origination:** a lower origination rate means a lighter
+  payment, so actual over expected **falls** from vintage 2018 to vintages 2020-21, and rises
+  again for 2022 onwards.
+
+**The measurement.** `window_criteria` crossed by origination year and age band, on the
+campaign's three windows: 2019-20, 2021-22 and 2023-24. The fits are the three cuts already
+cached, `2885150746775c27`, `91c018cd9286c4ad` and `6b98fbff8570f641`, each the configured
+specification with the shape. They are unanchored, because a multiplier scales every vintage
+alike and cannot move a comparison between them. **The declared test window is not read**: it
+judges, it does not diagnose, and choosing the next specification on it would be tuning on it.
+
+**How it is read.** The windows 2021-22 and 2023-24 both hold vintages 2018 and 2020-21 with
+exposure:
+
+- the vintage reading is supported if actual over expected falls from vintage 2018 to the mean
+  of 2020-21 **in both**;
+- the age reading is supported if it rises in both;
+- anything else is recorded as not deciding.
+
+The 2019-20 window holds the 2020 vintage only at ages under 12 and inside the moratorium, so
+it is reported and not read.
+
+### Age or vintage: the declared comparison does not decide
+
+Measured on the campaign's windows with the cut fits, unanchored, in 12.8 minutes. Actual over
+expected by origination year, with the 30-year rate averaged over the origination year:
+
+| vintage | rate | 2019-20 | 2021-22 | 2023-24 |
+|---|---|---|---|---|
+| 2016 | 3.65 | 0.4414 | 1.3692 | 0.5930 |
+| 2017 | 3.99 | 0.5241 | 1.6001 | 0.7073 |
+| 2018 | 4.54 | 0.5194 | **1.9665** | **0.8854** |
+| 2019 | 3.93 | 0.3730 | 1.8115 | 0.7733 |
+| 2020 | 3.11 | 0.4112 | 1.4929 | 0.9666 |
+| 2021 | 2.96 | | 0.9084 | 1.0806 |
+| 2022 | 5.33 | | 0.5792 | 1.2932 |
+| 2023 | 6.80 | | | 1.3179 |
+| 2024 | 6.72 | | | 0.7654 |
+
+**The declared comparison**, vintage 2018 against 2020-21 taken together (their defaults over
+their expected):
+
+- **2021-22:** 1.9665 to 1.1526, falling, which is the vintage reading;
+- **2023-24:** 0.8854 to 1.0456, rising, which is the age reading.
+
+The two windows disagree, so by the rule declared at 18:10 this **does not decide**. The model's
+failure is not attributed to the vintage, and step 3 of the plan, an origination-rate covariate,
+is not licensed by this measurement.
+
+**Recorded and not used as evidence**, because neither was declared:
+
+- In 2021-22 the 2020-21 vintages are under two years old. That is where the first year's
+  definitional lag already reads low in sample (0.727), so the comparison there carries a
+  confound the declaration did not name.
+- From vintage 2018 to 2019 the rate falls, 4.54 to 3.93, and actual over expected falls in
+  both windows, 1.97 to 1.81 and 0.89 to 0.77. That is the vintage reading's direction, on a
+  pair chosen after the fact.
+
+**What follows.** The attribution cannot be made from these windows, so the route to a lifetime
+PD that does not depend on it is the one that measures the product directly. That route is a
+prepayment model on the current cells, which any incidence needs, and the declared cumulative
+PD by vintage against the Aalen-Johansen incidence.
+
+### Rule 6 — The prepayment model on the current cells: criteria and prediction, before the selection
+
+No prepayment model exists on the table every published fit is made on. The one on record
+(`docs/reports/selection_weibull_prepayment.json`) was selected on cells since rebuilt, under the
+linear form rule 12 replaced. The second validation measured it out of sample (L2): A/E 0.767,
+deciles inverted from 1.51 to 0.49, Gini 0.18. A lifetime PD is a cumulative incidence and needs
+this hazard, so it is re-selected now, before anything about a lifetime PD is measured.
+
+**What is run.** `creditsurv select --cause prepayment` on the training half up to 2021-12, under
+rule 6's five priors, with the reversal rule of step 8 for every other candidate as rule 6 says.
+The model is the selection's own fit of what it chooses, as for the restricted basis.
+
+**The criteria, declared now.** Section 5's three cross-sectional criteria, read on the prepayment
+hazard against the loan-months that ended in prepayment:
+
+- actual over expected overall within 0.80 to 1.25;
+- the exposure-weighted Gini above 0.45;
+- every decile within 0.80 to 1.25.
+
+They are read on the declared test window, 2025-01 to 2026-03, once, and **unanchored**, because
+rule 4 anchors the default hazard and nothing else. They are reported beside the same three on
+the campaign's windows, which is where a reader can see whether a test-window figure is a
+regime's.
+
+**The prediction.**
+
+- **The ordering is no longer inverted**: Gini above 0.45 and the deciles rising with predicted
+  risk. The old model's inversion came from a selection that could not read banded covariates as
+  bands, and rule 12 now makes it.
+- **The level is the uncertain part**, and no direction is predicted for it. 2025 is a year of
+  rates well above most note rates, which is the strongest lock-in on record. A model fitted to
+  2021 has seen falling rates, not lock-in at this depth, so an overall miss outside the band would
+  be a regime and not a defect. It would be recorded as that, and not corrected on the test window.
+- `mortgage_rate_decline` keeps rule 6's sign, **negative**: a market rate below the note rate
+  shortens the time to repayment. A reversal here would mean the model reads refinancing
+  backwards, and would be a finding against the specification, not a covariate to drop quietly.
+
+## 13 November 2026
+
+### Rule 5 — The cumulative PD by vintage gets a threshold, before anything reads it
+
+**What changed.** Section 5 has declared "cumulative PD by vintage" since 17 October with no
+threshold and no code to compute it. `backtest.lifetime` now computes it. For each origination
+year it projects every origination profile from its own month along the realised macro path,
+with default and prepayment competing, and compares the result with that year's Aalen-Johansen
+incidence. The threshold is written into section 5 now, before any real vintage is read. It
+holds when, over 2000 to 2016:
+
+- at least 70% of vintages lie within 0.80 to 1.25 at 36 months, and at least 70% at 60;
+- the pooled ratio lies within the band at both horizons.
+
+**Why it is admissible.** It adds a criterion and moves none. The band and the share are the
+cycle criterion's, so nothing was chosen for this object. The age-band criterion stays binding:
+a lifetime PD is fit only when both hold. So this can make the lifetime verdict harder to reach
+and never easier.
+
+**What it reads.** The published default fit, anchored at its multiplier, and the prepayment
+model selected on the current cells under rule 6. That selection began at 22:22 today, so the
+criterion is fixed before either model's vintage curve exists. The out-of-time reading, the
+2018-12 cut with prepayment refitted on that cut over vintages 2016-2018 at 36 months, is
+published beside it.
+
+**Not a prediction yet.** The prediction is written once the prepayment model's own
+out-of-sample criteria are read, because a vintage curve is only as good as the competing
+hazard in it. If that model fails its criteria, the vintage reading is still made and published,
+labelled as resting on a prepayment model that does not pass.
+
+### Rule 6 — The re-selected prepayment model fails every criterion, in every regime it can be fitted in
+
+Measured as declared on 5 November with the selection's fit `69416c2849455eba`, unanchored,
+prepayments against the prepayment hazard:
+
+| window | fit | A/E | Gini | deciles in band |
+|---|---|---|---|---|
+| declared test window, 2025-01 to 2026-03 | `69416c2849455eba` | **1.3053** | **0.2103** | 3 of 10 |
+| 2019-20 | refitted at the 2018-12 cut | 0.9654 | **0.2686** | 5 of 10 |
+| 2021-22 | refitted at the 2020-12 cut | — | — | — |
+
+The 2020-12 cut could not be fitted. SLSQP ended outside the likelihood after 286 evaluations
+on 67.5 million rows, which is the engine's declared refusal for a specification whose objective
+is unbounded below. The 2022-12 cut was not reached.
+
+**The prediction is falsified.** It said the ordering would no longer be inverted, with the Gini
+above 0.45. The Gini is 0.21 on the test window and 0.27 on 2019-20. It is the same weakness the
+second validation found (0.18), so the re-selection under the bands has not repaired it. The
+largest miss on the test window is the lowest-risk decile, at 1.735: the loans the model is most
+sure will not prepay are the ones it misses most.
+
+**What this says, and what it does not.** The model is ordered by credit score, leverage, debt
+burden and the market rate's fall since origination. What a prepayment turns on is the loan's own
+incentive: its note rate against today's market. A 2021 loan at 2.9% and a 2023 loan at 7% sit in
+cells that differ in their vintage and nothing else the model can see, and one of them is locked
+in while the other would refinance at the first cut. `mortgage_rate_decline` is that incentive
+**less the origination spread**, and the spread is exactly what the key does not carry. That is an
+argument, and the next entry declares the test of it. The level miss on the test window is not
+corrected, as declared, because 2025's lock-in is outside anything the training data saw.
+
+**Consequence.** No cumulative incidence built on this hazard is a professional lifetime PD.
+Section 5's vintage criterion is therefore not read on it. Reading it would publish a lifetime
+PD resting on a competing hazard that fails all three of its own criteria. It waits for the
+model the next entry declares.
+
+### Rule 7 and rule 9 — The origination spread enters the key: what is predicted, before the rebuild
+
+**What is done.** Rule 7 named the origination spread as the next extension to price against
+the 250-million ceiling, and said it fits: 184.4 million cells projected, 210.2 with the declared
+1.14 margin (`docs/reports/key_extensions.csv`, 9 October). It has never been tried. The cells
+are rebuilt with the note rate in the key, banded on `features.BIN_EDGES["note_rate"]`, beside
+the HARP level and the payment state. The published table is kept as
+`cells_exclude.published.parquet`, copied with its size and time of writing, so restoring it
+restores every cached fit's identity. Then:
+
+- the default and the prepayment selections run on the new table. The spread is a covariate
+  fixed at origination, a function of the note rate band and the origination month, both in the
+  key, so it enters the loan block and rule 14's shape with the other origination covariates;
+- the prepayment model carries spread and fall as rule 9, amended today, says;
+- both are measured as the published model was: the selection's own fit, `window_criteria`,
+  the default anchored on 2022-01 to 2024-12, and the test window read once.
+
+**Invariants, which are not predictions.** The same 2,773,640,182 loan-months and 1,671,207
+defaults, partitioned over more cells. Any difference is a defect in the rebuild and stops
+everything after it.
+
+**Predictions.**
+
+1. **Cells: 184 to 215 million.** The nine-quarter ratio ran 14% light the last time it was
+   checked, so a figure up to the margin is expected and one above 250 million stops the
+   extension under rule 7.
+2. **Prepayment, the one this is for**: the Gini rises **above 0.45** on the test window and on
+   2019-20, from 0.21 and 0.27. The lowest-risk decile's miss, 1.735, comes inside 1.25.
+3. **Rule 9's incentive**: the prepayment coefficients on the spread and on the fall in the
+   market rate come out within a factor of two of each other, both negative.
+4. **Default**: the spread's coefficient is **negative**, so a loan priced above its month's
+   market is riskier: risk-based pricing carries information beyond the score, the leverage and
+   the debt burden. The three cross-sectional criteria still pass. **No improvement in the
+   out-of-sample age bands is predicted.** The spread is a price relative to the month, not the
+   rate level a vintage was written at, and the age-or-vintage reading of 5 November did not
+   decide.
+
+**Adoption, declared now.**
+
+- The **default** model with the spread replaces the published one only if it passes every
+  section 5 criterion the published model passes on the test window: the overall ratio, the
+  Gini, every decile and the master scale. The age bands are reported, and adoption does not
+  hinge on them.
+- The **prepayment** model is fit for a cumulative incidence only if it passes its own three
+  criteria on the test window.
+- If neither is adopted, the published table is restored and the result is recorded against
+  these predictions.
+
+### Rule 7 — The table with the note rate: the invariants hold, and the count lands just under the prediction
+
+Rebuilt with `creditsurv aggregate` in 34.6 minutes at a 7.1 GB peak, a quarter at a time:
+
+| | published table | with the note rate |
+|---|---|---|
+| cells | 91,575,827 | **181,351,838** |
+| loan-months | 2,773,640,182 | 2,773,640,182 |
+| defaults | 1,671,207 | 1,671,207 |
+| prepayments | 33,797,300 | 33,797,300 |
+
+**The invariants hold exactly**: the same loan-months, defaults and prepayments, partitioned over
+1.98x the cells. The note rate sits in eleven bands, from 2.5% to 10%.
+
+**Prediction 1 is missed, on the low side**: 184 to 215 million was predicted, and the table is
+181.4 million, 1.7% under the nine-quarter projection of 184.4. The last time that projection was
+checked it ran 14% light; this time it ran slightly heavy. Two checks are not enough to call
+its error either way, so the margin of 1.14 stays as declared. The table is under the
+250-million ceiling, so the extension stands.
+
+### Rules 7 and 9 — The prepayment model with the loan's rate cannot be estimated, and nothing is adopted
+
+**What happened.** On the table with the note rate, the prepayment selection's base fit converged
+in two minutes. The screening fit that adds the fall in the market rate beside the spread, which
+is rule 9's representation of the refinancing incentive, could not be estimated:
+
+- the warm start ran 30 minutes and did not converge;
+- a cold refit followed, past 300 evaluations, with the fallback methods after it;
+- across the two, **401 evaluations were refused as not a likelihood**: lifelines' interval
+  probability is clipped and the left-truncation term is not, so the objective fell below
+  anything a likelihood can take, down to −9,117 in the mean.
+
+The run was stopped after an hour on that one candidate, with the machine paging at 20,823
+swap-ins a minute. The default selection had been started first and stopped after its base fit:
+with the shape on the NumPy path, a Hessian costs 160 seconds on the doubled table, so a full
+selection was hours away.
+
+**The predictions.**
+
+1. Cells: missed on the low side, as recorded above.
+2. and 3. The prepayment Gini and the two rate coefficients **cannot be measured**: there is no
+   estimate to measure them on.
+4. The default spread: **not measured**.
+
+**What the failure says, as an argument and not a measurement.** A refinancing is a threshold
+decision. Prepayment rises steeply once the incentive clears the cost of refinancing, the
+S-curve every prepayment model in the industry carries, and is flat below it. A Weibull AFT puts
+the incentive into the log of the time scale linearly. The likelihood can then buy fit at the
+steep end by driving the hazard of the high-incentive cells towards the clip, which is exactly
+where lifelines' objective stops being a likelihood. The engine refused that region every time,
+as it was built to. **So the family, and not the data, is what fails here.** Two signs point that
+way: without the loan's rate the prepayment model fits and does not order (Gini 0.21), and with
+it the model does not fit at all.
+
+**Not adopted, by the rule declared at 23:33.** The published table is restored by moving the
+kept copy back, with its size and time of writing, so its identity is the one every cached fit
+was made on (`cells_exclude.parquet:448169670:1791619429593537860`). The table with the note rate
+is kept as `cells_exclude.spread.parquet`. The spread's priors stay declared in
+`models.selection` for the next attempt. No lifetime PD is offered.
