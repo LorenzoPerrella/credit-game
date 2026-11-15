@@ -150,15 +150,18 @@ PERFORMANCE_DROPPED: Final[dict[str, str]] = {
     "actual_loss": "loss accounting, needs LGD",
     "delinquent_accrued_interest": "loss accounting, needs LGD",
     "bankruptcy_cramdown_costs": "loss accounting, needs LGD",
-    # Modification cost detail. A modification already ends observation, so what it
-    # cost is never read.
-    "cumulative_modification_costs": "modification already censors; cost not read",
-    "current_period_modification_costs": "modification already censors; cost not read",
-    "interest_rate_step_indicator": "modification detail; modification already censors",
+    # Modification cost detail. A modification ends observation under both definitions of
+    # default, and rule 19 judges it from the rate and the term it set, which are kept: the
+    # cost columns are Freddie Mac's servicing arithmetic on the same change.
+    "cumulative_modification_costs": "rule 19 reads the rate and term instead",
+    "current_period_modification_costs": "rule 19 reads the rate and term instead",
+    "interest_rate_step_indicator": "modification detail; the modification ends observation",
     # Balance components. The model reads no balances -- the weight is a count of
     # loan-months, never an amount -- so only current_actual_upb is kept, for the
-    # portfolio description.
-    "current_non_interest_bearing_upb": "a balance component; the model reads no balances",
+    # portfolio description. The non-interest-bearing balance is the one exception worth
+    # revisiting: it is principal forbearance, the part of a restructuring's loss rule 19's
+    # fall in value cannot see, so its threshold test is a lower bound until this is read.
+    "current_non_interest_bearing_upb": "a balance component; rule 19 would read it (open)",
     "current_interest_bearing_upb": "a balance component; the model reads no balances",
     "zero_balance_removal_upb": "a balance component; the model reads no balances",
     # Redundant with something already kept.

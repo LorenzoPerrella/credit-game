@@ -37,6 +37,7 @@ from creditsurv.data.book import (
     CATEGORICAL_LEVELS,
     EPISODE_MONTHS,
     SOURCE,
+    DefaultDefinition,
     MoratoriumPolicy,
     PathSpec,
     case_expression,
@@ -280,6 +281,28 @@ BASE_SPEC: Final = CellSpec(
 #: every evaluation for an hour. Adding `Extension.ORIGINATION_SPREAD` here is the switch back.
 DEFAULT_SPEC: Final = extended(BASE_SPEC, Extension.HARP, Extension.DELINQUENCY_STATE)
 
+#: The table rule 19 asks for: the published key, the **note rate** (rule 7's next rung, priced at
+#: 184.4 million cells and measured at 181,351,838 when it was built on 13 November 2026), and the
+#: CRR definition of default. One rebuild for both, because each changes the table every model is
+#: fitted to and two rebuilds would mean fitting everything twice.
+CRR_SPEC: Final = extended(
+    BASE_SPEC, Extension.HARP, Extension.DELINQUENCY_STATE, Extension.ORIGINATION_SPREAD
+)
+
+
+def table_name(
+    policy: MoratoriumPolicy, definition: DefaultDefinition = DefaultDefinition.DELINQUENCY
+) -> str:
+    """The name a table is written and read under: the policy, and the definition if not the first.
+
+    `exclude` is the published table and `exclude.crr` rule 19's. Every reader takes this string
+    where it took the policy, so a fit, a reading or a score of one table can never be filed
+    under the other.
+    """
+    if definition is DefaultDefinition.DELINQUENCY:
+        return policy.value
+    return f"{policy.value}.{definition.value}"
+
 
 def _age_expression(step: int) -> str:
     """Loan age collapsed to the start of its episode, in months.
@@ -347,6 +370,7 @@ def _cells_for_quarter(
     vintage: str,
     spec: CellSpec,
     policy: MoratoriumPolicy,
+    definition: DefaultDefinition = DefaultDefinition.DELINQUENCY,
 ) -> pd.DataFrame:
     """Aggregate one vintage quarter.
 
@@ -361,7 +385,11 @@ def _cells_for_quarter(
     """
     query = f"""
     WITH book AS (
-        {state_of_the_book_sql(policy, harp_level=Extension.HARP in spec.categorical)}
+        {
+        state_of_the_book_sql(
+            policy, harp_level=Extension.HARP in spec.categorical, definition=definition
+        )
+    }
     ), classed AS (
         SELECT
             {_select_columns(spec)}
@@ -405,6 +433,7 @@ def build_cells(
     spec: CellSpec = DEFAULT_SPEC,
     policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
     connection: duckdb.DuckDBPyConnection | None = None,
+    definition: DefaultDefinition = DefaultDefinition.DELINQUENCY,
 ) -> pd.DataFrame:
     """Aggregate the parquet panel into weighted cells, one quarter at a time.
 
@@ -423,7 +452,7 @@ def build_cells(
         raise FileNotFoundError(message)
 
     spec.validate()
-    return _concatenate(list(_quarters_of_cells(perf, orig, spec, policy, connection)))
+    return _concatenate(list(_quarters_of_cells(perf, orig, spec, policy, connection, definition)))
 
 
 def _quarters_of_cells(
@@ -432,6 +461,7 @@ def _quarters_of_cells(
     spec: CellSpec,
     policy: MoratoriumPolicy,
     connection: duckdb.DuckDBPyConnection | None = None,
+    definition: DefaultDefinition = DefaultDefinition.DELINQUENCY,
 ) -> Iterator[pd.DataFrame]:
     """One quarter's cells at a time, each already in its final types and levels.
 
@@ -443,7 +473,8 @@ def _quarters_of_cells(
     for perf_path, orig_path in zip(sorted(perf), sorted(orig), strict=True):
         vintage = Path(perf_path).stem
         cells = _compact(
-            _cells_for_quarter(con, perf_path, orig_path, vintage, spec, policy), levels
+            _cells_for_quarter(con, perf_path, orig_path, vintage, spec, policy, definition),
+            levels,
         )
         _LOGGER.info(
             "%s: %d cells from %d loan-months", vintage, len(cells), int(cells["loan_months"].sum())
@@ -458,6 +489,7 @@ def write_cells(
     spec: CellSpec = DEFAULT_SPEC,
     policy: MoratoriumPolicy = MoratoriumPolicy.EXCLUDE,
     connection: duckdb.DuckDBPyConnection | None = None,
+    definition: DefaultDefinition = DefaultDefinition.DELINQUENCY,
 ) -> int:
     """Aggregate the panel and write it, holding one quarter at a time. Returns the cells written.
 
@@ -479,8 +511,8 @@ def write_cells(
 
     spec.validate()
     written = 0
-    with cells_writer(policy.value) as write:
-        for cells in _quarters_of_cells(perf, orig, spec, policy, connection):
+    with cells_writer(table_name(policy, definition)) as write:
+        for cells in _quarters_of_cells(perf, orig, spec, policy, connection, definition):
             write(cells)
             written += len(cells)
     _LOGGER.info("Collapsed to %d cells", written)
