@@ -16,6 +16,7 @@ from creditsurv.features import (
     CONTEMPORANEOUS_SERIES,
     LAGGED_SERIES,
     add_macro_covariates,
+    band_midpoints,
     bin_covariates,
     binned_formula,
     lag_macro,
@@ -215,9 +216,11 @@ def test_the_spread_and_the_incentive_are_the_note_rate_against_the_market_rate(
 
     at_origination = value_at(macro.shift(3), "2000-06", "mortgage_rate_30y")
     assert episodes["origination_spread"].tolist() == pytest.approx([6.5 - at_origination] * 3)
-    # The identity the three rate covariates obey: incentive = spread + the fall since.
-    rebuilt = episodes["origination_spread"] + episodes["mortgage_rate_decline"]
-    assert episodes["refinance_incentive"].tolist() == pytest.approx(rebuilt.tolist())
+    # The identity the three rate covariates obey, incentive = spread + the fall since, read
+    # through rule 9's bands: the incentive is stored at its band's midpoint.
+    rebuilt = (episodes["origination_spread"] + episodes["mortgage_rate_decline"]).to_numpy()
+    banded = band_midpoints(rebuilt, BIN_EDGES["refinance_incentive"])
+    assert episodes["refinance_incentive"].tolist() == pytest.approx(banded.tolist())
 
 
 def test_the_benchmark_follows_the_term_as_the_refinancing_rate_does(macro: pd.DataFrame) -> None:
@@ -231,10 +234,82 @@ def test_the_benchmark_follows_the_term_as_the_refinancing_rate_does(macro: pd.D
 
     add_macro_family(episodes, macro, origination, origination + 12, lag_months=3)
 
-    short, long = episodes["refinance_incentive"].tolist()
+    # The spread is continuous, so the switch shows on it exactly.
+    short, long = episodes["origination_spread"].tolist()
     assert short != pytest.approx(long), "both terms read the same benchmark"
-    assert short == pytest.approx(6.5 - value_at(macro.shift(3), "2001-06", "mortgage_rate_15y"))
-    assert long == pytest.approx(6.5 - value_at(macro.shift(3), "2001-06", "mortgage_rate_30y"))
+    assert short == pytest.approx(6.5 - value_at(macro.shift(3), "2000-06", "mortgage_rate_15y"))
+    assert long == pytest.approx(6.5 - value_at(macro.shift(3), "2000-06", "mortgage_rate_30y"))
+    # The incentive reads the same benchmark a year on, in its band.
+    edges = BIN_EDGES["refinance_incentive"]
+    expected = [
+        6.5 - value_at(macro.shift(3), "2001-06", "mortgage_rate_15y"),
+        6.5 - value_at(macro.shift(3), "2001-06", "mortgage_rate_30y"),
+    ]
+    assert episodes["refinance_incentive"].tolist() == pytest.approx(
+        band_midpoints(np.array(expected), edges).tolist()
+    )
+
+
+def _rates(thirty: list[float], fifteen: float = 4.6) -> pd.DataFrame:
+    """A macro panel holding only the two mortgage benchmarks, from January 2010."""
+    months = pd.period_range("2010-01", periods=len(thirty), freq="M")
+    return pd.DataFrame(
+        {"mortgage_rate_30y": thirty, "mortgage_rate_15y": [fifteen] * len(thirty)}, index=months
+    )
+
+
+def test_burnout_counts_the_months_spent_above_half_a_point() -> None:
+    """Fourteen months at a full point of incentive, from the fourth month on, then none.
+
+    A month counts once the loan has lived through it: at age *a* the months counted are the
+    first *a*, so the month being observed is not among them. The fifteen-year loan beside it
+    reads its own benchmark, 4.6%, which leaves a 5% note 0.4 points in the money: never enough.
+    """
+    from creditsurv.features import add_macro_family
+
+    macro = _rates([5.0] * 3 + [4.0] * 14 + [5.0] * 7)
+    ages = pd.Series([0, 3, 4, 16, 17, 23] * 2)
+    origination = pd.Series([2010 * 12] * len(ages))
+    episodes = pd.DataFrame({"note_rate": [5.0] * len(ages), "term_years": [30] * 6 + [15] * 6})
+
+    add_macro_family(
+        episodes, macro, origination, origination + ages, lag_months=0, names=["burnout"]
+    )
+
+    # Spent: 0, 0, 1, 13, 14, 14 months; in bands: none, none, a year, more.
+    assert episodes["burnout"].tolist()[:6] == [0.0, 0.0, 6.5, 24.5, 24.5, 24.5]
+    assert episodes["burnout"].tolist()[6:] == [0.0] * 6
+
+
+def test_burnout_reads_the_market_rate_through_the_lag() -> None:
+    """Every series is lagged three months, and the burnout's benchmark is one of them."""
+    from creditsurv.features import add_macro_family
+
+    macro = _rates([5.0] * 3 + [4.0] * 14 + [5.0] * 7)
+    ages = pd.Series([4, 6, 7])
+    origination = pd.Series([2010 * 12] * len(ages))
+    episodes = pd.DataFrame({"note_rate": [5.0] * 3, "term_years": [30] * 3})
+
+    add_macro_family(
+        episodes, macro, origination, origination + ages, lag_months=3, names=["burnout"]
+    )
+
+    # Lagged, the first month in the money is the seventh: counted from age 7.
+    assert episodes["burnout"].tolist() == [0.0, 0.0, 6.5]
+
+
+def test_the_home_sale_season_is_may_to_august() -> None:
+    from creditsurv.features import add_macro_family
+
+    macro = _rates([5.0] * 24)
+    observation = pd.Series([2010 * 12 + month for month in range(12)])
+    episodes = pd.DataFrame(index=range(12))
+
+    add_macro_family(
+        episodes, macro, observation, observation, lag_months=3, names=["home_sale_season"]
+    )
+
+    assert episodes["home_sale_season"].tolist() == [0.0] * 4 + [1.0] * 4 + [0.0] * 4
 
 
 def test_a_ratio_a_harp_loan_does_not_report_is_absorbed_by_the_harp_level() -> None:

@@ -32,6 +32,7 @@ from creditsurv.config import (
     DEFAULT_CAUSE,
     DISTRIBUTION,
     PREPAYMENT_CAUSE,
+    PREPAYMENT_DISTRIBUTION,
     record_name,
     reports_dir,
 )
@@ -44,6 +45,7 @@ from creditsurv.models.nonparametric import (
     hazard_by_age,
     incidence_from_hazards,
     incidence_gap,
+    observed_hazard_by_age,
 )
 from creditsurv.models.selection import PREPAYMENT_SIGNS, signs_against_prior
 
@@ -80,18 +82,42 @@ class Comparison:
 
 
 def compare_families(
-    *, as_of: str, moratorium: str, macro: pd.DataFrame, block_rows: int
+    *,
+    as_of: str,
+    moratorium: str,
+    macro: pd.DataFrame,
+    block_rows: int,
+    cause: str = DEFAULT_CAUSE,
 ) -> Comparison:
-    """Read every selection record on these cells and measure each family against the book."""
+    """Read every selection record on these cells and measure each family against the book.
+
+    ``cause`` is the model whose family is chosen. For the default model the prepayment hazard
+    is the one the published family's prepayment selection chose, as rule 2 has always read it.
+    For the **prepayment** model, declared 14 November 2026 before either family was selected,
+    the default hazard is the book's own at each age: no default model has been selected on the
+    table the prepayment model is fitted to, and holding the competing hazard at what happened
+    makes the comparison one of the prepayment models alone.
+    """
     identity = cells_identity(moratorium)
     cut = month_ordinal(pd.Period(as_of, freq="M"))
 
     # The observed side is a statement about sums, so it is taken inside the parquet reader:
     # a few hundred rows out of 91.6 million cells, with nothing expanded.
     log.info("the observed cumulative incidence, from the cells")
-    observed = cumulative_incidence(outcomes_by_age(moratorium, last=cut))
+    outcomes = outcomes_by_age(moratorium, last=cut)
+    observed = cumulative_incidence(outcomes)
+    if cause == PREPAYMENT_CAUSE:
+        return _compare_prepayment_families(
+            observed,
+            observed_hazard_by_age(outcomes, DEFAULT_CAUSE),
+            identity=identity,
+            as_of=as_of,
+            moratorium=moratorium,
+            macro=macro,
+            block_rows=block_rows,
+        )
 
-    prepayment = _record(PREPAYMENT_CAUSE, distribution=DISTRIBUTION)
+    prepayment = _record(PREPAYMENT_CAUSE, distribution=PREPAYMENT_DISTRIBUTION)
     if prepayment is None:
         message = (
             "The prepayment model has not been selected on these cells, and a cumulative "
@@ -155,6 +181,69 @@ def compare_families(
     )
 
 
+def _compare_prepayment_families(
+    observed: pd.DataFrame,
+    defaults: pd.DataFrame,
+    *,
+    identity: str,
+    as_of: str,
+    moratorium: str,
+    macro: pd.DataFrame,
+    block_rows: int,
+) -> Comparison:
+    """Rule 2 for the prepayment model: each family's selected model against the book's
+    incidence of prepayment, with the default hazard held at the book's own."""
+    gaps: dict[str, pd.DataFrame] = {}
+    signs: dict[str, list[str]] = {}
+    formulas: dict[str, str] = {}
+    shapes: dict[str, str | bool | None] = {}
+    for distribution in CONVERGENT_DISTRIBUTIONS:
+        described = _record(PREPAYMENT_CAUSE, distribution=distribution)
+        if described is None or described.get("moratorium") != moratorium:
+            log.info("%s: no prepayment selection record on these cells; skipped", distribution)
+            continue
+        formulas[distribution] = str(described["formula"])
+        ancillary = described.get("ancillary")
+        shapes[distribution] = None if ancillary is None else str(ancillary)
+        fitted, prepaid = _fit_and_hazards(
+            described,
+            PREPAYMENT_CAUSE,
+            identity=identity,
+            as_of=as_of,
+            moratorium=moratorium,
+            macro=macro,
+            block_rows=block_rows,
+        )
+        # The book's default hazard at the ages the model was read at: the same cells, so the
+        # same ages, and an age the model has that the book does not would be a defect.
+        competing = defaults.set_index("age").reindex(prepaid["age"])
+        if competing["hazard"].isna().any():
+            message = "The model's ages and the book's are not the same ages."
+            raise ValueError(message)
+        predicted = incidence_from_hazards(
+            {
+                DEFAULT_CAUSE: competing.reset_index().assign(at_risk=prepaid["at_risk"]),
+                PREPAYMENT_CAUSE: prepaid,
+            }
+        )
+        gaps[distribution] = incidence_gap(predicted, observed, cause=PREPAYMENT_CAUSE)
+        signs[distribution] = signs_against_prior(fitted, PREPAYMENT_SIGNS)
+
+    if not gaps:
+        message = (
+            "No prepayment selection has been run on these cells. Run `creditsurv select "
+            "--cause prepayment` for each family."
+        )
+        raise NotSelected(message)
+    return Comparison(
+        gaps=gaps,
+        signs=signs,
+        formulas=formulas,
+        shapes=shapes,
+        prepayment_against_prior=[],
+    )
+
+
 def _record(cause: str, *, distribution: str) -> dict[str, object] | None:
     """One selection's record, read from the JSON it wrote beside its report.
 
@@ -201,6 +290,9 @@ def _fit_and_hazards(
     model twice per family and twice again for the prepayment model.
     """
     distribution = str(described["distribution"])
+    # The record's shape and formulation are part of what the fit is cached under: a lookup
+    # without them asks for a different model.
+    ancillary = described.get("ancillary")
     fitted = selected_fit(
         identity=identity,
         as_of=as_of,
@@ -208,6 +300,8 @@ def _fit_and_hazards(
         formula=str(described["formula"]),
         distribution=distribution,
         cause=cause,
+        ancillary=None if ancillary is None else str(ancillary),
+        formulation=str(described.get("formulation", "lifelines")),
     )
     if fitted is None:
         flags = f"--dist {distribution}" + (f" --cause {cause}" if cause != DEFAULT_CAUSE else "")

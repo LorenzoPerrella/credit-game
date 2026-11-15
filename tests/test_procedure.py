@@ -384,6 +384,7 @@ def test_the_prepayment_macro_block_is_what_its_own_selection_chose() -> None:
     to a model that no longer read volatility, so this is that holding.
     """
     from creditsurv.config import (
+        PREPAYMENT_DISTRIBUTION,
         PREPAYMENT_TIME_VARYING_CONTINUOUS,
         STRESSED_COVARIATES,
         TIME_VARYING_CONTINUOUS,
@@ -391,7 +392,8 @@ def test_the_prepayment_macro_block_is_what_its_own_selection_chose() -> None:
         reports_dir,
     )
 
-    path = reports_dir() / f"{record_name(distribution='weibull', cause='prepayment')}.json"
+    name = record_name(distribution=PREPAYMENT_DISTRIBUTION, cause="prepayment")
+    path = reports_dir() / f"{name}.json"
     if not path.exists():
         pytest.skip("no prepayment selection has been run on the whole population yet")
     summary = json.loads(path.read_text())
@@ -551,10 +553,35 @@ def test_the_prepayment_model_is_selected_under_its_own_priors() -> None:
     assert PREPAYMENT_SIGNS["ltv_change"] == +1, "leverage that has risen blocks a refinance"
     assert PREPAYMENT_SIGNS["unemployment_change"] == +1, "a weaker labour market prepays less"
     assert PREPAYMENT_SIGNS["house_price_growth"] == -1, "rising prices free equity"
-    # The refinancing incentive rule 6 names is not here: the key cannot carry the note
-    # rate at this cell count, and the fall in the market rate stands in for it.
+    # The refinancing incentive rule 6 names is not here because it is read in bands, protected,
+    # and a factor has no single sign: its expected shape is a prediction in the register.
     assert "refinance_incentive" not in PREPAYMENT_SIGNS
     assert PREPAYMENT_SIGNS["mortgage_rate_decline"] == -1
+    assert PREPAYMENT_SIGNS["home_sale_season"] == -1, "payoffs run high from May to August"
+    assert PREPAYMENT_SIGNS["burnout"] == +1, "a loan that sat in the money and stayed is slower"
+
+
+def test_every_prepayment_candidate_is_signed_and_rule_9_holds() -> None:
+    """Rule 15 for the second exit: a candidate with no declared sign is not a candidate.
+
+    And rule 9 as first written: the prepayment model reads the incentive, protected and in
+    bands, and neither of the other two comparisons of the same two rates.
+    """
+    from creditsurv.config import (
+        PREPAYMENT_BANDED_REFERENCE,
+        PREPAYMENT_MACRO_CANDIDATES,
+        PREPAYMENT_PROTECTED,
+        calendar_covariates,
+    )
+    from creditsurv.models.selection import PREPAYMENT_SIGNS
+
+    assert all(name in PREPAYMENT_SIGNS for name in PREPAYMENT_MACRO_CANDIDATES)
+    rates = {"refinance_incentive", "origination_spread", "mortgage_rate_decline"}
+    offered = {*PREPAYMENT_MACRO_CANDIDATES, *PREPAYMENT_PROTECTED}
+    assert offered & rates == {"refinance_incentive"}
+    assert set(PREPAYMENT_BANDED_REFERENCE) == {"refinance_incentive"}
+    # Every one of them is read off the calendar key.
+    assert set(calendar_covariates(sorted(offered))) == offered
 
 
 def test_a_backwards_sign_is_read_against_the_map_the_run_was_given() -> None:

@@ -312,18 +312,28 @@ def test_every_candidate_has_an_economic_dimension_fixed_in_advance() -> None:
         MACRO_CANDIDATES,
         MACRO_ELIMINATION_PRIORITY,
         ORDINAL,
+        PREPAYMENT_MACRO_CANDIDATES,
+        PREPAYMENT_PROTECTED,
         PROTECTED_MACRO,
         STATIC_CONTINUOUS,
     )
 
-    candidates = {*MACRO_CANDIDATES, *PROTECTED_MACRO, *STATIC_CONTINUOUS, *ORDINAL}
+    candidates = {
+        *MACRO_CANDIDATES,
+        *PROTECTED_MACRO,
+        *STATIC_CONTINUOUS,
+        *ORDINAL,
+        # The prepayment model's own, which the same rules read in its selection.
+        *PREPAYMENT_MACRO_CANDIDATES,
+        *PREPAYMENT_PROTECTED,
+    }
     assert candidates <= set(ECONOMIC_DIMENSION), sorted(candidates - set(ECONOMIC_DIMENSION))
     # A superset, not an equality. Both maps are fixed before any fit and must stay so, so rule
     # 15's withdrawal of five candidates on 17 October 2026 leaves their entries behind **on
     # purpose**: deleting them would be editing an input after seeing a result, and a priority
     # that lists a covariate nobody offers costs nothing. What must not happen is the reverse --
     # a candidate with no priority, which the procedure would then order arbitrarily.
-    assert set(MACRO_ELIMINATION_PRIORITY) >= set(MACRO_CANDIDATES)
+    assert set(MACRO_ELIMINATION_PRIORITY) >= {*MACRO_CANDIDATES, *PREPAYMENT_MACRO_CANDIDATES}
 
 
 def test_factors_read_back_from_a_saved_correlation_are_the_ones_the_rows_give() -> None:

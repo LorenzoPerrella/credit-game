@@ -599,6 +599,7 @@ def selected_fit(
     distribution: str = DISTRIBUTION,
     cause: str = DEFAULT_CAUSE,
     ancillary: str | None = None,
+    formulation: str = "lifelines",
 ) -> FitResult | None:
     """The selection's own fit of ``formula`` on the training half, if it made one.
 
@@ -616,6 +617,7 @@ def selected_fit(
                 distribution=distribution,
                 cause=cause,
                 ancillary=ancillary,
+                formulation=formulation,
             )
         )
     )

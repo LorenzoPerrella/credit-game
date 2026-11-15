@@ -408,7 +408,12 @@ BASELINE: Final = Scenario(name="baseline")
 #: **The prepayment model was re-selected on 13 November 2026**, and the same test caught the
 #: scenario a third time. ``policy_rate_change``, ``housing_starts_growth`` and ``equity_return``
 #: are read by neither hazard any more, so the policy rate, housing starts and Nasdaq legs are
-#: gone. ``corporate_bond_spread`` arrived with no path, and has one now.
+#: gone. ``corporate_bond_spread`` arrived with no path, and had one.
+#:
+#: **And rebuilt on 15 November 2026**, around the refinancing incentive. It no longer reads the
+#: corporate spread or volatility, and neither does the default model, so those two legs are gone
+#: as well. The two mortgage-rate legs stay and now matter more: they move the incentive and its
+#: burnout, and a fall in rates is what a 2008 brings to a book that can refinance.
 ADVERSE: Final = Scenario(
     name="adverse",
     shocks={
@@ -420,11 +425,10 @@ ADVERSE: Final = Scenario(
             *([0.0] * 8),
         ],
         "consumer_sentiment_index": [*np.linspace(0.0, -0.39, 16), *([-0.39] * 20)],
-        # The four the prepayment hazard reads and the curve the default one does. Each is the
-        # 2008-09 move, which is where every path above is calibrated: the 10y-2y went from flat
-        # to +2.7 points as the front end was cut to zero, the 30-year mortgage rate fell about
-        # 1.5 points with Treasuries though spreads widened, the Nasdaq lost 45% and the VIX
-        # trebled. Taken a little short of each, and held rather than recovered.
+        # The two the prepayment hazard reads through the incentive and its burnout. Each is the
+        # 2008-09 move, which is where every path above is calibrated: the 30-year mortgage rate
+        # fell about 1.5 points with Treasuries though spreads widened. Taken a little short, and
+        # held rather than recovered.
         # The yield curve's own leg is **gone**, not set to zero: rule 15 withdrew
         # `yield_curve_slope` as a candidate on 17 October 2026 -- a slope is a forward-looking
         # cycle proxy whose whole relation to default runs through a cycle this model already
@@ -433,25 +437,9 @@ ADVERSE: Final = Scenario(
         # scenario and the formula together in both directions is what found it.
         "mortgage_rate_30y": [*np.linspace(0.0, -1.2, 18), *([-1.2] * 18)],
         "mortgage_rate_15y": [*np.linspace(0.0, -1.0, 18), *([-1.0] * 18)],
-        # The corporate spread the re-selected prepayment model reads (13 November 2026): BAA over
-        # the ten-year Treasury went from 1.65 in July 2007 to 6.01 in December 2008, +4.36 in
-        # seventeen months, and stood at 2.78 in December 2009. Taken a little short, as every
-        # leg here is, and eased back the way it did rather than held.
-        "baa_treasury_spread": [
-            *np.linspace(0.0, 4.0, 17),
-            *np.linspace(4.0, 1.1, 12),
-            *([1.1] * 7),
-        ],
-        "vix_index": [*np.linspace(0.0, 1.5, 6), *np.linspace(1.5, 0.3, 18), *([0.3] * 12)],
     },
-    proportional=frozenset(
-        {
-            "house_price_index",
-            "consumer_sentiment_index",
-            # A spread and two rates are already in percentage points; an index is not.
-            "vix_index",
-        }
-    ),
+    # Two rates are already in percentage points; an index is not.
+    proportional=frozenset({"house_price_index", "consumer_sentiment_index"}),
 )
 
 

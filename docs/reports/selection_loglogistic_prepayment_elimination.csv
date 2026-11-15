@@ -1,0 +1,2 @@
+step,removed,coef,p,reason,remaining
+1,unemployment_change,-0.0581516565158743,0.0,wrong sign: -0.05815 where + is expected,15

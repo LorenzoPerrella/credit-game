@@ -56,6 +56,9 @@ the same run.
 
 - Wait with an until-loop on a log condition (`until grep -q "<marker>" log; do sleep 30; done`),
   not with chained sleeps.
+- **Wait on a PID, never on `pgrep -f "<text>"`** where the loop's own command line holds that
+  text: the loop matches itself and never ends. It happened twice, the second time on 15
+  November 2026. Use `while kill -0 <pid> 2>/dev/null; do sleep 15; done`.
 - **`ps -o etime` is `[[DD-]HH:]MM:SS`.** `12:14:50` is twelve **hours**. This was misread as
   minutes, and a job 31 hours old was taken for one 30 minutes old.
 - Measure memory as phys_footprint ("peak memory footprint" from `/usr/bin/time -l`), not `maxrss`,

@@ -531,10 +531,11 @@ EXPECTED_SIGNS: Final[dict[str, int]] = {
 #: repayment, because the borrowers who can refinance are the ones who qualify. These are
 #: the priors declared in rule 6 of `docs/rules.md`, before the fit.
 #:
-#: The refinancing incidence itself is absent because the key cannot carry the note rate at
-#: this cell count (`docs/reports/key_extensions.csv`); ``mortgage_rate_decline``, the fall in
-#: the market rate since origination, is the same comparison without its constant and takes
-#: the sign the incentive would have.
+#: The refinancing incentive itself is not here, and not because it has no direction: rule 9 has
+#: the prepayment model read it **in bands**, protected, and a factor has one coefficient a band and
+#: no single sign. Its expected shape -- bands falling as the incentive rises -- is a prediction in
+#: the register. ``mortgage_rate_decline`` and ``origination_spread`` keep the signs the run of 13
+#: November declared for them, and are no longer offered to this model (`config`).
 PREPAYMENT_SIGNS: Final[dict[str, int]] = {
     "mortgage_rate_decline": -1,  # rates below the note rate: refinance, and sooner
     # A note rate above its month's market: more to gain from refinancing (rule 9, amended).
@@ -543,6 +544,11 @@ PREPAYMENT_SIGNS: Final[dict[str, int]] = {
     "ltv_change": +1,  # leverage that has risen blocks a refinance
     "house_price_growth": -1,  # rising prices free equity and enable cash-out
     "unemployment_change": +1,  # a weaker labour market prepays less
+    # Declared 14 November 2026, before the first fit that reads them.
+    "home_sale_season": -1,  # house moves, and so payoffs, run high from May to August
+    # A loan that has sat in the money without refinancing is one that cannot or will not:
+    # the burnt-out pool prepays more slowly at the same incentive.
+    "burnout": +1,
 }
 
 
@@ -608,6 +614,31 @@ def _correlation(covariance: pd.DataFrame) -> pd.DataFrame:
         index=covariance.index,
         columns=covariance.columns,
     )
+
+
+def exposure_by_value(encoding: Encoding, name: str) -> pd.Series:
+    """Loan-months by value of one covariate, off a reading's key frames and counts.
+
+    Rule 12 takes a banded covariate's reference as the band carrying the most loan-months. For a
+    band in the cell key that was a count over the cells; for one built after the collapse, such
+    as rule 9's incentive on the calendar side, the loan-months are where the reading put them,
+    by key, and this sums them by the covariate's value. Largest first.
+    """
+    from creditsurv.models.kernel.factorisation import joined
+
+    loan_keys, calendar_keys = encoding.factorisation.keys()
+    rows = joined(encoding.rows)
+    weight = rows.weight.astype(np.float64)
+    if name in loan_keys.columns:
+        keys, index = loan_keys, rows.i
+    elif name in calendar_keys.columns:
+        keys, index = calendar_keys, rows.j
+    else:
+        message = f"The reading carries no key column {name!r}."
+        raise ValueError(message)
+    carried = np.bincount(index, weights=weight, minlength=len(keys))
+    summed = pd.Series(carried, index=keys[name].to_numpy()).groupby(level=0).sum()
+    return summed.sort_values(ascending=False)
 
 
 def moments_from_keys(encoding: Encoding, columns: Sequence[str]) -> Moments:
