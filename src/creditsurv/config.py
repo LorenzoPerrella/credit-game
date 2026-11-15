@@ -364,19 +364,24 @@ TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
 #: prepayment model is read from the fit's own formula, so copying it here would be duplication
 #: with nothing to keep it honest; this much is tied to the record by a test.
 #:
-#: Re-selected on the current cells on 13 November 2026 (fit `69416c2849455eba`, training half), in
-#: 36.5 minutes. `mortgage_rate_decline` reads -0.198 per standard deviation, keeping rule 6's sign:
-#: a market rate below the note rate shortens the time to repayment. `ltv_change` went for its sign,
-#: and `financial_conditions` was dropped by the time cut. The record before it was selected on
-#: cells since rebuilt, under the linear form.
+#: Re-selected on 15 November 2026 on `cells_exclude.crr.parquet`, under the form declared before
+#: its first fit (rules 6, 9, 15 and 18): the incentive in bands, protected, and the five signed
+#: candidates. `unemployment_change` and `ltv_change` went at step 8 for their signs, -0.044 and
+#: -0.0021 against a declared +; the season, burnout and house-price growth stayed. Both families
+#: chose the same block.
 PREPAYMENT_TIME_VARYING_CONTINUOUS: Final[tuple[str, ...]] = (
     "moratorium_regime",
-    "unemployment_change",
-    "mortgage_rate_decline",
+    "refinance_incentive",
     "house_price_growth",
-    "corporate_bond_spread",
-    "equity_volatility",
+    "home_sale_season",
+    "burnout",
 )
+
+#: The prepayment model's family, by rule 2 applied to it (`docs/reports/family_prepayment.md`):
+#: the log-logistic sits 1.751 percentage points from the book's incidence of prepayment and the
+#: Weibull 1.799, 0.047 apart and inside the declared tie of 0.1, so the Weibull is kept. An
+#: output like `DISTRIBUTION`, and read wherever the prepayment model is looked up by its family.
+PREPAYMENT_DISTRIBUTION: Final = "weibull"
 
 #: Rule 6's candidates for the **prepayment** model on the calendar side, each with a sign declared
 #: in `models.selection.PREPAYMENT_SIGNS` before the fit, as rule 15 asks of every candidate.

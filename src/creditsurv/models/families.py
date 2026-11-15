@@ -32,6 +32,7 @@ from creditsurv.config import (
     DEFAULT_CAUSE,
     DISTRIBUTION,
     PREPAYMENT_CAUSE,
+    PREPAYMENT_DISTRIBUTION,
     record_name,
     reports_dir,
 )
@@ -116,7 +117,7 @@ def compare_families(
             block_rows=block_rows,
         )
 
-    prepayment = _record(PREPAYMENT_CAUSE, distribution=DISTRIBUTION)
+    prepayment = _record(PREPAYMENT_CAUSE, distribution=PREPAYMENT_DISTRIBUTION)
     if prepayment is None:
         message = (
             "The prepayment model has not been selected on these cells, and a cumulative "

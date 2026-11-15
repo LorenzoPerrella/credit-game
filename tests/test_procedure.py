@@ -384,6 +384,7 @@ def test_the_prepayment_macro_block_is_what_its_own_selection_chose() -> None:
     to a model that no longer read volatility, so this is that holding.
     """
     from creditsurv.config import (
+        PREPAYMENT_DISTRIBUTION,
         PREPAYMENT_TIME_VARYING_CONTINUOUS,
         STRESSED_COVARIATES,
         TIME_VARYING_CONTINUOUS,
@@ -391,7 +392,8 @@ def test_the_prepayment_macro_block_is_what_its_own_selection_chose() -> None:
         reports_dir,
     )
 
-    path = reports_dir() / f"{record_name(distribution='weibull', cause='prepayment')}.json"
+    name = record_name(distribution=PREPAYMENT_DISTRIBUTION, cause="prepayment")
+    path = reports_dir() / f"{name}.json"
     if not path.exists():
         pytest.skip("no prepayment selection has been run on the whole population yet")
     summary = json.loads(path.read_text())

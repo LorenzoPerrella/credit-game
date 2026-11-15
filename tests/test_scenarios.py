@@ -54,7 +54,10 @@ def test_every_macro_covariate_the_model_reads_is_moved_by_the_scenario() -> Non
     # model's **time scale**, and `period = cohort + age` means the age is already pinned by the
     # cohort and the calendar, so there is nothing free to move. A scenario that shocked it would
     # be shocking how old the loans are, which is not an economy but an arithmetic error.
-    exempt = {"moratorium_regime", *AGE_BASIS_COLUMNS}
+    #
+    # The prepayment model's home-sale season is the third, for `moratorium_regime`'s reason: it
+    # is the calendar month and nothing else, and a scenario that moved it would be moving the date.
+    exempt = {"moratorium_regime", "home_sale_season", *AGE_BASIS_COLUMNS}
     unmoved = [name for name in unmoved if name not in exempt]
     assert not unmoved, f"{unmoved} have no shocked source, so the scenario cannot move them"
 
